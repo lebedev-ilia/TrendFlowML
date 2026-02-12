@@ -1,0 +1,14 @@
+{
+  "title": "How to cook pasta (fast)",
+  "description": "No links here. Just a description.",
+  "audio_duration_sec": 25.0,
+  "asr": {
+    "schema_version": "audio_asr_segments_v1",
+    "segments": [
+      {"text": "hello everyone welcome back to the channel"},
+      {"text": "today we cook pasta in ten minutes"},
+      {"text": "uh so let's start"}
+    ]
+  }
+}
+

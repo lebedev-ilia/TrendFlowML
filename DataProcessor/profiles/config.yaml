@@ -1,0 +1,9 @@
+processors:
+  audio:
+    enabled: false
+    required: false
+  text:
+    enabled: false
+    required: false
+visual:
+  cfg_path: configs/visual_config.yaml

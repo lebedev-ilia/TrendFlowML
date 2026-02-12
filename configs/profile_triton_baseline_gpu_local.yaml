@@ -1,0 +1,44 @@
+version: "profile_triton_baseline_gpu_local_v1"
+
+processors:
+  audio:
+    enabled: true
+    required: false
+  text:
+    enabled: false
+    required: false
+
+visual:
+  # Single source-of-truth VisualProcessor config (верхний configs/)
+  cfg_path: "../configs/visual_triton_baseline_gpu_local.yaml"
+  # PR-4 requirements map (best-effort enforcement)
+  requirements:
+    core_clip: true
+    core_depth_midas: true
+    core_optical_flow: true
+    content_domain: true
+    franchise_recognition: true
+    cut_detection: true
+    scene_classification: true
+    video_pacing: true
+    uniqueness: true
+
+resolved_model_mapping:
+  core_clip:
+    runtime: triton
+    triton_image_model_spec: "clip_image_224_triton"
+    triton_text_model_spec: "clip_text_triton"
+    triton_preprocess_preset: "openai_clip_224"
+
+  core_depth_midas:
+    runtime: triton
+    triton_model_spec: "midas_256_triton"
+    triton_preprocess_preset: "midas_256"
+    batch_size: 1
+
+  core_optical_flow:
+    runtime: triton
+    triton_model_spec: "raft_256_triton"
+    triton_preprocess_preset: "raft_256"
+
+

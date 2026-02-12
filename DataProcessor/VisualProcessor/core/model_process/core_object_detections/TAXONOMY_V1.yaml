@@ -1,0 +1,143 @@
+version: popularity_taxonomy_v1
+
+# Goal:
+# - Fix stable ids / names for signals used by popularity models.
+# - Separate "proposal generators" (detectors) from "semantic heads" (classifiers/retrieval).
+# - Keep baseline constraints: no-network, tracking required, Triton batching unchanged (unit=frame).
+#
+# This file is a planning + contract artifact. It can later be consumed by:
+# - label tooling (annotation templates)
+# - ModelManager specs / export scripts
+# - encoder config (which heads produce which tokens)
+
+components:
+  # --- Proposal / geometry (object-level) ---
+  core_object_detections:
+    role: proposal_generator
+    unit: frame
+    output_artifact: core_object_detections/detections.npz
+    notes:
+      - Provides bbox proposals + tracking (required).
+      - Avoid stuffing 1000 fine-grained identities into the detector. Use heads below.
+
+    # Taxonomy for a fine-tuned detector (YOLO) under our domain.
+    # Keep this list small and high-precision (your priority).
+    # Brands/celebs/landmarks should NOT live here as class_ids.
+    detector_taxonomy_v1:
+      version: detector_taxonomy_v1_final
+      labelmap_files:
+        # One class name per line (YOLO/Ultralytics convention).
+        # Source of truth: yolo_fine_tune/labels_v1_40.txt (41 classes, final v1.0)
+        names_txt: VisualProcessor/core/model_process/core_object_detections/DETECTOR_TAXONOMY_V1_40_NAMES.txt
+      id_map:
+        # IMPORTANT: ids are contiguous 0..40 for YOLO training/export simplicity.
+        # Final taxonomy v1.0 (41 classes) - see yolo_fine_tune/YOLO_CLASSES_V1_FINAL.md
+        0: person
+        1: crowd
+        2: car
+        3: motorcycle
+        4: bicycle
+        5: bus
+        6: truck
+        7: pet
+        8: sports_ball
+
+        9: phone
+        10: laptop
+        11: tablet
+        12: smartwatch
+        13: watch
+        14: headphones
+        15: camera
+        16: microphone
+        17: game_controller
+        18: tv_device
+        19: monitor_device
+
+        20: clothing_top
+        21: clothing_bottom
+        22: outerwear
+        23: suit
+        24: dress
+        25: shoes
+        26: bag
+        27: hat
+        28: glasses
+        29: ring
+        30: bracelet
+        31: earrings
+        32: pendant
+
+        33: logo_region
+        34: text_region
+        35: cosmetics_product
+        36: screen_phone
+        37: screen_laptop
+        38: screen_monitor
+        39: tv_screen
+        40: food_item
+      groups:
+        people: [person, crowd]
+        vehicles: [car, motorcycle, bicycle, bus, truck, pet]
+        devices: [phone, laptop, tablet, smartwatch, watch, headphones, camera, microphone, game_controller, tv_device, monitor_device]
+        clothing: [clothing_top, clothing_bottom, outerwear, suit, dress, shoes, bag, hat, glasses]
+        jewelry: [ring, bracelet, earrings, pendant]
+        screens: [screen_phone, screen_laptop, screen_monitor, tv_screen]
+        regions: [logo_region, text_region]
+        products: [cosmetics_product, food_item]
+
+  # --- People identity (not a YOLO class) ---
+  core_face_landmarks:
+    role: face_presence_and_geometry
+    unit: frame
+    output_artifact: core_face_landmarks/landmarks.npz
+    notes:
+      - Use for face presence + stable face ROIs (and downstream quality).
+
+  # Face identity head (to be implemented as separate component/provider later)
+  core_face_identity:
+    role: identity_head
+    depends_on: [core_face_landmarks]
+    unit: face_crop
+    notes:
+      - Celebrity / known-person detection should be done via face embeddings + retrieval/classifier.
+      - Outputs should be sparse top-k ids+scores per face (and optionally per face-track).
+
+  # --- Brand / logo semantics ---
+  core_brand_semantics:
+    role: semantic_head
+    depends_on: [core_object_detections]
+    unit: bbox_crop
+    notes:
+      - Use logo_region (preferred) or other bboxes as proposals.
+      - Implementation options: CLIP-matching / dedicated logo classifier / retrieval.
+    mvp:
+      impl: VisualProcessor/core/model_process/brand_semantics/main.py
+      labels_template: VisualProcessor/core/model_process/brand_semantics/labels_template.yaml
+
+  # --- Place / landmark semantics ---
+  core_landmark_semantics:
+    role: semantic_head
+    unit: frame_or_region
+    notes:
+      - Famous buildings/places are better solved via landmark recognition / retrieval.
+      - Often operates on whole-frame (or on proposals), not bbox detection.
+
+  # --- Scene-level semantics / context ---
+  scene_classification:
+    role: scene_context
+    unit: scene_segment
+    output_artifact: scene_classification/scene_classification_features_*.npz
+    depends_on: [core_clip]
+    notes:
+      - Provides Places365 scene labels + stability + indoor/outdoor/nature/urban ontology.
+      - Also provides CLIP-based aesthetic/luxury/atmosphere semantics (from core_clip text embeddings).
+
+  core_clip:
+    role: universal_embedding
+    unit: frame
+    output_artifact: core_clip/embeddings.npz
+    notes:
+      - Used for open-vocabulary semantics and scene aesthetics/atmosphere.
+
+

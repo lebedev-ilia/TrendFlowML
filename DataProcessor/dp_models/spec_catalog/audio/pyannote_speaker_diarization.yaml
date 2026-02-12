@@ -1,0 +1,12 @@
+model_name: pyannote_speaker_diarization
+model_version: "1"
+role: speaker_diarization
+runtime: inprocess
+engine: pyannote
+precision: fp32
+device_policy: cuda
+weights_digest: auto
+local_artifacts:
+  - path: audio/pyannote_speaker_diarization
+    kind: dir
+

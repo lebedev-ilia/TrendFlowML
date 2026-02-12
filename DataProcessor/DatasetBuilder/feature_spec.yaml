@@ -1,0 +1,87 @@
+feature_schema_version: v0
+
+# Baseline feature spec (M0/M1 of BASELINE_DEV_PLAN.md):
+# - This file is the single source of truth for which components are allowed
+#   to contribute features to the baseline table.
+# - Within a component, the exact set of feature names is determined by the
+#   component NPZ contract (prefer `feature_names`/`feature_values`).
+# - Unknown components are ignored by default; required components can be
+#   enforced at dataset build time.
+#
+# Notes:
+# - Targets and snapshot_0 fields are added separately by DatasetBuilder.
+baseline_components:
+  # Visual modules
+  - name: cut_detection
+    required: true
+  - name: optical_flow
+    required: true
+  - name: scene_classification
+    required: true
+  - name: shot_quality
+    required: true
+  - name: story_structure
+    required: true
+  - name: uniqueness
+    required: true
+  - name: video_pacing
+    required: true
+
+  # Audio extractors
+  - name: clap_extractor
+    required: true
+  - name: loudness_extractor
+    required: true
+  - name: tempo_extractor
+    required: true
+
+  # Required cores (Tier-0 baseline)
+  - name: core_brand_semantics
+    required: true
+  - name: core_car_semantics
+    required: true
+  - name: core_clip
+    required: true
+  - name: core_face_identity
+    required: true
+  - name: core_face_landmarks
+    required: true
+  - name: core_optical_flow
+    required: true
+  - name: core_place_semantics
+    required: true
+  - name: core_depth_midas
+    required: true
+  - name: core_object_detections
+    required: true
+
+snapshot_0_fields:
+  # Canonical snapshot_0 fields (see Models/docs/contracts/TARGETS_SPLITS_METRICS.md).
+  # These are written as baseline features, not targets.
+  - name: views_0
+    source: snapshot_0.viewCount
+  - name: likes_0
+    source: snapshot_0.likeCount
+  - name: comments_0
+    source: snapshot_0.commentCount
+  - name: channel_subscribers_0
+    source: snapshot_0.subscriberCount
+  - name: channel_total_views_0
+    source: snapshot_0.viewCount_channel
+  - name: channel_total_videos_0
+    source: snapshot_0.videoCount
+
+temporal_fields:
+  # Required temporal/meta features for split/analysis.
+  - name: publishedAt
+    source: metadata.publishedAt
+  - name: language
+    source: metadata.language
+  - name: duration_sec
+    source: metadata.duration_seconds
+  - name: analysis_fps
+    source: manifest.run.analysis_fps
+  - name: video_age_hours_at_snapshot1
+    source: derived.manifest_created_at_minus_publishedAt_hours
+
+

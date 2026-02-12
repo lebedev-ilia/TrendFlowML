@@ -1,0 +1,20 @@
+model_name: speaker_diarization_small_inprocess
+model_version: "1"
+role: speaker_diarization
+runtime: inprocess
+engine: torch
+precision: fp32
+device_policy: cuda
+weights_digest: auto
+local_artifacts:
+  - path: audio/speaker_diarization/small.pt
+    kind: file
+runtime_params:
+  factory: dp_models.factories.audio:create_speaker_diarization_model
+  factory_kwargs:
+    model_size: small
+  checkpoint_relpath: audio/speaker_diarization/small.pt
+  state_dict_key: state_dict
+  strict: true
+  strip_prefix: null
+

@@ -1,0 +1,16 @@
+model_name: slowfast_r50_action_recognition
+model_version: "v1"
+role: action_recognition
+runtime: inprocess
+engine: torch
+precision: fp32
+device_policy: auto
+local_artifacts:
+  - path: visual/action_recognition/slowfast_r50/slowfast_r50.pyth
+    kind: file
+weights_digest: auto
+runtime_params:
+  architecture: slowfast_r50
+  input_size: 224
+  clip_len: 16
+

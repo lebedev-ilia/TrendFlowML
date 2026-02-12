@@ -1,0 +1,41 @@
+# Embedding Service Requirements
+# Unified Embedding Service для управления эмбеддингами разных категорий
+
+# FastAPI и веб-сервер
+fastapi>=0.104.0
+uvicorn[standard]>=0.24.0
+python-multipart>=0.0.6  # Для UploadFile в FastAPI
+pydantic>=2.0.0
+
+# База данных
+psycopg2-binary>=2.9.9  # PostgreSQL драйвер (для pgvector)
+# Для pgvector нужно установить расширение PostgreSQL отдельно:
+# CREATE EXTENSION IF NOT EXISTS vector;
+
+# FAISS для векторного поиска
+# Выберите один из вариантов:
+# faiss-cpu>=1.7.4  # Для CPU
+faiss-gpu  # Для GPU (раскомментируйте если используете GPU)
+
+# Обработка изображений
+opencv-python>=4.8.0
+Pillow>=10.0.0
+numpy>=1.24.0,<2.0.0  # FAISS требует NumPy 1.x (несовместим с NumPy 2.x)
+
+# ArcFace для извлечения эмбеддингов лиц
+insightface>=0.7.3
+onnxruntime>=1.16.0  # Зависимость для insightface
+
+# Triton клиент (если используется)
+# tritonclient[all]>=2.41.0  # Раскомментируйте если используете Triton клиент напрямую
+# Примечание: в проекте уже есть dp_triton.http_client
+
+# Дополнительные утилиты
+python-dotenv>=1.0.0  # Для загрузки .env файлов (опционально)
+
+# Для разработки (опционально)
+# pytest>=7.4.0
+# pytest-asyncio>=0.21.0
+# black>=23.0.0
+# mypy>=1.5.0
+

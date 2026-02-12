@@ -1,0 +1,13 @@
+{
+  "title": "Demo title (asr without confidence)",
+  "description": "Segments exist but confidence is missing/null.",
+  "audio_duration_sec": 30.0,
+  "asr": {
+    "schema_version": "audio_asr_segments_v1",
+    "segments": [
+      {"text": "hello world this is a test", "confidence": null},
+      {"text": "we continue speaking without confidence scores", "confidence": null}
+    ]
+  }
+}
+

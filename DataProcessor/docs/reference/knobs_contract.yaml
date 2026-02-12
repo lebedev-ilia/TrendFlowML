@@ -1,0 +1,132 @@
+# Knobs Contract (source-of-truth) — how scheduler-controlled parameters flow through the system
+#
+# Goal:
+# - Make scheduler <-> orchestrators <-> components interface explicit and machine-readable.
+# - Define:
+#   1) Where each knob originates (scheduler/backend/profile),
+#   2) How it is propagated (CLI flags / config fields),
+#   3) Where the "actual report" is written so scheduler can compare plan vs fact.
+#
+version: 0.1
+
+reports:
+  # All processors/components should write runtime reports under run_rs_path.
+  # Scheduler can read these after execution (and later feed them back into the registry).
+  base_dir: "_reports"
+  files:
+    - id: scheduler_runtime_report_v1
+      path: "_reports/scheduler_runtime_report.json"
+      scope: "per-run"
+      required_fields:
+        - platform_id
+        - video_id
+        - run_id
+        - config_hash
+        - created_at
+        - scheduler_knobs (as applied)
+        - per_processor (actual timing/resources summary)
+
+knobs:
+  # -----------------------------
+  # L1: Inter-video (DynamicBatch)
+  # -----------------------------
+  - name: max_parallel_videos
+    level: L1
+    owner: scheduler
+    propagation:
+      dynamicbatch_cli: "--max-parallel"
+      note: "Today hard cap; target: scheduler enumerates candidates and picks best plan."
+    reported_in:
+      - scheduler_runtime_report_v1
+
+  # -----------------------------
+  # L3: Visual component-level
+  # -----------------------------
+  - name: visual.per_component.batch_size
+    level: L3
+    owner: scheduler
+    propagation:
+      dynamicbatch: "writes temp Visual cfg YAML with per-component batch_size"
+      dataproc_visual_cfg: "<vp_cfg>.<component>.batch_size"
+    reported_in:
+      - scheduler_runtime_report_v1
+
+  - name: visual.max_parallel_modules
+    level: L2
+    owner: scheduler
+    propagation:
+      visual_cfg: "global.max_parallel_modules"
+    reported_in:
+      - scheduler_runtime_report_v1
+
+  - name: visual.gpu_max_concurrent
+    level: L2
+    owner: scheduler
+    propagation:
+      visual_cfg: "global.gpu_max_concurrent"
+    reported_in:
+      - scheduler_runtime_report_v1
+
+  # -----------------------------
+  # L2/L3: Audio processor + extractors
+  # -----------------------------
+  - name: audio.segment_parallelism
+    level: L2
+    owner: scheduler
+    propagation:
+      dynamicbatch_cli: "--audio-segment-parallelism"
+      dataproc_cli: "--audio-segment-parallelism"
+      audioproc_cli: "--segment-parallelism"
+    notes:
+      - "Controls concurrent processing of Segmenter-provided audio segments (where supported)."
+      - "Must be benchmarked as an explicit axis."
+    reported_in:
+      - scheduler_runtime_report_v1
+
+  - name: audio.max_inflight
+    level: L2
+    owner: scheduler
+    propagation:
+      dynamicbatch_cli: "--audio-max-inflight"
+      dataproc_cli: "--audio-max-inflight"
+      audioproc_cli: "--max-inflight"
+    notes:
+      - "Upper bound on in-flight segment tasks (safety)."
+    reported_in:
+      - scheduler_runtime_report_v1
+
+  - name: audio.clap_batch_size
+    level: L3
+    owner: scheduler
+    propagation:
+      dynamicbatch_cli: "--audio-clap-batch-size"
+      dataproc_cli: "--audio-clap-batch-size"
+      audioproc_cli: "--clap-batch-size"
+    notes:
+      - "Controls micro-batching inside CLAP extractor inference (may increase VRAM)."
+      - "Must be benchmarked as axis for clap_extractor."
+    reported_in:
+      - scheduler_runtime_report_v1
+
+  # -----------------------------
+  # Quality-critical toggles (scheduler must NOT change)
+  # -----------------------------
+  - name: resolved_model_mapping
+    level: quality
+    owner: backend_or_profile
+    propagation:
+      dataproc_profile: "profile.resolved_model_mapping"
+      visual_cfg: "resolved_model_mapping"
+    notes:
+      - "Scheduler must not modify (affects quality)."
+
+  - name: text.enable_embeddings
+    level: quality
+    owner: backend_or_profile
+    propagation:
+      dataproc_cli: "--text-enable-embeddings"
+      textproc_cli: "--enable-embeddings"
+    notes:
+      - "Scheduler must not flip (may affect quality/coverage)."
+
+

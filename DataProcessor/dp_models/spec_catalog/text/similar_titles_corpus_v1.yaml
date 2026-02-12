@@ -1,0 +1,21 @@
+model_name: similar_titles_corpus_v1
+model_version: "v1"
+role: text_asset
+runtime: inprocess
+engine: files
+precision: fp32
+device_policy: cpu
+weights_digest: auto
+local_artifacts:
+  - path: text/similar_titles_v1/embeddings.npy
+    kind: file
+  - path: text/similar_titles_v1/ids.json
+    kind: file
+runtime_params:
+  # NOTE: These are assets (not an ML model). The extractor uses ModelManager.resolve(spec)
+  # to validate existence and to compute a deterministic weights_digest for reproducibility.
+  embeddings_relpath: text/similar_titles_v1/embeddings.npy
+  ids_relpath: text/similar_titles_v1/ids.json
+  id_kind: internal_hashed_id
+
+

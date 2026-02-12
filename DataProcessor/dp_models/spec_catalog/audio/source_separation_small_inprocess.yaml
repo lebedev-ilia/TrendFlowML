@@ -1,0 +1,27 @@
+model_name: source_separation_small_inprocess
+model_version: "1"
+role: source_separation
+runtime: inprocess
+engine: torch
+precision: fp32
+device_policy: cuda
+weights_digest: auto
+local_artifacts:
+  - path: audio/source_separation/small.pt
+    kind: file
+runtime_params:
+  factory: dp_models.factories.audio:create_source_separation_model
+  factory_kwargs:
+    model_size: small
+  checkpoint_relpath: audio/source_separation/small.pt
+  state_dict_key: state_dict
+  strict: true
+  strip_prefix: null
+  # Preprocessing parameters (for reproducibility)
+  sample_rate: 44100
+  n_fft: 2048
+  hop_length: 512
+  n_mels: 64
+  # Source order
+  source_order: ["vocals", "drums", "bass", "other"]
+

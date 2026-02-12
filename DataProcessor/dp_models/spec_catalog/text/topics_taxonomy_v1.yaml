@@ -1,0 +1,16 @@
+model_name: topics_taxonomy_v1
+model_version: "v1"
+role: text_asset
+runtime: inprocess
+engine: files
+precision: fp32
+device_policy: cpu
+weights_digest: auto
+local_artifacts:
+  - path: text/topics_v1/topics.jsonl
+    kind: file
+runtime_params:
+  topics_relpath: text/topics_v1/topics.jsonl
+  topics_db_version: "v1"
+
+

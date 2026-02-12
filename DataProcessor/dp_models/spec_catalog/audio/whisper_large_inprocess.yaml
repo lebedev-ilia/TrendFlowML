@@ -1,0 +1,20 @@
+model_name: whisper_large_inprocess
+model_version: "1"
+role: asr_whisper
+runtime: inprocess
+engine: torch
+precision: fp16
+device_policy: cuda
+weights_digest: auto
+local_artifacts:
+  - path: audio/whisper/large.pt
+    kind: file
+runtime_params:
+  factory: dp_models.factories.audio:create_whisper_model
+  factory_kwargs:
+    model_size: large
+  checkpoint_relpath: audio/whisper/large.pt
+  state_dict_key: state_dict
+  strict: true
+  strip_prefix: null
+

@@ -1,0 +1,374 @@
+# Stage Map (source-of-truth) — Global Orchestrator → DynamicBatch → DataProcessor → Processors
+#
+# Goal:
+# - Describe WHAT stages exist and in which order they run.
+# - For each stage, define inputs/outputs and which knobs are scheduler-controlled.
+# - Keep this file machine-readable; later scheduler/validators can consume it.
+#
+# IMPORTANT:
+# - This is not runtime state (state-files live under runs_root/state/...).
+# - DAG dependencies between individual Visual components live in:
+#   docs/reference/component_graph.yaml
+#
+version: 0.1
+
+levels:
+  global_orchestrator:
+    description: >
+      The "global" layer that receives a request (list of videos + profile + model mapping)
+      and delegates scheduling to DynamicBatch.
+    stages:
+      - id: global.ingest_request
+        inputs:
+          - kind: request
+            fields:
+              - video_list
+              - profile_path_or_payload
+              - resolved_model_mapping (quality-critical; scheduler must not change)
+        outputs:
+          - kind: scheduling_problem
+            fields:
+              - dag_stage
+              - budgets (cpu/ram/vram)
+              - cost_provider (file/db)
+
+      - id: global.schedule_and_execute
+        description: >
+          Delegates to DynamicBatch which decides (inter-video concurrency + per-run knobs),
+          then launches DataProcessor runs.
+        delegates_to: dynamicbatch
+
+  dynamicbatch:
+    entrypoint: DynamicBatch/run_scheduler.py
+    description: >
+      Level-1 scheduler (MVP): concurrent DataProcessor runs with a hard cap (max_parallel),
+      resource probing, per-component batch_size selection (via benchmark costs),
+      and OOM retry logic.
+    stages:
+      - id: dynamicbatch.load_inputs
+        inputs:
+          - kind: cli
+            fields: [--video-path, --input-json]
+        outputs:
+          - kind: video_list
+            fields: [abs_video_paths]
+
+      - id: dynamicbatch.probe_resources
+        inputs:
+          - kind: system
+            fields: [cpu_mem_mb, gpu_mem_mb]
+        knobs:
+          - name: sim_gpu_free_mb
+            owner: scheduler
+            status: implemented
+            effect: "simulate available free VRAM for planning"
+          - name: headroom_ratio
+            owner: scheduler
+            status: implemented
+            effect: "reserve a fraction of free VRAM as safety headroom"
+          - name: min_headroom_mb
+            owner: scheduler
+            status: implemented
+            effect: "minimum VRAM headroom (MB)"
+
+      - id: dynamicbatch.plan_variants
+        description: >
+          Chooses per-run planning knobs (MVP: batch_size overrides; later: deeper multi-axis planning).
+        inputs:
+          - kind: benchmark_costs
+            provider: file|db
+        outputs:
+          - kind: run_plan
+            fields:
+              - per_component.batch_size
+              - dp_cli_args
+        knobs:
+          - name: max_parallel_videos
+            owner: scheduler
+            status: implemented_as_hard_cap
+            cli_flag: --max-parallel
+            note: "Today it's a hard cap. Target behavior: scheduler enumerates candidates and picks best plan."
+          - name: per_component.batch_size
+            owner: scheduler
+            status: implemented
+            note: "Scheduler-owned; DataProcessor/VisualProcessor should treat batch_size as read-only input."
+
+      - id: dynamicbatch.execute_plan
+        description: >
+          Runs DataProcessor jobs in parallel (ThreadPoolExecutor), applies OOM retries with reduced batch sizes.
+        knobs:
+          - name: oom_retries
+            owner: scheduler
+            status: implemented
+          - name: backoff_sec
+            owner: scheduler
+            status: implemented
+        outputs:
+          - kind: run_rs_paths
+            fields: [manifest.json, component artifacts]
+
+  dataprocessor:
+    entrypoint: DataProcessor/main.py
+    description: >
+      Per-video orchestrator. Runs Segmenter → optional Audio/Text → Visual.
+      Writes all artifacts into a single per-run result_store directory.
+    run_identity:
+      fields:
+        - platform_id
+        - video_id
+        - run_id
+        - config_hash
+        - sampling_policy_version
+        - dataprocessor_version
+    stages:
+      - id: dp.preprobe_duration_guardrail
+        description: "Fail-fast: reject too-long videos (>20 min baseline policy) using ffprobe."
+        inputs:
+          - kind: video_file
+            fields: [video_path]
+        outputs:
+          - kind: duration_sec
+        knobs:
+          - name: max_duration_sec
+            owner: product_policy
+            status: implemented
+            default: 1200
+
+      - id: dp.compute_exec_order_from_dag
+        description: >
+          Optional: build Visual execution order from docs/reference/component_graph.yaml for enabled components.
+        inputs:
+          - kind: dag
+            path: DataProcessor/docs/reference/component_graph.yaml
+          - kind: visual_config
+        outputs:
+          - kind: visual_execution_order
+            fields: [execution_order]
+        knobs:
+          - name: dag_stage
+            owner: scheduler
+            status: implemented
+            cli_flag: --dag-stage
+
+      - id: dp.segmenter
+        delegates_to: segmenter
+
+      - id: dp.audio
+        description: "Optional processor (Tier-0 baseline extractors): clap/tempo/loudness."
+        delegates_to: audioprocessor
+        enabled_by:
+          - profile.processors.audio.enabled
+          - cli_flag: --run-audio
+
+      - id: dp.text
+        description: "Optional processor: TextProcessor (CPU-only default; GPU embedders optional)."
+        delegates_to: textprocessor
+        enabled_by:
+          - profile.processors.text.enabled
+          - cli_flag: --run-text
+
+      - id: dp.visual
+        delegates_to: visualprocessor
+
+    artifacts:
+      - kind: result_store
+        path: "<rs_base>/<platform_id>/<video_id>/<run_id>/"
+        required_files:
+          - manifest.json
+
+  segmenter:
+    entrypoint: DataProcessor/Segmenter/segmenter.py
+    description: >
+      Produces union-sampled frames timeline + audio.wav + audio segmentation.
+      Also writes per-component frame_indices in union domain, aligned to DAG dependencies.
+    inputs:
+      - kind: video_file
+        fields: [video_path]
+      - kind: visual_config
+        path: "<visual_cfg_path>"
+        used_for:
+          - per-component sampling budgets (target/min/max frames)
+          - enabled components set
+      - kind: dag
+        path: DataProcessor/docs/reference/component_graph.yaml
+        used_for:
+          - dependency sampling alignment (child indices ⊆ parent indices)
+          - primary shared sampling group policy
+    outputs:
+      - kind: frames_dir
+        path: "<segmenter_output>/<video_id>/video/"
+        files:
+          - metadata.json
+          - batch_*.npy
+      - kind: audio_dir
+        path: "<segmenter_output>/<video_id>/audio/"
+        files:
+          - audio.wav
+          - metadata.json
+          - segments.json
+    stages:
+      - id: segmenter.compute_sampling_plan
+        description: >
+          Computes per-component SOURCE frame indices, applies:
+          (A) primary shared sampling group, (B) DAG dependency alignment.
+        knobs:
+          - name: per_component.target_frames
+            owner: config_or_scheduler
+            status: implemented_via_visual_cfg
+            note: "Today comes from Visual config sampling/min/target/max (or defaults). Target: scheduler can override explicitly."
+          - name: sampling_policy_version
+            owner: scheduler
+            status: implemented
+          - name: analysis_fps
+            owner: scheduler
+            status: implemented
+          - name: analysis_width
+            owner: scheduler
+            status: implemented
+          - name: analysis_height
+            owner: scheduler
+            status: implemented
+
+      - id: segmenter.extract_union_frames
+        knobs:
+          - name: chunk_size
+            owner: scheduler
+            status: implemented
+            effect: "batch size for saved union frames (batch_*.npy)"
+
+      - id: segmenter.extract_audio
+        description: "Extract audio.wav via ffmpeg/ffprobe (required)."
+
+      - id: segmenter.build_audio_segments
+        description: >
+          Writes audio/segments.json (schema audio_segments_v1) with families:
+          primary/clap/tempo/asr/diarization/emotion/source_separation.
+        knobs:
+          - name: families.*.window_sec
+            owner: product_policy
+            status: implemented
+            note: "Currently hardcoded defaults. Target: move to config + benchmarked axes."
+
+  visualprocessor:
+    entrypoint: DataProcessor/VisualProcessor/main.py
+    description: >
+      Runs Visual components as subprocesses, writes per-component artifacts under run_rs_path,
+      and updates manifest.json. Supports either:
+      - PR-6: sequential execution by DAG order (execution_order)
+      - Backward mode: core providers sequential, modules optionally parallel (ThreadPoolExecutor)
+        with GPU semaphore gating.
+    inputs:
+      - kind: frames_dir
+        files: [metadata.json, batch_*.npy]
+      - kind: run_rs_path
+      - kind: visual_config
+        fields:
+          - core_providers enabled map
+          - modules enabled map
+          - per-component configs (including batch_size)
+          - global.max_parallel_modules
+          - global.gpu_max_concurrent
+          - execution_order (optional)
+          - requirements map (optional)
+          - resolved_model_mapping (optional)
+    outputs:
+      - kind: manifest
+        path: "<run_rs_path>/manifest.json"
+      - kind: component_artifacts
+        path: "<run_rs_path>/<component_name>/*.npz|*.json"
+    stages:
+      - id: visual.load_and_enrich_config
+        knobs:
+          - name: resolved_model_mapping
+            owner: backend_or_profile
+            status: implemented
+            note: "Quality-critical: scheduler must not change."
+          - name: requirements_map
+            owner: backend_or_profile
+            status: implemented
+
+      - id: visual.execute_core_providers
+        description: "Core providers are executed sequentially (no parallelism in orchestrator)."
+        knobs:
+          - name: per_component.batch_size
+            owner: scheduler
+            status: implemented
+          - name: gpu_max_concurrent
+            owner: scheduler
+            status: implemented
+            note: "GPU semaphore slots for GPU tasks; may allow >1 on big VRAM."
+
+      - id: visual.execute_modules
+        description: >
+          Modules run either sequentially (if deps exist) or in parallel with max_parallel_modules,
+          always with GPU semaphore gating.
+        knobs:
+          - name: max_parallel_modules
+            owner: scheduler
+            status: implemented
+          - name: execution_order
+            owner: scheduler
+            status: implemented_optional
+            note: "If provided, VisualProcessor runs enabled components sequentially by this order."
+
+    dag_source:
+      path: DataProcessor/docs/reference/component_graph.yaml
+      stage: baseline
+
+  audioprocessor:
+    entrypoint: DataProcessor/AudioProcessor/run_cli.py
+    description: >
+      Runs audio extractors and writes per-extractor NPZ artifacts under run_rs_path,
+      using Segmenter-produced audio.wav and audio/segments.json (no-fallback for required families).
+      Current orchestrator execution is sequential per extractor key.
+    inputs:
+      - kind: frames_dir
+        files: [audio/audio.wav, audio/segments.json]
+      - kind: run_rs_path
+    outputs:
+      - kind: component_artifacts
+        path: "<run_rs_path>/<audio_component>/*.npz"
+      - kind: manifest
+        path: "<run_rs_path>/manifest.json"
+    knobs:
+      - name: extractors
+        owner: backend_or_profile
+        status: implemented
+        note: "Which extractors are enabled (Tier-0 baseline: clap,tempo,loudness)."
+      - name: device
+        owner: scheduler
+        status: implemented
+      - name: segment_parallelism
+        owner: scheduler
+        status: implemented
+        note: "Implemented for baseline CPU extractors (tempo/loudness) via AudioProcessor CLI."
+      - name: model_batch_size
+        owner: scheduler
+        status: implemented_partial
+        note: "Implemented for CLAP via --clap-batch-size (micro-batching). Other extractors: planned."
+      - name: max_inflight
+        owner: scheduler
+        status: implemented
+        note: "Safety cap for segment-level concurrency (AudioProcessor CLI)."
+
+  textprocessor:
+    entrypoint: DataProcessor/TextProcessor/run_cli.py
+    description: >
+      Runs TextProcessor on a VideoDocument JSON. Writes a single per-run NPZ under run_rs_path/text_processor/.
+      Baseline-safe: CPU-only by default; GPU embedders enabled via --enable-embeddings (quality-neutral toggle must be decided by backend/profile).
+    inputs:
+      - kind: input_json
+        fields: [VideoDocument]
+      - kind: run_rs_path
+    outputs:
+      - kind: component_artifacts
+        path: "<run_rs_path>/text_processor/text_features.npz"
+      - kind: manifest
+        path: "<run_rs_path>/manifest.json"
+    knobs:
+      - name: enable_embeddings
+        owner: backend_or_profile
+        status: implemented
+        note: "May affect quality/coverage; scheduler must not flip this."
+
+

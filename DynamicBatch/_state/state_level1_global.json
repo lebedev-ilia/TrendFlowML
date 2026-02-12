@@ -1,0 +1,305 @@
+{
+  "schema_version": "state_level1_global_v1",
+  "updated_at": "2026-01-17T06:24:06Z",
+  "runs": {
+    "NSumhkOwSg.mp4": {
+      "status": "success",
+      "video_path": "/home/ilya/Рабочий стол/TrendFlowML/DataProcessor/NSumhkOwSg.mp4",
+      "returncode": 0
+    },
+    "-08QxGsXkx8__20260117-131608_82ab8f": {
+      "status": "success",
+      "video_path": "/home/ilya/Рабочий стол/TrendFlowML/-08QxGsXkx8.mp4",
+      "returncode": 0
+    },
+    "-3Mbinqzig4__20260117-131608_d570c2": {
+      "status": "success",
+      "video_path": "/home/ilya/Рабочий стол/TrendFlowML/-3Mbinqzig4.mp4",
+      "returncode": 0
+    },
+    "-3s8SdV4bsU__20260117-131608_39c483": {
+      "status": "success",
+      "video_path": "/home/ilya/Рабочий стол/TrendFlowML/-3s8SdV4bsU.mp4",
+      "returncode": 0
+    },
+    "-6Ob9j1wvlc__20260117-131608_1d61f5": {
+      "status": "success",
+      "video_path": "/home/ilya/Рабочий стол/TrendFlowML/-6Ob9j1wvlc.mp4",
+      "returncode": 0
+    },
+    "-6sdRixQ0Tc__20260117-131608_914ad9": {
+      "status": "success",
+      "video_path": "/home/ilya/Рабочий стол/TrendFlowML/-6sdRixQ0Tc.mp4",
+      "returncode": 0
+    },
+    "-F71yZij1Uc__20260117-131608_6e7726": {
+      "status": "success",
+      "video_path": "/home/ilya/Рабочий стол/TrendFlowML/-F71yZij1Uc.mp4",
+      "returncode": 0
+    },
+    "-H7CUDYbM_0__20260117-131608_be2202": {
+      "status": "success",
+      "video_path": "/home/ilya/Рабочий стол/TrendFlowML/-H7CUDYbM_0.mp4",
+      "returncode": 0
+    },
+    "-IofvSBVfnY__20260117-131608_034784": {
+      "status": "success",
+      "video_path": "/home/ilya/Рабочий стол/TrendFlowML/-IofvSBVfnY.mp4",
+      "returncode": 0
+    },
+    "-KUciuxEZ00__20260117-131608_212c7d": {
+      "status": "success",
+      "video_path": "/home/ilya/Рабочий стол/TrendFlowML/-KUciuxEZ00.mp4",
+      "returncode": 0
+    },
+    "NSumhkOwSg__20260117-131608_5d1533": {
+      "status": "success",
+      "video_path": "/home/ilya/Рабочий стол/TrendFlowML/NSumhkOwSg.mp4",
+      "returncode": 0
+    },
+    "-08QxGsXkx8__20260117-131814_7a67b8": {
+      "status": "error",
+      "video_path": "/home/ilya/Рабочий стол/TrendFlowML/-08QxGsXkx8.mp4",
+      "returncode": 1,
+      "oom": false
+    },
+    "-3Mbinqzig4__20260117-131814_d547fb": {
+      "status": "error",
+      "video_path": "/home/ilya/Рабочий стол/TrendFlowML/-3Mbinqzig4.mp4",
+      "returncode": 1,
+      "oom": false
+    },
+    "-3s8SdV4bsU__20260117-131814_159b7d": {
+      "status": "error",
+      "video_path": "/home/ilya/Рабочий стол/TrendFlowML/-3s8SdV4bsU.mp4",
+      "returncode": 1,
+      "oom": false
+    },
+    "-6Ob9j1wvlc__20260117-131814_5a06e3": {
+      "status": "error",
+      "video_path": "/home/ilya/Рабочий стол/TrendFlowML/-6Ob9j1wvlc.mp4",
+      "returncode": 1,
+      "oom": false
+    },
+    "-6sdRixQ0Tc__20260117-131814_ba34df": {
+      "status": "error",
+      "video_path": "/home/ilya/Рабочий стол/TrendFlowML/-6sdRixQ0Tc.mp4",
+      "returncode": 1,
+      "oom": false
+    },
+    "-F71yZij1Uc__20260117-131814_e157f3": {
+      "status": "error",
+      "video_path": "/home/ilya/Рабочий стол/TrendFlowML/-F71yZij1Uc.mp4",
+      "returncode": 1,
+      "oom": false
+    },
+    "-H7CUDYbM_0__20260117-131814_3b5114": {
+      "status": "error",
+      "video_path": "/home/ilya/Рабочий стол/TrendFlowML/-H7CUDYbM_0.mp4",
+      "returncode": 1,
+      "oom": false
+    },
+    "-IofvSBVfnY__20260117-131814_b50ee3": {
+      "status": "error",
+      "video_path": "/home/ilya/Рабочий стол/TrendFlowML/-IofvSBVfnY.mp4",
+      "returncode": 1,
+      "oom": false
+    },
+    "-KUciuxEZ00__20260117-131814_abe768": {
+      "status": "error",
+      "video_path": "/home/ilya/Рабочий стол/TrendFlowML/-KUciuxEZ00.mp4",
+      "returncode": 1,
+      "oom": false
+    },
+    "NSumhkOwSg__20260117-131814_878799": {
+      "status": "error",
+      "video_path": "/home/ilya/Рабочий стол/TrendFlowML/NSumhkOwSg.mp4",
+      "returncode": 1,
+      "oom": false
+    },
+    "-08QxGsXkx8__20260117-132116_58d8df": {
+      "status": "error",
+      "video_path": "/home/ilya/Рабочий стол/TrendFlowML/-08QxGsXkx8.mp4",
+      "returncode": 1,
+      "oom": false
+    },
+    "-3Mbinqzig4__20260117-132116_56f6a5": {
+      "status": "error",
+      "video_path": "/home/ilya/Рабочий стол/TrendFlowML/-3Mbinqzig4.mp4",
+      "returncode": 1,
+      "oom": false
+    },
+    "-3s8SdV4bsU__20260117-132116_793f0a": {
+      "status": "error",
+      "video_path": "/home/ilya/Рабочий стол/TrendFlowML/-3s8SdV4bsU.mp4",
+      "returncode": 1,
+      "oom": false
+    },
+    "-6Ob9j1wvlc__20260117-132116_b1ca8b": {
+      "status": "error",
+      "video_path": "/home/ilya/Рабочий стол/TrendFlowML/-6Ob9j1wvlc.mp4",
+      "returncode": 1,
+      "oom": false
+    },
+    "-6sdRixQ0Tc__20260117-132116_6f243e": {
+      "status": "error",
+      "video_path": "/home/ilya/Рабочий стол/TrendFlowML/-6sdRixQ0Tc.mp4",
+      "returncode": 1,
+      "oom": false
+    },
+    "-F71yZij1Uc__20260117-132116_97f26c": {
+      "status": "error",
+      "video_path": "/home/ilya/Рабочий стол/TrendFlowML/-F71yZij1Uc.mp4",
+      "returncode": 1,
+      "oom": false
+    },
+    "-H7CUDYbM_0__20260117-132116_d7e8c9": {
+      "status": "error",
+      "video_path": "/home/ilya/Рабочий стол/TrendFlowML/-H7CUDYbM_0.mp4",
+      "returncode": 1,
+      "oom": false
+    },
+    "-IofvSBVfnY__20260117-132116_e8df51": {
+      "status": "error",
+      "video_path": "/home/ilya/Рабочий стол/TrendFlowML/-IofvSBVfnY.mp4",
+      "returncode": 1,
+      "oom": false
+    },
+    "-KUciuxEZ00__20260117-132116_c87095": {
+      "status": "error",
+      "video_path": "/home/ilya/Рабочий стол/TrendFlowML/-KUciuxEZ00.mp4",
+      "returncode": 1,
+      "oom": false
+    },
+    "NSumhkOwSg__20260117-132116_90d67a": {
+      "status": "error",
+      "video_path": "/home/ilya/Рабочий стол/TrendFlowML/NSumhkOwSg.mp4",
+      "returncode": 1,
+      "oom": false
+    },
+    "NSumhkOwSg__20260117-151128_e1bc3e": {
+      "status": "error",
+      "video_path": "/home/ilya/Рабочий стол/TrendFlowML/NSumhkOwSg.mp4",
+      "returncode": 1,
+      "oom": false
+    },
+    "NSumhkOwSg__20260117-152305_5d2e8a": {
+      "status": "success",
+      "video_path": "/home/ilya/Рабочий стол/TrendFlowML/NSumhkOwSg.mp4",
+      "returncode": 0
+    },
+    "NSumhkOwSg__20260117-153826_97fb24": {
+      "status": "success",
+      "video_path": "/home/ilya/Рабочий стол/TrendFlowML/NSumhkOwSg.mp4",
+      "returncode": 0
+    },
+    "-08QxGsXkx8__20260117-153853_68893a": {
+      "status": "error",
+      "video_path": "/home/ilya/Рабочий стол/TrendFlowML/-08QxGsXkx8.mp4",
+      "returncode": 1,
+      "oom": false
+    },
+    "-3Mbinqzig4__20260117-153853_84a0b6": {
+      "status": "error",
+      "video_path": "/home/ilya/Рабочий стол/TrendFlowML/-3Mbinqzig4.mp4",
+      "returncode": 1,
+      "oom": false
+    },
+    "-3s8SdV4bsU__20260117-153853_37dd85": {
+      "status": "error",
+      "video_path": "/home/ilya/Рабочий стол/TrendFlowML/-3s8SdV4bsU.mp4",
+      "returncode": 1,
+      "oom": false
+    },
+    "-6Ob9j1wvlc__20260117-153853_b73492": {
+      "status": "error",
+      "video_path": "/home/ilya/Рабочий стол/TrendFlowML/-6Ob9j1wvlc.mp4",
+      "returncode": 1,
+      "oom": false
+    },
+    "-6sdRixQ0Tc__20260117-153853_35991d": {
+      "status": "error",
+      "video_path": "/home/ilya/Рабочий стол/TrendFlowML/-6sdRixQ0Tc.mp4",
+      "returncode": 1,
+      "oom": false
+    },
+    "-F71yZij1Uc__20260117-153853_fd9cf8": {
+      "status": "error",
+      "video_path": "/home/ilya/Рабочий стол/TrendFlowML/-F71yZij1Uc.mp4",
+      "returncode": 1,
+      "oom": false
+    },
+    "-H7CUDYbM_0__20260117-153853_7f3e81": {
+      "status": "error",
+      "video_path": "/home/ilya/Рабочий стол/TrendFlowML/-H7CUDYbM_0.mp4",
+      "returncode": 1,
+      "oom": false
+    },
+    "-IofvSBVfnY__20260117-153853_83097e": {
+      "status": "error",
+      "video_path": "/home/ilya/Рабочий стол/TrendFlowML/-IofvSBVfnY.mp4",
+      "returncode": 1,
+      "oom": false
+    },
+    "-KUciuxEZ00__20260117-153853_5ad33e": {
+      "status": "error",
+      "video_path": "/home/ilya/Рабочий стол/TrendFlowML/-KUciuxEZ00.mp4",
+      "returncode": 1,
+      "oom": false
+    },
+    "NSumhkOwSg__20260117-153853_3946d0": {
+      "status": "running",
+      "video_path": "/home/ilya/Рабочий стол/TrendFlowML/NSumhkOwSg.mp4"
+    },
+    "-08QxGsXkx8__20260117-154454_ead5c1": {
+      "status": "success",
+      "video_path": "/home/ilya/Рабочий стол/TrendFlowML/-08QxGsXkx8.mp4",
+      "returncode": 0
+    },
+    "-3Mbinqzig4__20260117-154454_d97992": {
+      "status": "success",
+      "video_path": "/home/ilya/Рабочий стол/TrendFlowML/-3Mbinqzig4.mp4",
+      "returncode": 0
+    },
+    "-3s8SdV4bsU__20260117-154454_498863": {
+      "status": "success",
+      "video_path": "/home/ilya/Рабочий стол/TrendFlowML/-3s8SdV4bsU.mp4",
+      "returncode": 0
+    },
+    "-6Ob9j1wvlc__20260117-154454_2a7483": {
+      "status": "success",
+      "video_path": "/home/ilya/Рабочий стол/TrendFlowML/-6Ob9j1wvlc.mp4",
+      "returncode": 0
+    },
+    "-6sdRixQ0Tc__20260117-154454_306d8f": {
+      "status": "success",
+      "video_path": "/home/ilya/Рабочий стол/TrendFlowML/-6sdRixQ0Tc.mp4",
+      "returncode": 0
+    },
+    "-F71yZij1Uc__20260117-154454_19c5ce": {
+      "status": "success",
+      "video_path": "/home/ilya/Рабочий стол/TrendFlowML/-F71yZij1Uc.mp4",
+      "returncode": 0
+    },
+    "-H7CUDYbM_0__20260117-154454_212339": {
+      "status": "success",
+      "video_path": "/home/ilya/Рабочий стол/TrendFlowML/-H7CUDYbM_0.mp4",
+      "returncode": 0
+    },
+    "-IofvSBVfnY__20260117-154454_18cdfa": {
+      "status": "success",
+      "video_path": "/home/ilya/Рабочий стол/TrendFlowML/-IofvSBVfnY.mp4",
+      "returncode": 0
+    },
+    "-KUciuxEZ00__20260117-154454_5c101f": {
+      "status": "success",
+      "video_path": "/home/ilya/Рабочий стол/TrendFlowML/-KUciuxEZ00.mp4",
+      "returncode": 0
+    },
+    "NSumhkOwSg__20260117-154454_bf2c71": {
+      "status": "success",
+      "video_path": "/home/ilya/Рабочий стол/TrendFlowML/NSumhkOwSg.mp4",
+      "returncode": 0
+    }
+  }
+}

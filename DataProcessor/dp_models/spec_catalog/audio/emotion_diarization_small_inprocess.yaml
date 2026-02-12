@@ -1,0 +1,16 @@
+model_name: emotion_diarization_small_inprocess
+model_version: "1"
+role: emotion_diarization
+runtime: inprocess
+engine: speechbrain
+precision: fp32
+device_policy: cuda
+weights_digest: auto
+local_artifacts:
+  - path: audio/emotion_diarization/wavlm_large
+    kind: dir
+runtime_params:
+  model_class: Speech_Emotion_Diarization
+  # Emotion labels mapping (if available in model)
+  emotion_labels: []
+

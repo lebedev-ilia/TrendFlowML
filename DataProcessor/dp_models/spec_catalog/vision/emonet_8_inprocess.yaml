@@ -1,0 +1,22 @@
+model_name: emonet_8_inprocess
+model_version: "v1"
+role: emotion_face
+runtime: inprocess
+engine: torch
+precision: fp32
+device_policy: cuda
+weights_digest: auto
+local_artifacts:
+  - path: bundled_models/visual/emonet/emonet_8.pth
+    kind: file
+runtime_params:
+  factory: dp_models.factories.vision:create_emonet
+  factory_kwargs:
+    n_expression: 8
+  checkpoint_relpath: bundled_models/visual/emonet/emonet_8.pth
+  # EmoNet checkpoints in this repo are raw state_dict dicts (no nested key). Provider will handle it.
+  state_dict_key: state_dict
+  strict: false
+  strip_prefix: "module."
+
+

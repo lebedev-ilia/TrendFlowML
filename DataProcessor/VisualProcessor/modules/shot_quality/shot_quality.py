@@ -1,0 +1,1280 @@
+"""
+shot_quality.py
+
+Production shot/frame quality module.
+
+Key requirements (project-wide contract):
+- Frame sampling is owned by Segmenter/DataProcessor and provided via metadata.json.
+- This module MUST NOT fallback if dependencies / indices are missing.
+- All heavy representations (per-frame CLIP embeddings) are NOT stored for long videos.
+  We keep compact per-frame features and per-shot aggregates.
+"""
+
+from __future__ import annotations
+
+import hashlib
+import json
+import time
+from dataclasses import dataclass
+from datetime import datetime
+from typing import Any, Dict, List, Optional, Sequence, Tuple
+
+import warnings
+import numpy as np
+import cv2
+
+from modules.base_module import BaseModule
+from utils.frame_manager import FrameManager
+
+
+MODULE_NAME = "shot_quality"
+VERSION = "2.0"
+SCHEMA_VERSION = "shot_quality_npz_v1"
+ARTIFACT_FILENAME = "shot_quality.npz"
+
+
+def _utc_iso_now() -> str:
+    return time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime())
+
+
+def _append_state_event_if_possible(*, rs_path: str, event: Dict[str, Any]) -> None:
+    """
+    Best-effort writer for `state_events.jsonl` (PR-5). Backend tails this file.
+    """
+    try:
+        from pathlib import Path as _Path
+
+        run_rs = _Path(rs_path).resolve()
+        rs_base = run_rs.parents[2]  # <rs_base>/<platform>/<video>/<run>
+        runs_root = rs_base.parent
+        platform_id = str(event.get("platform_id") or "")
+        video_id = str(event.get("video_id") or "")
+        run_id = str(event.get("run_id") or "")
+        if not (platform_id and video_id and run_id):
+            return
+        p = runs_root / "state" / platform_id / video_id / run_id / "state_events.jsonl"
+        p.parent.mkdir(parents=True, exist_ok=True)
+        line = (json.dumps(event, ensure_ascii=False) + "\n").encode("utf-8")
+        with open(p, "ab") as f:
+            f.write(line)
+    except Exception:
+        return
+
+
+def _emit_progress(
+    *,
+    rs_path: str,
+    platform_id: str,
+    video_id: str,
+    run_id: str,
+    done: int,
+    total: int,
+    stage: str,
+) -> None:
+    if total <= 0:
+        return
+    progress = float(done) / float(total)
+    _append_state_event_if_possible(
+        rs_path=rs_path,
+        event={
+            "ts": _utc_iso_now(),
+            "scope": "progress",
+            "processor": "visual",
+            "component": MODULE_NAME,
+            "status": "running",
+            "progress": progress,
+            "done": int(done),
+            "total": int(total),
+            "stage": str(stage),
+            "platform_id": platform_id,
+            "video_id": video_id,
+            "run_id": run_id,
+        },
+    )
+
+
+def _times_s_from_union(*, frame_manager: FrameManager, frame_indices: np.ndarray) -> np.ndarray:
+    uts = (frame_manager.meta or {}).get("union_timestamps_sec")
+    if not isinstance(uts, list) or not uts:
+        raise RuntimeError(f"{MODULE_NAME} | missing/invalid union_timestamps_sec in frames metadata (no-fallback)")
+    uts = np.asarray(uts, dtype=np.float32).reshape(-1)
+    if int(np.max(frame_indices)) >= int(uts.size) or int(np.min(frame_indices)) < 0:
+        raise RuntimeError(f"{MODULE_NAME} | frame_indices out of bounds for union_timestamps_sec (no-fallback)")
+    return uts[frame_indices.astype(np.int64)].astype(np.float32)
+
+
+def _sha256_prompts(prompts: Sequence[str]) -> str:
+    h = hashlib.sha256()
+    for p in prompts:
+        h.update(p.encode("utf-8"))
+        h.update(b"\n")
+    return h.hexdigest()
+
+
+def _entropy_from_probs(probs: np.ndarray, eps: float = 1e-12) -> np.ndarray:
+    """
+    probs: (N, P) float
+    returns: (N,) float32 entropy in nats
+    """
+    p = probs.astype(np.float32, copy=False)
+    p = np.clip(p, eps, 1.0)
+    return (-np.sum(p * np.log(p), axis=1)).astype(np.float32)
+
+
+def _require_npz_key(d: Dict[str, Any], key: str, provider: str) -> Any:
+    if key not in d:
+        raise RuntimeError(f"{MODULE_NAME} | missing key '{key}' in provider '{provider}' result")
+    return d[key]
+
+
+def _as_int32(x: Any) -> np.ndarray:
+    return np.asarray(x, dtype=np.int32)
+
+
+def _as_float32(x: Any) -> np.ndarray:
+    return np.asarray(x, dtype=np.float32)
+
+
+def _ensure_same_indices(expected: np.ndarray, actual: np.ndarray, name: str) -> None:
+    if expected.shape != actual.shape or not np.array_equal(expected, actual):
+        raise RuntimeError(
+            f"{MODULE_NAME} | frame_indices mismatch with {name}. "
+            f"Expected shape={expected.shape}, got shape={actual.shape}. "
+            "Contract: all core providers must be computed on the same frame_indices as shot_quality."
+        )
+
+
+def _softmax_np(x: np.ndarray, axis: int = -1) -> np.ndarray:
+    x = x - np.max(x, axis=axis, keepdims=True)
+    e = np.exp(x)
+    return e / (np.sum(e, axis=axis, keepdims=True) + 1e-9)
+
+
+# -----------------------------
+# Image-quality primitives
+# -----------------------------
+
+def sharpness_tenengrad(gray: np.ndarray) -> float:
+    gx = cv2.Sobel(gray, cv2.CV_64F, 1, 0)
+    gy = cv2.Sobel(gray, cv2.CV_64F, 0, 1)
+    g = gx * gx + gy * gy
+    return float(np.mean(g))
+
+
+def _sharpness_laplacian_var(gray: np.ndarray) -> float:
+    return float(cv2.Laplacian(gray, cv2.CV_64F).var())
+
+
+def _sharpness_smd2(gray: np.ndarray) -> float:
+    diff1 = np.abs(gray[:, 1:].astype(np.float32) - gray[:, :-1].astype(np.float32))
+    diff2 = np.abs(gray[1:, :].astype(np.float32) - gray[:-1, :].astype(np.float32))
+    return float(np.mean(diff1) + np.mean(diff2))
+
+
+def _edge_clarity_index(frame_bgr: np.ndarray) -> float:
+    edges = cv2.Canny(frame_bgr, 100, 200)
+    return float(np.mean(edges) / 255.0)
+
+
+def _focus_gradient_score(gray: np.ndarray) -> float:
+    gx = cv2.Sobel(gray, cv2.CV_64F, 1, 0, ksize=3)
+    gy = cv2.Sobel(gray, cv2.CV_64F, 0, 1, ksize=3)
+    gradient_magnitude = np.sqrt(gx**2 + gy**2)
+    return float(np.mean(gradient_magnitude))
+
+
+def sharpness_secondary(gray: np.ndarray, frame_bgr: np.ndarray) -> float:
+    # compact aggregation with mild normalization
+    lap = _sharpness_laplacian_var(gray)
+    smd = _sharpness_smd2(gray)
+    edge = _edge_clarity_index(frame_bgr)
+    grad = _focus_gradient_score(gray)
+
+    lap_n = np.tanh(lap / 500.0)
+    smd_n = np.tanh(smd / 200.0)
+    grad_n = np.tanh(grad / 50.0)
+    edge_n = float(np.clip(edge, 0.0, 1.0))
+
+    score = 0.35 * lap_n + 0.25 * smd_n + 0.25 * grad_n + 0.15 * edge_n
+    return float(np.clip(score, 0.0, 1.0))
+
+
+def motion_blur_probability(gray: np.ndarray) -> float:
+    fft = np.fft.fft2(gray.astype(np.float32))
+    mag = np.log(np.abs(fft) + 1.0)
+    blur = 1.0 - (float(np.mean(mag)) / (float(np.max(mag)) + 1e-9))
+    return float(np.clip(blur, 0.0, 1.0))
+
+
+def spatial_frequency_mean(gray: np.ndarray) -> float:
+    h, w = gray.shape[:2]
+    if h == 0 or w == 0:
+        return 0.0
+    fft = np.fft.fft2(gray.astype(np.float32))
+    fft_shift = np.fft.fftshift(fft)
+    magnitude = np.abs(fft_shift)
+    y, x = np.ogrid[:h, :w]
+    cy, cx = h // 2, w // 2
+    distances = np.sqrt((x - cx) ** 2 + (y - cy) ** 2)
+    diag = float(np.sqrt(h**2 + w**2))
+    norm_dist = distances / (diag + 1e-8)
+    return float(np.sum(magnitude * norm_dist) / (np.sum(magnitude) + 1e-10))
+
+
+def noise_level_luma(gray: np.ndarray) -> float:
+    blur = cv2.GaussianBlur(gray, (3, 3), 0)
+    diff = np.mean(np.abs(gray.astype(np.float32) - blur.astype(np.float32))) / 255.0
+    return float(np.clip(diff, 0.0, 1.0))
+
+
+def noise_level_chroma(frame_bgr: np.ndarray) -> float:
+    yuv = cv2.cvtColor(frame_bgr, cv2.COLOR_BGR2YUV)
+    u = yuv[:, :, 1].astype(np.float32)
+    v = yuv[:, :, 2].astype(np.float32)
+    u_blur = cv2.GaussianBlur(u, (3, 3), 0)
+    v_blur = cv2.GaussianBlur(v, (3, 3), 0)
+    diff = (np.mean(np.abs(u - u_blur)) + np.mean(np.abs(v - v_blur))) / 2.0 / 255.0
+    return float(np.clip(diff, 0.0, 1.0))
+
+
+def iso_estimated_value(noise_luma: float) -> float:
+    # map [0..0.1] -> [100..6400], clamp
+    x = float(np.clip(noise_luma / 0.1, 0.0, 1.0))
+    return float(100.0 + x * (6400.0 - 100.0))
+
+
+def grain_strength(gray: np.ndarray) -> float:
+    hp = cv2.Laplacian(gray, cv2.CV_64F)
+    s = float(np.std(hp) / 255.0)
+    return float(np.clip(s, 0.0, 1.0))
+
+
+def noise_spatial_entropy(gray: np.ndarray, block: int = 8) -> float:
+    from scipy.stats import entropy  # local import (heavy)
+
+    h, w = gray.shape[:2]
+    if h < block or w < block:
+        return 0.0
+    ent = []
+    for y in range(0, h - block + 1, block):
+        for x in range(0, w - block + 1, block):
+            patch = gray[y : y + block, x : x + block]
+            hist = cv2.calcHist([patch], [0], None, [16], [0, 256]).flatten()
+            hist = hist / (hist.sum() + 1e-9)
+            ent.append(float(entropy(hist)))
+    return float(np.mean(ent)) if ent else 0.0
+
+
+def exposure_metrics(gray: np.ndarray) -> Dict[str, float]:
+    p5 = float(np.percentile(gray, 5))
+    p95 = float(np.percentile(gray, 95))
+    under = float(np.mean(gray < p5))
+    over = float(np.mean(gray > p95))
+    mid = float(np.mean((gray >= p5) & (gray <= p95)))
+    # skew proxy: use normalized distance between p5 and p95 to mean
+    mean = float(np.mean(gray))
+    skew = float((mean - p5) / (p95 - p5 + 1e-9))
+    return {
+        "underexposure_ratio": under,
+        "overexposure_ratio": over,
+        "midtones_balance": mid,
+        "exposure_histogram_skewness": skew,
+        "highlight_recovery_potential": float(1.0 - over),
+        "shadow_recovery_potential": float(1.0 - under),
+    }
+
+
+def contrast_metrics(gray: np.ndarray) -> Dict[str, float]:
+    global_contrast = float(np.std(gray))
+    local_contrast = float(np.mean(np.abs(cv2.Laplacian(gray, cv2.CV_64F))))
+    dyn = float((float(np.max(gray)) - float(np.min(gray))) / 255.0)
+    clarity = float(np.clip(local_contrast / 10.0, 0.0, 1.0))
+    micro = float(np.std(cv2.Laplacian(gray, cv2.CV_64F)) / 255.0)
+    return {
+        "contrast_global": global_contrast,
+        "contrast_local": local_contrast,
+        "contrast_dynamic_range": dyn,
+        "contrast_clarity_score": clarity,
+        "microcontrast": float(np.clip(micro, 0.0, 1.0)),
+    }
+
+
+def color_metrics(frame_bgr: np.ndarray) -> Dict[str, Any]:
+    b, g, r = cv2.split(frame_bgr)
+    wb_r = float(np.mean(r))
+    wb_g = float(np.mean(g))
+    wb_b = float(np.mean(b))
+    means = np.array([wb_r, wb_g, wb_b], dtype=np.float32)
+    cast_idx = int(np.argmax(means))
+    cast_type = ["red", "green", "blue"][cast_idx]
+    # Simple color fidelity: entropy of hue histogram
+    hsv = cv2.cvtColor(frame_bgr, cv2.COLOR_BGR2HSV)
+    h = hsv[:, :, 0]
+    hist = cv2.calcHist([h], [0], None, [32], [0, 180]).flatten()
+    hist = hist / (hist.sum() + 1e-9)
+    from scipy.stats import entropy  # local import
+    cfi = float(np.clip(entropy(hist) / np.log(32), 0.0, 1.0))
+    # Uniformity: inverse of std over HSV channels
+    s_std = float(np.std(hsv[:, :, 1]) / 255.0)
+    v_std = float(np.std(hsv[:, :, 2]) / 255.0)
+    uniform = float(np.clip(1.0 - (s_std + v_std) / 2.0, 0.0, 1.0))
+    # Skin-tone accuracy (proxy): fraction of pixels with R>G>B in HSV skin mask
+    skin_mask = ((hsv[:, :, 0] >= 0) & (hsv[:, :, 0] <= 25) & (hsv[:, :, 1] > 40) & (hsv[:, :, 2] > 50))
+    if np.any(skin_mask):
+        rr = r[skin_mask].astype(np.float32)
+        gg = g[skin_mask].astype(np.float32)
+        bb = b[skin_mask].astype(np.float32)
+        ok = float(np.mean((rr > gg) & (gg > bb)))
+    else:
+        ok = 0.0
+    # Color noise level: std of LAB ab residual
+    lab = cv2.cvtColor(frame_bgr, cv2.COLOR_BGR2LAB).astype(np.float32)
+    ab = lab[:, :, 1:3]
+    ab_blur = cv2.GaussianBlur(ab, (3, 3), 0)
+    color_noise = float(np.clip(np.std(ab - ab_blur) / 255.0, 0.0, 1.0))
+    return {
+        "wb_r": wb_r,
+        "wb_g": wb_g,
+        "wb_b": wb_b,
+        "color_cast_type": cast_type,
+        "skin_tone_accuracy_score": ok,
+        "color_fidelity_index": cfi,
+        "color_noise_level": color_noise,
+        "color_uniformity_score": uniform,
+    }
+
+
+def compression_metrics(gray: np.ndarray) -> Dict[str, float]:
+    # blockiness: differences across 8px boundaries
+    g = gray.astype(np.float32)
+    block = float(np.mean(np.abs(g[:, 8:] - g[:, :-8])))
+    # banding: low high-frequency energy proxy
+    blur = cv2.GaussianBlur(g, (9, 9), 0)
+    band = float(np.clip(1.0 - (np.mean(np.abs(g - blur)) / 50.0), 0.0, 1.0))
+    # ringing: std of Laplacian-of-Gaussian response
+    # OpenCV (SIMD backend) may not support src=CV_32F -> dst=CV_64F for linear filters.
+    # Use float64 for the LoG branch to keep it portable across builds.
+    g64 = gray.astype(np.float64)
+    log = cv2.Laplacian(cv2.GaussianBlur(g64, (3, 3), 0), cv2.CV_64F)
+    ringing = float(np.clip(np.std(log) / 20.0, 0.0, 1.0))
+    bitrate = float(np.clip(1.0 - (block / 50.0 + band) / 2.0, 0.0, 1.0))
+    # codec entropy: entropy of block stds
+    from scipy.stats import entropy  # local import
+    h, w = gray.shape[:2]
+    bs = 8
+    stds = []
+    for y in range(0, h - bs + 1, bs):
+        for x in range(0, w - bs + 1, bs):
+            stds.append(float(np.std(g[y : y + bs, x : x + bs])))
+    if stds:
+        hist, _ = np.histogram(stds, bins=20)
+        p = hist.astype(np.float32)
+        p = p / (p.sum() + 1e-9)
+        codec_ent = float(np.clip(entropy(p) / np.log(20), 0.0, 1.0))
+    else:
+        codec_ent = 0.0
+    return {
+        "compression_blockiness_score": block,
+        "banding_intensity": band,
+        "ringing_artifacts_level": ringing,
+        "bitrate_estimation_score": bitrate,
+        "codec_artifact_entropy": codec_ent,
+    }
+
+
+def lens_metrics(frame_bgr: np.ndarray, gray: np.ndarray) -> Dict[str, Any]:
+    h, w = gray.shape[:2]
+    if h == 0 or w == 0:
+        return {
+            "vignetting_level": 0.0,
+            "chromatic_aberration_level": 0.0,
+            "distortion_type": "none",
+            "lens_sharpness_drop_off": 0.0,
+            "lens_obstruction_probability": 0.0,
+            "lens_dirt_probability": 0.0,
+            "veiling_glare_score": 0.0,
+        }
+    # vignetting: center vs corners brightness
+    cy, cx = h // 2, w // 2
+    center = gray[max(0, cy - h // 10) : min(h, cy + h // 10), max(0, cx - w // 10) : min(w, cx + w // 10)]
+    corners = np.concatenate(
+        [
+            gray[: h // 10, : w // 10].flatten(),
+            gray[: h // 10, -w // 10 :].flatten(),
+            gray[-h // 10 :, : w // 10].flatten(),
+            gray[-h // 10 :, -w // 10 :].flatten(),
+        ]
+    )
+    vign = float(np.mean(center) - np.mean(corners))
+    # chromatic aberration: edge mismatch between R and B
+    b, g, r = cv2.split(frame_bgr)
+    e_r = cv2.Canny(r, 100, 200).astype(np.float32)
+    e_b = cv2.Canny(b, 100, 200).astype(np.float32)
+    ca = float(np.mean(np.abs(e_r - e_b)) / 255.0)
+    # distortion type: not robust without line detection; keep "none" deterministic
+    distortion_type = "none"
+    # sharpness drop-off: laplacian center vs corners
+    lap = cv2.Laplacian(gray, cv2.CV_64F)
+    lap_center = float(np.var(lap[max(0, cy - h // 10) : min(h, cy + h // 10), max(0, cx - w // 10) : min(w, cx + w // 10)]))
+    lap_corners = float(np.var(corners.astype(np.float32)))
+    drop = float(np.clip(1.0 - (lap_corners / (lap_center + 1e-9)), 0.0, 1.0))
+    # obstruction: high local residual ratio
+    blur = cv2.GaussianBlur(gray, (9, 9), 0)
+    resid = np.abs(gray.astype(np.float32) - blur.astype(np.float32)) / 255.0
+    obstruction = float(np.clip(np.mean(resid > 0.5), 0.0, 1.0))
+    # dirt: small dark blobs ratio
+    thr = cv2.adaptiveThreshold(gray, 255, cv2.ADAPTIVE_THRESH_MEAN_C, cv2.THRESH_BINARY_INV, 31, 5)
+    dirt = float(np.clip(np.mean(thr > 0), 0.0, 1.0))
+    # veiling glare: bright fraction * inverse contrast
+    bright = float(np.mean(gray > 220))
+    contrast = float(np.std(gray) / 255.0)
+    glare = float(np.clip(bright * (1.0 - contrast), 0.0, 1.0))
+    return {
+        "vignetting_level": vign,
+        "chromatic_aberration_level": ca,
+        "distortion_type": distortion_type,
+        "lens_sharpness_drop_off": drop,
+        "lens_obstruction_probability": obstruction,
+        "lens_dirt_probability": dirt,
+        "veiling_glare_score": glare,
+    }
+
+
+def fog_haziness_score(gray: np.ndarray) -> float:
+    lap = cv2.Laplacian(gray, cv2.CV_64F).var()
+    return float(1.0 / (lap + 1.0))
+
+
+def temporal_flicker(prev_gray: Optional[np.ndarray], gray: np.ndarray) -> float:
+    if prev_gray is None:
+        return 0.0
+    return float(np.mean(np.abs(prev_gray.astype(np.float32) - gray.astype(np.float32))) / 255.0)
+
+
+def rolling_shutter_artifacts_score(prev_frame_bgr: Optional[np.ndarray], curr_frame_bgr: np.ndarray) -> float:
+    if prev_frame_bgr is None:
+        return 0.0
+    gray_prev = cv2.cvtColor(prev_frame_bgr, cv2.COLOR_BGR2GRAY)
+    gray_curr = cv2.cvtColor(curr_frame_bgr, cv2.COLOR_BGR2GRAY)
+    flow = cv2.calcOpticalFlowFarneback(gray_prev, gray_curr, None, 0.5, 3, 15, 3, 5, 1.2, 0)
+    vflow = flow[:, :, 1]
+    h, w = vflow.shape[:2]
+    strips = 5
+    sw = max(1, w // strips)
+    strip_means = [float(np.mean(np.abs(vflow[:, i * sw : (i + 1) * sw]))) for i in range(strips)]
+    var = float(np.std(strip_means)) if len(strip_means) > 1 else 0.0
+    return float(np.clip(var / 5.0, 0.0, 1.0))
+
+
+def depth_metrics(depth_map: np.ndarray) -> Dict[str, float]:
+    if depth_map is None or not np.isfinite(depth_map).any():
+        raise RuntimeError(f"{MODULE_NAME} | core_depth_midas produced invalid depth map (NaN/empty)")
+    dm = depth_map.astype(np.float32)
+    mean = float(np.nanmean(dm))
+    std = float(np.nanstd(dm))
+    # gradient magnitude mean
+    gx = cv2.Sobel(dm, cv2.CV_32F, 1, 0, ksize=3)
+    gy = cv2.Sobel(dm, cv2.CV_32F, 0, 1, ksize=3)
+    grad = float(np.nanmean(np.sqrt(gx * gx + gy * gy)))
+    return {"depth_mean": mean, "depth_std": std, "depth_grad_mean": grad}
+
+
+def _bbox_from_landmarks(face_landmarks_xy: np.ndarray, w: int, h: int) -> Optional[Tuple[int, int, int, int]]:
+    # landmarks: (468,3) normalized x,y
+    if face_landmarks_xy.size == 0:
+        return None
+    xs = face_landmarks_xy[:, 0]
+    ys = face_landmarks_xy[:, 1]
+    if not np.isfinite(xs).any() or not np.isfinite(ys).any():
+        return None
+    x1 = int(np.clip(np.min(xs) * w, 0, w - 1))
+    x2 = int(np.clip(np.max(xs) * w, 0, w - 1))
+    y1 = int(np.clip(np.min(ys) * h, 0, h - 1))
+    y2 = int(np.clip(np.max(ys) * h, 0, h - 1))
+    if x2 <= x1 or y2 <= y1:
+        return None
+    return x1, y1, x2, y2
+
+
+@dataclass
+class _ShotBoundaries:
+    shot_start_frames: np.ndarray  # (S,)
+    shot_end_frames: np.ndarray    # (S,)
+    shot_ids_for_frames: np.ndarray  # (N,)
+
+
+class ShotQualityModule(BaseModule):
+    MODULE_NAME = MODULE_NAME
+    VERSION = VERSION
+    SCHEMA_VERSION = SCHEMA_VERSION
+    ARTIFACT_FILENAME = ARTIFACT_FILENAME
+
+    def __init__(self, rs_path: Optional[str] = None, device: str = "cuda", **kwargs: Any):
+        self.device = device
+        super().__init__(rs_path=rs_path, logger_name=MODULE_NAME, **kwargs)
+
+    @property
+    def module_name(self) -> str:
+        return MODULE_NAME
+
+    def required_dependencies(self) -> List[str]:
+        return [
+            "core_clip",
+            "core_depth_midas",
+            "core_object_detections",
+            "core_face_landmarks",
+            "cut_detection",
+        ]
+
+    @property
+    def supports_batch(self) -> bool:
+        """
+        Shot quality module supports batch-safe processing (sequential per-video),
+        but does not implement optimized GPU batching.
+        """
+        return False
+
+    def _do_initialize(self) -> None:
+        # NOTE: current implementation is numpy-only (CPU). We keep `device` as an informational config field.
+        if str(self.device).lower() == "cuda":
+            self.logger.info("%s | device=cuda requested, but implementation is numpy-only (CPU).", MODULE_NAME)
+
+    def process(self, frame_manager: FrameManager, frame_indices: List[int], config: Dict[str, Any]) -> Dict[str, Any]:
+        self.initialize()
+
+        if not frame_indices:
+            raise ValueError(f"{MODULE_NAME} | frame_indices is empty")
+
+        frame_indices_np = np.asarray([int(i) for i in frame_indices], dtype=np.int32)
+        n = int(frame_indices_np.shape[0])
+        self.logger.info(f"{MODULE_NAME} | process | Начало обработки: frames={n}, device={self.device}")
+
+        # Baseline time-axis contract
+        times_s = _times_s_from_union(frame_manager=frame_manager, frame_indices=frame_indices_np)
+
+        # Config / feature gating presets (scheduler/site controlled)
+        cfg = config or {}
+        preset = str(cfg.get("preset") or "default").strip().lower()
+        if preset not in ("fast", "default", "quality"):
+            raise RuntimeError(f"{MODULE_NAME} | invalid preset={preset} (must be fast|default|quality)")
+        enable_entropy = bool(cfg.get("enable_entropy_features")) if "enable_entropy_features" in cfg else (preset != "fast")
+        enable_rolling_shutter = bool(cfg.get("enable_rolling_shutter")) if "enable_rolling_shutter" in cfg else (preset == "quality")
+        enable_lens_group = bool(cfg.get("enable_lens_features")) if "enable_lens_features" in cfg else (preset == "quality")
+        analysis_max_dim = int(cfg.get("analysis_max_dim") or 320)
+        if analysis_max_dim <= 0:
+            raise RuntimeError(f"{MODULE_NAME} | analysis_max_dim must be > 0")
+
+        progress_every_n_frames = int(cfg.get("progress_every_n_frames") or max(1, n // 10))
+        progress_every_n_frames = max(1, progress_every_n_frames)
+
+        # run identity for progress
+        meta_full = getattr(frame_manager, "meta", {}) or {}
+        platform_id = str(meta_full.get("platform_id") or "")
+        video_id = str(meta_full.get("video_id") or "")
+        run_id = str(meta_full.get("run_id") or "")
+
+        deps = self.load_all_dependencies()
+        self.logger.info(f"{MODULE_NAME} | process | Загружены зависимости: {len(deps)}")
+
+        core_clip = deps.get("core_clip")
+        core_depth = deps.get("core_depth_midas")
+        core_det = deps.get("core_object_detections")
+        core_lm = deps.get("core_face_landmarks")
+        cut_det = deps.get("cut_detection")
+
+        if core_clip is None or core_depth is None or core_det is None or core_lm is None or cut_det is None:
+            raise RuntimeError(f"{MODULE_NAME} | missing required dependency results (None)")
+
+        self.logger.info(
+            f"{MODULE_NAME} | process | Зависимости найдены: "
+            f"core_clip={core_clip is not None}, core_depth={core_depth is not None}, "
+            f"core_det={core_det is not None}, core_lm={core_lm is not None}, cut_det={cut_det is not None}"
+        )
+
+        # --- Validate + align indices across core providers ---
+        self.logger.info(f"{MODULE_NAME} | process | Валидация frame_indices для всех core providers")
+        clip_idx = _as_int32(_require_npz_key(core_clip, "frame_indices", "core_clip"))
+        clip_emb = _as_float32(_require_npz_key(core_clip, "frame_embeddings", "core_clip"))
+        _ensure_same_indices(frame_indices_np, clip_idx, "core_clip")
+        self.logger.debug(f"{MODULE_NAME} | process | core_clip: embeddings shape={clip_emb.shape}")
+
+        depth_idx = _as_int32(_require_npz_key(core_depth, "frame_indices", "core_depth_midas"))
+        depth_maps = _as_float32(_require_npz_key(core_depth, "depth_maps", "core_depth_midas"))
+        _ensure_same_indices(frame_indices_np, depth_idx, "core_depth_midas")
+        self.logger.debug(f"{MODULE_NAME} | process | core_depth_midas: depth_maps shape={depth_maps.shape}")
+
+        det_idx = _as_int32(_require_npz_key(core_det, "frame_indices", "core_object_detections"))
+        boxes = _as_float32(_require_npz_key(core_det, "boxes", "core_object_detections"))
+        valid_mask = np.asarray(_require_npz_key(core_det, "valid_mask", "core_object_detections"), dtype=bool)
+        class_ids = _as_int32(_require_npz_key(core_det, "class_ids", "core_object_detections"))
+        _ensure_same_indices(frame_indices_np, det_idx, "core_object_detections")
+        self.logger.debug(
+            f"{MODULE_NAME} | process | core_object_detections: boxes shape={boxes.shape}, "
+            f"valid_detections={np.sum(valid_mask)}/{valid_mask.size}"
+        )
+
+        lm_idx = _as_int32(_require_npz_key(core_lm, "frame_indices", "core_face_landmarks"))
+        face = _as_float32(_require_npz_key(core_lm, "face_landmarks", "core_face_landmarks"))
+        face_present = np.asarray(_require_npz_key(core_lm, "face_present", "core_face_landmarks"), dtype=bool)
+        has_any_face = bool(np.asarray(_require_npz_key(core_lm, "has_any_face", "core_face_landmarks")).item())
+        empty_reason_faces = _require_npz_key(core_lm, "empty_reason", "core_face_landmarks")
+        _ensure_same_indices(frame_indices_np, lm_idx, "core_face_landmarks")
+        self.logger.info(
+            f"{MODULE_NAME} | process | core_face_landmarks: has_any_face={has_any_face}, "
+            f"faces_detected={np.sum(face_present)}/{face_present.size if face_present.size > 0 else 0}"
+        )
+
+        _emit_progress(
+            rs_path=str(self.rs_path or ""),
+            platform_id=platform_id,
+            video_id=video_id,
+            run_id=run_id,
+            done=0,
+            total=n,
+            stage="load_deps",
+        )
+
+        # --- CLIP-based shot-quality probabilities (from core_clip outputs) ---
+        self.logger.info(f"{MODULE_NAME} | process | Вычисление CLIP-based quality probabilities")
+        prompts_raw = _require_npz_key(core_clip, "shot_quality_prompts", "core_clip")
+        txt_emb = _as_float32(_require_npz_key(core_clip, "shot_quality_text_embeddings", "core_clip"))
+        if txt_emb.ndim != 2 or clip_emb.ndim != 2 or txt_emb.shape[1] != clip_emb.shape[1]:
+            raise RuntimeError(
+                f"{MODULE_NAME} | core_clip text/image embedding dim mismatch: "
+                f"text={txt_emb.shape}, image={clip_emb.shape}"
+            )
+
+        n = int(frame_indices_np.shape[0])
+        p = int(txt_emb.shape[0])
+        quality_probs = np.zeros((n, p), dtype=np.float16)
+
+        # Scheduler-controlled chunking (no heuristics). This prevents accidental huge allocations.
+        try:
+            chunk = int((cfg or {}).get("matmul_chunk_size") or 2048)
+        except Exception:
+            chunk = 2048
+        if chunk <= 0:
+            raise RuntimeError(f"{MODULE_NAME} | invalid matmul_chunk_size={chunk}; must be > 0")
+
+        self.logger.info(
+            f"{MODULE_NAME} | process | CLIP matmul: frames={n}, prompts={p}, "
+            f"chunk_size={chunk}, device={self.device}"
+        )
+        # numpy-only softmax in chunks
+        txtT = txt_emb.T.astype(np.float32, copy=False)  # (D, P)
+        for start in range(0, n, chunk):
+            end = min(n, start + chunk)
+            logits = (clip_emb[start:end].astype(np.float32, copy=False) @ txtT).astype(np.float32, copy=False)  # (B, P)
+            probs = _softmax_np(logits, axis=-1).astype(np.float16)
+            quality_probs[start:end] = probs
+        self.logger.info(f"{MODULE_NAME} | process | CLIP quality probabilities вычислены: shape={quality_probs.shape}")
+
+        _emit_progress(
+            rs_path=str(self.rs_path or ""),
+            platform_id=platform_id,
+            video_id=video_id,
+            run_id=run_id,
+            done=0,
+            total=n,
+            stage="quality_probs",
+        )
+
+        # --- Per-frame feature extraction (pixels + depth + detections + face ROI) ---
+        feature_names: List[str] = []
+        rows: List[np.ndarray] = []
+
+        prev_gray = None
+        prev_frame_bgr = None
+
+        # Pre-allocate per-feature arrays in dict, then stack
+        feats: Dict[str, np.ndarray] = {}
+        def alloc(name: str, dtype=np.float32) -> None:
+            feats[name] = np.zeros((n,), dtype=dtype)
+
+        # Scalars
+        alloc("sharpness_tenengrad")
+        alloc("sharpness_secondary")
+        alloc("motion_blur_probability")
+        alloc("spatial_frequency_mean")
+        alloc("noise_level_luma")
+        alloc("noise_level_chroma")
+        alloc("noise_chroma_ratio")
+        alloc("iso_estimated_value")
+        alloc("grain_strength")
+        alloc("noise_spatial_entropy")
+        # exposure (6)
+        for k in [
+            "underexposure_ratio","overexposure_ratio","midtones_balance",
+            "exposure_histogram_skewness","highlight_recovery_potential","shadow_recovery_potential"
+        ]:
+            alloc(k)
+        # contrast (5)
+        for k in [
+            "contrast_global","contrast_local","contrast_dynamic_range","contrast_clarity_score","microcontrast"
+        ]:
+            alloc(k)
+        # color (store cast as int code, mapping in meta)
+        alloc("wb_r"); alloc("wb_g"); alloc("wb_b")
+        alloc("skin_tone_accuracy_score"); alloc("color_fidelity_index"); alloc("color_noise_level"); alloc("color_uniformity_score")
+        feats["color_cast_type_id"] = np.zeros((n,), dtype=np.int32)
+        # compression (5)
+        for k in ["compression_blockiness_score","banding_intensity","ringing_artifacts_level","bitrate_estimation_score","codec_artifact_entropy"]:
+            alloc(k)
+        # lens group (optional; noisy features removed from default)
+        alloc("vignetting_level")
+        alloc("chromatic_aberration_level")
+        feats["distortion_type_id"] = np.zeros((n,), dtype=np.int32)  # only "none" for now
+        alloc("lens_sharpness_drop_off")
+        # fog
+        alloc("fog_haziness_score")
+        # temporal
+        alloc("temporal_flicker_score")
+        alloc("rolling_shutter_artifacts_score")
+        # depth (3)
+        alloc("depth_mean"); alloc("depth_std"); alloc("depth_grad_mean")
+        # detections (2)
+        feats["objects_count"] = np.zeros((n,), dtype=np.int32)
+        alloc("objects_area_mean")
+        # face ROI (2)
+        alloc("face_sharpness_tenengrad")
+        alloc("face_noise_level_luma")
+
+        cast_map = {"red": 0, "green": 1, "blue": 2}
+        distortion_map = {"none": 0}
+
+        self.logger.info(
+            f"{MODULE_NAME} | process | Начало извлечения per-frame features: "
+            f"frames={n}"
+        )
+        tik_frame = time.time()
+        log_interval = max(1, n // 10)  # log every 10% progress
+
+        # Performance: compute most image-quality metrics on downscaled frames.
+        # This keeps baseline smoke runs fast while preserving stable signals.
+        ANALYSIS_MAX_DIM = int(analysis_max_dim)
+
+        for i, frame_idx in enumerate(frame_indices_np.tolist()):
+            if (i + 1) % progress_every_n_frames == 0 or (i + 1) == n:
+                _emit_progress(
+                    rs_path=str(self.rs_path or ""),
+                    platform_id=platform_id,
+                    video_id=video_id,
+                    run_id=run_id,
+                    done=int(i + 1),
+                    total=int(n),
+                    stage="frame_features",
+                )
+            if (i + 1) % log_interval == 0 or (i + 1) == n:
+                elapsed = time.time() - tik_frame
+                rate = (i + 1) / elapsed if elapsed > 0 else 0
+                self.logger.info(
+                    f"{MODULE_NAME} | process | Обработка кадров: {i+1}/{n} "
+                    f"({100*(i+1)/n:.1f}%), rate={rate:.1f} fps, elapsed={elapsed:.1f}s"
+                )
+            frame_rgb = frame_manager.get(int(frame_idx))
+            if frame_rgb.ndim != 3 or frame_rgb.shape[2] != 3:
+                raise RuntimeError(f"{MODULE_NAME} | invalid frame shape at idx={frame_idx}: {frame_rgb.shape}")
+            orig_h, orig_w = frame_rgb.shape[:2]
+
+            # Downscale RGB first, then compute BGR/GRAY for metrics
+            max_dim = max(orig_h, orig_w)
+            if max_dim > ANALYSIS_MAX_DIM:
+                scale = float(ANALYSIS_MAX_DIM) / float(max_dim)
+                new_w = max(1, int(round(orig_w * scale)))
+                new_h = max(1, int(round(orig_h * scale)))
+                rgb_small = cv2.resize(frame_rgb, (new_w, new_h), interpolation=cv2.INTER_AREA)
+            else:
+                rgb_small = frame_rgb
+
+            frame_bgr = cv2.cvtColor(rgb_small, cv2.COLOR_RGB2BGR)
+            gray = cv2.cvtColor(frame_bgr, cv2.COLOR_BGR2GRAY)
+
+            feats["sharpness_tenengrad"][i] = sharpness_tenengrad(gray)
+            feats["sharpness_secondary"][i] = sharpness_secondary(gray, frame_bgr)
+            feats["motion_blur_probability"][i] = motion_blur_probability(gray)
+            feats["spatial_frequency_mean"][i] = spatial_frequency_mean(gray)
+
+            nl = noise_level_luma(gray)
+            nc = noise_level_chroma(frame_bgr)
+            feats["noise_level_luma"][i] = nl
+            feats["noise_level_chroma"][i] = nc
+            feats["noise_chroma_ratio"][i] = float(nc / (nl + 1e-8))
+            feats["iso_estimated_value"][i] = iso_estimated_value(nl)
+            feats["grain_strength"][i] = grain_strength(gray)
+            if enable_entropy:
+                feats["noise_spatial_entropy"][i] = noise_spatial_entropy(gray)
+            else:
+                feats["noise_spatial_entropy"][i] = np.nan
+
+            exp = exposure_metrics(gray)
+            for k, v in exp.items():
+                feats[k][i] = float(v)
+            con = contrast_metrics(gray)
+            for k, v in con.items():
+                feats[k][i] = float(v)
+            col = color_metrics(frame_bgr)
+            feats["wb_r"][i] = float(col["wb_r"])
+            feats["wb_g"][i] = float(col["wb_g"])
+            feats["wb_b"][i] = float(col["wb_b"])
+            feats["color_cast_type_id"][i] = int(cast_map[col["color_cast_type"]])
+            feats["skin_tone_accuracy_score"][i] = float(col["skin_tone_accuracy_score"])
+            feats["color_fidelity_index"][i] = float(col["color_fidelity_index"])
+            feats["color_noise_level"][i] = float(col["color_noise_level"])
+            feats["color_uniformity_score"][i] = float(col["color_uniformity_score"])
+
+            comp = compression_metrics(gray)
+            for k, v in comp.items():
+                feats[k][i] = float(v)
+            if enable_lens_group:
+                lens = lens_metrics(frame_bgr, gray)
+                feats["vignetting_level"][i] = float(lens["vignetting_level"])
+                feats["chromatic_aberration_level"][i] = float(lens["chromatic_aberration_level"])
+                feats["distortion_type_id"][i] = int(distortion_map[lens["distortion_type"]])
+                feats["lens_sharpness_drop_off"][i] = float(lens["lens_sharpness_drop_off"])
+            else:
+                feats["vignetting_level"][i] = np.nan
+                feats["chromatic_aberration_level"][i] = np.nan
+                feats["distortion_type_id"][i] = int(distortion_map["none"])
+                feats["lens_sharpness_drop_off"][i] = np.nan
+
+            feats["fog_haziness_score"][i] = fog_haziness_score(gray)
+            feats["temporal_flicker_score"][i] = temporal_flicker(prev_gray, gray)
+            if enable_rolling_shutter:
+                feats["rolling_shutter_artifacts_score"][i] = rolling_shutter_artifacts_score(prev_frame_bgr, frame_bgr)
+            else:
+                feats["rolling_shutter_artifacts_score"][i] = np.nan
+            prev_gray = gray
+            prev_frame_bgr = frame_bgr
+
+            dm = depth_metrics(depth_maps[i])
+            feats["depth_mean"][i] = dm["depth_mean"]
+            feats["depth_std"][i] = dm["depth_std"]
+            feats["depth_grad_mean"][i] = dm["depth_grad_mean"]
+
+            # object detections summary (area in normalized units)
+            vm = valid_mask[i]
+            bxs = boxes[i][vm]
+            feats["objects_count"][i] = int(bxs.shape[0])
+            if bxs.size:
+                # assume xyxy in pixels; normalize by frame area
+                x1y1 = bxs[:, :2]
+                x2y2 = bxs[:, 2:4]
+                wh = np.clip(x2y2 - x1y1, 0.0, None)
+                areas = wh[:, 0] * wh[:, 1] / float(orig_h * orig_w + 1e-9)
+                feats["objects_area_mean"][i] = float(np.mean(areas))
+            else:
+                feats["objects_area_mean"][i] = 0.0
+
+            # face ROI metrics (use first face only). Valid empty output is allowed:
+            # if no faces detected -> keep NaN for face_* features.
+            h, w = orig_h, orig_w
+            if face_present.ndim >= 2 and face_present[i, 0]:
+                face_lm = face[i, 0]  # (468,3)
+                bb = _bbox_from_landmarks(face_lm, w=w, h=h)
+                if bb is not None:
+                    x1, y1, x2, y2 = bb
+                    gray_full = cv2.cvtColor(frame_rgb, cv2.COLOR_RGB2GRAY)
+                    roi = gray_full[y1:y2, x1:x2]
+                    feats["face_sharpness_tenengrad"][i] = sharpness_tenengrad(roi) if roi.size else np.nan
+                    feats["face_noise_level_luma"][i] = noise_level_luma(roi) if roi.size else np.nan
+                else:
+                    feats["face_sharpness_tenengrad"][i] = np.nan
+                    feats["face_noise_level_luma"][i] = np.nan
+            else:
+                feats["face_sharpness_tenengrad"][i] = np.nan
+                feats["face_noise_level_luma"][i] = np.nan
+
+        tok_frame = time.time() - tik_frame
+        self.logger.info(
+            f"{MODULE_NAME} | process | Per-frame features извлечены: "
+            f"frames={n}, elapsed={tok_frame:.2f}s, avg={tok_frame/n*1000:.1f}ms/frame"
+        )
+
+        # Build frame feature matrix in stable order
+        ordered_keys: List[str] = [
+            # sharpness
+            "sharpness_tenengrad","sharpness_secondary","motion_blur_probability","spatial_frequency_mean",
+            # noise
+            "noise_level_luma","noise_level_chroma","noise_chroma_ratio","iso_estimated_value","grain_strength","noise_spatial_entropy",
+            # exposure
+            "underexposure_ratio","overexposure_ratio","midtones_balance","exposure_histogram_skewness","highlight_recovery_potential","shadow_recovery_potential",
+            # contrast
+            "contrast_global","contrast_local","contrast_dynamic_range","contrast_clarity_score","microcontrast",
+            # color
+            "wb_r","wb_g","wb_b","color_cast_type_id","skin_tone_accuracy_score","color_fidelity_index","color_noise_level","color_uniformity_score",
+            # compression
+            "compression_blockiness_score","banding_intensity","ringing_artifacts_level","bitrate_estimation_score","codec_artifact_entropy",
+            # lens
+            "vignetting_level","chromatic_aberration_level","distortion_type_id","lens_sharpness_drop_off",
+            # fog
+            "fog_haziness_score",
+            # temporal
+            "temporal_flicker_score","rolling_shutter_artifacts_score",
+            # depth
+            "depth_mean","depth_std","depth_grad_mean",
+            # objects
+            "objects_count","objects_area_mean",
+            # face
+            "face_sharpness_tenengrad","face_noise_level_luma",
+        ]
+
+        feature_names = ordered_keys
+        frame_features = np.stack(
+            [
+                feats[k].astype(np.float32) if feats[k].dtype != np.int32 else feats[k].astype(np.float32)
+                for k in ordered_keys
+            ],
+            axis=1,
+        )
+
+        # --- Shot segmentation from cut_detection results (source-of-truth boundaries) ---
+        self.logger.info(f"{MODULE_NAME} | process | Построение shot boundaries из cut_detection")
+        detections = cut_det.get("detections")
+        if isinstance(detections, np.ndarray) and detections.dtype == object and detections.shape == ():
+            detections = detections.item()
+        if not isinstance(detections, dict):
+            raise RuntimeError(f"{MODULE_NAME} | cut_detection results missing 'detections' dict")
+
+        shot_boundaries = detections.get("shot_boundaries_frame_indices")
+        if not isinstance(shot_boundaries, list) or len(shot_boundaries) < 2:
+            raise RuntimeError(f"{MODULE_NAME} | cut_detection.detections.shot_boundaries_frame_indices missing/invalid")
+        shot_boundaries = [int(x) for x in shot_boundaries]
+        # Boundaries are union-domain frame indices, include start and end marker.
+        shot_start_frames = np.asarray(shot_boundaries[:-1], dtype=np.int32)
+        shot_end_frames = np.asarray(shot_boundaries[1:], dtype=np.int32)
+
+        # Assign each frame to shot via bisect over start_frames
+        import bisect
+        start_frames = [int(x) for x in shot_start_frames.tolist()]
+        shot_ids = np.zeros((n,), dtype=np.int32)
+        for i, fi in enumerate(frame_indices_np.tolist()):
+            sid = bisect.bisect_right(start_frames, int(fi)) - 1
+            shot_ids[i] = int(max(0, sid))
+
+        s = int(shot_start_frames.shape[0])
+        self.logger.info(
+            f"{MODULE_NAME} | process | Shot segmentation: shots={s}, "
+            f"frames_per_shot_avg={n/s:.1f}"
+        )
+
+        # per-shot aggregates over frame_features
+        self.logger.info(
+            f"{MODULE_NAME} | process | Агрегация per-shot features: "
+            f"shots={s}, feature_dim={frame_features.shape[1]}"
+        )
+        shot_mean = np.zeros((s, frame_features.shape[1]), dtype=np.float32)
+        shot_std = np.zeros((s, frame_features.shape[1]), dtype=np.float32)
+        shot_min = np.zeros((s, frame_features.shape[1]), dtype=np.float32)
+        shot_max = np.zeros((s, frame_features.shape[1]), dtype=np.float32)
+        shot_counts = np.zeros((s,), dtype=np.int32)
+        for sid in range(s):
+            mask = shot_ids == sid
+            if not np.any(mask):
+                raise RuntimeError(f"{MODULE_NAME} | empty shot segment sid={sid} after alignment")
+            seg = frame_features[mask]
+            shot_counts[sid] = int(seg.shape[0])
+            
+            # Check if segment has valid (non-NaN) data
+            if seg.size == 0:
+                # Empty segment - fill with NaN
+                shot_mean[sid] = np.full((frame_features.shape[1],), np.nan, dtype=np.float32)
+                shot_std[sid] = np.full((frame_features.shape[1],), np.nan, dtype=np.float32)
+                shot_min[sid] = np.full((frame_features.shape[1],), np.nan, dtype=np.float32)
+                shot_max[sid] = np.full((frame_features.shape[1],), np.nan, dtype=np.float32)
+            else:
+                # Compute statistics with safe handling of NaN values
+                # Suppress warnings for expected NaN cases (some columns may be all-NaN)
+                with warnings.catch_warnings():
+                    warnings.filterwarnings("ignore", category=RuntimeWarning, message="Mean of empty slice")
+                    warnings.filterwarnings("ignore", category=RuntimeWarning, message="Degrees of freedom <= 0")
+                    warnings.filterwarnings("ignore", category=RuntimeWarning, message="All-NaN slice encountered")
+                    
+                    shot_mean[sid] = np.nanmean(seg, axis=0)
+                    # For std, need at least 2 elements to avoid "degrees of freedom <= 0" warning
+                    if seg.shape[0] >= 2:
+                        shot_std[sid] = np.nanstd(seg, axis=0)
+                    else:
+                        shot_std[sid] = np.full((frame_features.shape[1],), np.nan, dtype=np.float32)
+                    
+                    # Check if all values are NaN before computing min/max
+                    valid_mask = np.isfinite(seg)
+                    if np.any(valid_mask):
+                        shot_min[sid] = np.nanmin(seg, axis=0)
+                        shot_max[sid] = np.nanmax(seg, axis=0)
+                    else:
+                        # All NaN - fill with NaN
+                        shot_min[sid] = np.full((frame_features.shape[1],), np.nan, dtype=np.float32)
+                        shot_max[sid] = np.full((frame_features.shape[1],), np.nan, dtype=np.float32)
+        self.logger.debug(
+            f"{MODULE_NAME} | process | Shot aggregates: "
+            f"min_frames_per_shot={int(np.min(shot_counts))}, "
+            f"max_frames_per_shot={int(np.max(shot_counts))}, "
+            f"mean_frames_per_shot={float(np.mean(shot_counts)):.1f}"
+        )
+
+        # Prompts provenance (policy: store only version+sha, no full texts)
+        prompts_list = [str(x) for x in np.asarray(prompts_raw, dtype=object).tolist()]
+        prompts_sha256 = _sha256_prompts(prompts_list)
+        prompts_version = None
+        try:
+            cm = core_clip.get("meta")
+            if isinstance(cm, np.ndarray) and cm.dtype == object and cm.shape == ():
+                cm = cm.item()
+            if isinstance(cm, dict):
+                prompts_version = cm.get("prompts_version")
+        except Exception:
+            prompts_version = None
+
+        # UI metrics derived from quality_probs
+        # NOTE: UI must map class ids -> human labels using prompts_version/sha (text is not stored in NPZ).
+        ui_topk = int(cfg.get("ui_topk") or 3)
+        ui_topk = max(1, min(10, ui_topk))
+        frame_confidence = np.max(quality_probs.astype(np.float32), axis=1).astype(np.float32)  # (N,)
+        frame_top1_id = np.argmax(quality_probs, axis=1).astype(np.int32)  # (N,)
+        frame_entropy = _entropy_from_probs(quality_probs)  # (N,)
+
+        # frame top-k (small, UI-friendly)
+        k = min(ui_topk, int(quality_probs.shape[1]))
+        frame_topk_ids = np.argsort(-quality_probs.astype(np.float32), axis=1)[:, :k].astype(np.int32)  # (N,K)
+        frame_topk_probs = np.take_along_axis(quality_probs.astype(np.float32), frame_topk_ids, axis=1).astype(np.float32)  # (N,K)
+
+        # per-shot aggregated label probs (mean over frames in shot)
+        shot_topk_ids: List[List[int]] = []
+        shot_topk_probs: List[List[float]] = []
+        shot_conf_mean: List[float] = []
+        shot_entropy_mean: List[float] = []
+        for sid in range(int(shot_start_frames.shape[0])):
+            m = shot_ids == sid
+            if not np.any(m):
+                raise RuntimeError(f"{MODULE_NAME} | empty shot segment sid={sid} while building ui_payload")
+            probs_mean = np.mean(quality_probs[m].astype(np.float32), axis=0)  # (P,)
+            ids = np.argsort(-probs_mean)[:k].astype(np.int32)
+            shot_topk_ids.append([int(x) for x in ids.tolist()])
+            shot_topk_probs.append([float(x) for x in probs_mean[ids].astype(np.float32).tolist()])
+            shot_conf_mean.append(float(np.mean(frame_confidence[m]).astype(np.float32)))
+            shot_entropy_mean.append(float(np.mean(frame_entropy[m]).astype(np.float32)))
+
+        # video-level distribution
+        probs_video_mean = np.mean(quality_probs.astype(np.float32), axis=0)  # (P,)
+        video_topk_ids = np.argsort(-probs_video_mean)[:k].astype(np.int32)
+
+        meta_out = {
+            "producer": MODULE_NAME,
+            "producer_version": VERSION,
+            "schema_version": SCHEMA_VERSION,
+            "created_at": datetime.utcnow().isoformat(),
+            "frame_count": int(n),
+            "shot_count": int(s),
+            "clip_model_name": str(_require_npz_key(core_clip, "model_name", "core_clip")) if "model_name" in core_clip else None,
+            "cast_type_map": cast_map,
+            "distortion_type_map": distortion_map,
+            "shot_quality_prompts_version": "unknown" if prompts_version is None else str(prompts_version),
+            "shot_quality_prompts_sha256": str(prompts_sha256),
+            "faces_available": has_any_face,
+            "faces_empty_reason": None if empty_reason_faces is None else str(np.asarray(empty_reason_faces, dtype=object).item()),
+            "note_empty_faces": "If no faces detected, face_* features are NaN and face_present is False. This is a valid output (provider ran successfully).",
+            "preset": preset,
+            "feature_gating": {
+                "enable_entropy_features": bool(enable_entropy),
+                "enable_rolling_shutter": bool(enable_rolling_shutter),
+                "enable_lens_features": bool(enable_lens_group),
+            },
+            "analysis_max_dim": int(analysis_max_dim),
+            "matmul_chunk_size": int(chunk),
+        }
+
+        self.logger.info(
+            f"{MODULE_NAME} | process | Обработка завершена: "
+            f"frames={n}, shots={s}, features={len(feature_names)}, "
+            f"quality_prompts={p}, faces_available={has_any_face}"
+        )
+
+        return {
+            # index
+            "frame_indices": frame_indices_np,
+            "times_s": times_s,
+            # frame-level arrays
+            "feature_names": np.asarray(feature_names, dtype=object),
+            "frame_features": frame_features,
+            "quality_probs": quality_probs,
+            # shot segmentation + aggregates
+            "shot_ids": shot_ids,
+            "shot_start_frame": shot_start_frames,
+            "shot_end_frame": shot_end_frames,
+            "shot_frame_count": shot_counts,
+            "shot_features_mean": shot_mean,
+            "shot_features_std": shot_std,
+            "shot_features_min": shot_min,
+            "shot_features_max": shot_max,
+            # module-specific metadata (BaseModule will store canonical `meta` separately)
+            "impl_meta": np.asarray(meta_out, dtype=object),
+            # Empty policy: if no faces exist in video, mark component as empty (but keep non-face metrics computed).
+            "__meta_override__": {
+                "status": "empty" if not has_any_face else "ok",
+                "empty_reason": "no_faces_in_video" if not has_any_face else None,
+            },
+            "ui_payload": {
+                "schema_version": "shot_quality_ui_v1",
+                "preset": preset,
+                "ui_topk": int(k),
+                "prompts": {
+                    "version": "unknown" if prompts_version is None else str(prompts_version),
+                    "sha256": str(prompts_sha256),
+                    "num_classes": int(quality_probs.shape[1]),
+                },
+                "frame_indices": frame_indices_np.tolist(),
+                "times_s": times_s.tolist(),
+                "quality": {
+                    "frame_confidence": frame_confidence.astype(np.float32).tolist(),
+                    "frame_entropy": frame_entropy.astype(np.float32).tolist(),
+                    "frame_top1_id": frame_top1_id.astype(np.int32).tolist(),
+                    "frame_topk_ids": frame_topk_ids.astype(np.int32).tolist(),
+                    "frame_topk_probs": frame_topk_probs.astype(np.float32).tolist(),
+                    "video_mean_probs_topk_ids": video_topk_ids.astype(np.int32).tolist(),
+                    "video_mean_probs_topk_probs": probs_video_mean[video_topk_ids].astype(np.float32).tolist(),
+                },
+                "shots": [
+                    {
+                        "shot_id": int(sid),
+                        "start_frame": int(shot_start_frames[sid]) if sid < int(shot_start_frames.shape[0]) else None,
+                        "end_frame": int(shot_end_frames[sid]) if sid < int(shot_end_frames.shape[0]) else None,
+                        "frame_count": int(shot_counts[sid]) if sid < int(shot_counts.shape[0]) else None,
+                        "quality_topk_ids": shot_topk_ids[sid],
+                        "quality_topk_probs": shot_topk_probs[sid],
+                        "confidence_mean": float(shot_conf_mean[sid]),
+                        "entropy_mean": float(shot_entropy_mean[sid]),
+                    }
+                    for sid in range(int(shot_start_frames.shape[0]))
+                ],
+                "faces_available": bool(has_any_face),
+                "faces_empty_reason": None if empty_reason_faces is None else str(np.asarray(empty_reason_faces, dtype=object).item()),
+            },
+        }
+
+    def run(self, frames_dir: str, config: Dict[str, Any], metadata: Optional[Dict[str, Any]] = None) -> str:
+        """
+        Override BaseModule.run to:
+        - write progress events (state_events.jsonl)
+        - attach ui_payload into NPZ meta (meta.ui_payload), not as a top-level NPZ key
+        - add stage timings
+        """
+        if self.rs_path is None:
+            raise RuntimeError(f"{MODULE_NAME} | rs_path is required")
+
+        if metadata is None:
+            metadata = self.load_metadata(frames_dir)
+
+        required_run_keys = ["platform_id", "video_id", "run_id", "sampling_policy_version", "config_hash"]
+        missing = [k for k in required_run_keys if not metadata.get(k)]
+        if missing:
+            raise RuntimeError(f"{self.module_name} | frames metadata missing required run identity keys: {missing}")
+
+        frame_indices = self.get_frame_indices(metadata, fallback_to_all=False)
+        if not frame_indices:
+            raise RuntimeError(f"{MODULE_NAME} | frame_indices missing/empty (no-fallback)")
+
+        platform_id = str(metadata.get("platform_id") or "")
+        video_id = str(metadata.get("video_id") or "")
+        run_id = str(metadata.get("run_id") or "")
+        total = int(len(frame_indices))
+
+        _emit_progress(
+            rs_path=str(self.rs_path),
+            platform_id=platform_id,
+            video_id=video_id,
+            run_id=run_id,
+            done=0,
+            total=total,
+            stage="start",
+        )
+
+        t0 = time.perf_counter()
+        fm = None
+        try:
+            fm = self.create_frame_manager(frames_dir, metadata)
+            t_fm = time.perf_counter()
+
+            _emit_progress(
+                rs_path=str(self.rs_path),
+                platform_id=platform_id,
+                video_id=video_id,
+                run_id=run_id,
+                done=0,
+                total=total,
+                stage="process",
+            )
+
+            results = self.process(frame_manager=fm, frame_indices=frame_indices, config=config or {})
+            t_proc = time.perf_counter()
+
+            # Move ui_payload into meta
+            ui_payload = None
+            if isinstance(results, dict) and "ui_payload" in results:
+                try:
+                    ui_payload = results.pop("ui_payload")
+                except Exception:
+                    ui_payload = None
+
+            # Apply __meta_override__ (status/empty_reason)
+            meta_override = None
+            if isinstance(results, dict) and "__meta_override__" in results:
+                try:
+                    meta_override = results.pop("__meta_override__")
+                except Exception:
+                    meta_override = None
+
+            save_metadata = {
+                "total_frames": metadata.get("total_frames"),
+                "processed_frames": len(frame_indices),
+                "frames_dir": frames_dir,
+                "platform_id": metadata.get("platform_id"),
+                "video_id": metadata.get("video_id"),
+                "run_id": metadata.get("run_id"),
+                "sampling_policy_version": metadata.get("sampling_policy_version"),
+                "config_hash": metadata.get("config_hash"),
+                "dataprocessor_version": metadata.get("dataprocessor_version") or "unknown",
+                "analysis_fps": metadata.get("analysis_fps"),
+                "analysis_width": metadata.get("analysis_width"),
+                "analysis_height": metadata.get("analysis_height"),
+                "ui_payload": ui_payload,
+                "models_used": self.get_models_used(config=config or {}, metadata=metadata or {}),
+            }
+            if isinstance(meta_override, dict):
+                for k, v in meta_override.items():
+                    if isinstance(k, str) and k and (isinstance(v, (str, int, float, bool)) or v is None):
+                        save_metadata[k] = v
+
+            # stage timings
+            try:
+                summ = results.get("summary") if isinstance(results, dict) else None
+                if not isinstance(summ, dict):
+                    summ = {}
+                st = summ.get("stage_timings_ms") if isinstance(summ.get("stage_timings_ms"), dict) else {}
+                st["frame_manager_ms"] = float((t_fm - t0) * 1000.0)
+                st["process_ms"] = float((t_proc - t_fm) * 1000.0)
+                st["total_ms"] = float((t_proc - t0) * 1000.0)
+                summ["stage_timings_ms"] = st
+                results["summary"] = summ
+            except Exception:
+                pass
+
+            saved_path = self.save_results(results=results, metadata=save_metadata)
+
+            _emit_progress(
+                rs_path=str(self.rs_path),
+                platform_id=platform_id,
+                video_id=video_id,
+                run_id=run_id,
+                done=total,
+                total=total,
+                stage="done",
+            )
+            return saved_path
+        finally:
+            if fm is not None:
+                try:
+                    fm.close()
+                except Exception:
+                    pass
+
+

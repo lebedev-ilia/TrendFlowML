@@ -1,0 +1,15 @@
+{
+  "title": "Demo title",
+  "description": "Demo description",
+  "audio_duration_sec": 42.0,
+  "asr": {
+    "schema_version": "audio_asr_segments_v1",
+    "total_audio_duration_sec": 42.0,
+    "segments": [
+      {"text": "привет всем это тест", "confidence": 0.92, "start_sec": 0.0, "end_sec": 2.0},
+      {"text": "ээ ну типа короче продолжаем", "confidence": 0.55, "start_sec": 2.0, "end_sec": 5.5},
+      {"text": "thanks for watching", "confidence": 0.88, "start_sec": 5.5, "end_sec": 7.0}
+    ]
+  }
+}
+

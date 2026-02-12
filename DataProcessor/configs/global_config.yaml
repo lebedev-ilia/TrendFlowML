@@ -1,0 +1,1372 @@
+# Global Configuration for DataProcessor
+# Единый конфиг для всех процессоров (AudioProcessor, TextProcessor, VisualProcessor)
+# и их компонентов (extractors/modules) с feature flags
+
+version: "1.0.0"
+
+# Общие настройки
+global:
+  platform_id: "youtube"
+  sampling_policy_version: "v1"
+  dataprocessor_version: "unknown"
+  # Scheduler knobs (L2/L3)
+  scheduler:
+    max_parallel_runs: 1
+    resource_limits:
+      cpu_cores: null  # null = auto
+      ram_gb: null
+      vram_gb: null
+
+# Настройки процессоров
+processors:
+  # AudioProcessor
+  audio:
+    enabled: false
+    required: false  # Если true, fail-fast при ошибке
+    device: "auto"  # auto|cpu|cuda
+    
+    # Batch processing configuration (Stage 5) - глобальные настройки для batch mode
+    batch_processing:
+      enabled: false  # Enable batch processing optimizations (GPU batching + CPU parallelism)
+      max_video_workers: 4  # Number of parallel workers for video-level processing (null = auto, typically os.cpu_count())
+      enable_video_parallel: true  # Enable parallel processing of multiple videos
+      max_segments_per_gpu_batch: 16  # Limit batch size for GPU extractors (null = no limit)
+      # Note: batch processing is currently used internally for optimization;
+      # CLI still processes one document at a time, but extractors use batch-aware implementations
+    
+    # Extractors и их настройки
+    extractors:
+      # Tier-0 baseline extractors
+      clap:
+        enabled: false
+        # Индивидуальные настройки параллелизма и батчинга для CLAP
+        parallelism:
+          preprocess_workers: 4  # Количество воркеров для параллельной загрузки/предобработки сегментов (null = auto, по умолчанию 4)
+          batch_size: 16  # Размер батча для GPU inference (null = 1, без батчинга)
+        # CLAP не имеет feature flags (всегда включены базовые фичи)
+        render:
+          enable_render: true  # Генерировать render-context JSON
+          enable_html_render: true  # Генерировать HTML debug страницу
+      
+      tempo:
+        enabled: false
+        # Индивидуальные настройки параллелизма для Tempo (CPU extractor)
+        parallelism:
+          segment_workers: 8  # Количество параллельных воркеров для обработки сегментов (null = auto, по умолчанию 1)
+          max_inflight: null  # Максимальное количество одновременно выполняемых задач (null = segment_workers)
+        # Tempo не имеет feature flags
+        render:
+          enable_render: true  # Генерировать render-context JSON
+          enable_html_render: true  # Генерировать HTML debug страницу
+      
+      loudness:
+        enabled: false
+        # Индивидуальные настройки параллелизма для Loudness (CPU extractor)
+        parallelism:
+          segment_workers: 8  # Количество параллельных воркеров для обработки сегментов (null = auto, по умолчанию 1)
+          max_inflight: null  # Максимальное количество одновременно выполняемых задач (null = segment_workers)
+        # Loudness не имеет feature flags
+        render:
+          enable_render: true  # Генерировать render-context JSON
+          enable_html_render: true  # Генерировать HTML debug страницу
+      
+      # ASR extractor
+      asr:
+        enabled: false
+        model_size: "small"  # small|medium|large
+        # Decoding controls (Whisper DecodingOptions)
+        decode:
+          language: "auto"  # "auto" | "ru" | "en" | ...
+          temperature: 0.0
+          beam_size: 5
+          best_of: 1
+        # Optional fallback decode for difficult audio (logged)
+        fallback_decode:
+          enabled: false
+          temperature: 0.4
+          avg_logprob_threshold: -1.0
+        # Output controls (privacy-sensitive)
+        output:
+          save_segment_text: false  # if true -> persist per-segment raw text in ASR NPZ (for TextProcessor autogen input)
+        # Индивидуальные настройки параллелизма для ASR (GPU extractor inprocess)
+        parallelism:
+          preprocess_workers: 4  # Количество воркеров для параллельной загрузки/предобработки сегментов
+        feature_flags:
+          enable_token_sequences: true
+          enable_token_counts: true
+          enable_token_total: true
+          enable_token_density: true
+          enable_speech_rate: true
+          enable_lang_distribution: true
+          enable_segments_with_speech: true
+          enable_avg_segment_duration: true
+          enable_token_variance: true
+        render:
+          enable_render: true  # Генерировать render-context JSON
+          enable_html_render: true  # Генерировать HTML debug страницу
+      
+      # Speaker diarization
+      speaker_diarization:
+        enabled: false  # Requires HUGGINGFACE_TOKEN environment variable
+        model_size: "small"  # small|large
+        batch_size: null  # Размер батча для inference (None = auto, >100 segments → split)
+        clustering_method: "agglomerative"  # agglomerative|kmeans|auto
+        speaker_count_method: "heuristic"  # heuristic|silhouette|fixed
+        silence_peak_threshold: 1e-3
+        silence_rms_threshold: 1e-4
+        # Индивидуальные настройки параллелизма для Speaker Diarization (GPU extractor in-process)
+        parallelism:
+          preprocess_workers: 4  # Количество воркеров для параллельной загрузки/предобработки сегментов
+        feature_flags:
+          enable_speaker_segments: true
+          enable_speaker_embeddings: true
+          enable_speaker_stats: true
+          enable_speaker_durations: true
+          enable_clustering_metrics: true
+          enable_segment_embeddings: true
+          disable_silence_detection: true
+        render:
+          enable_render: true  # Генерировать render-context JSON
+          enable_html_render: true  # Генерировать HTML debug страницу
+      
+      # Emotion diarization
+      emotion_diarization:
+        enabled: false
+        model_size: "large"  # small|large
+        batch_size: 16  # Размер батча для обработки сегментов
+        silence_peak_threshold: 1e-3
+        silence_rms_threshold: 1e-4
+        process_full_audio: true  # Если true, обрабатывает все аудио целиком (не по сегментам). Использует run() вместо run_segments()
+        # Индивидуальные настройки параллелизма для Emotion Diarization (GPU extractor in-process)
+        parallelism:
+          preprocess_workers: 4  # Количество воркеров для параллельной загрузки/предобработки сегментов
+        feature_flags:
+          enable_probs: true
+          enable_ids: true  # Рекомендуется включить для получения emotion_id
+          enable_confidence: true  # Рекомендуется включить для получения emotion_confidence
+          enable_mean_probs: true
+          enable_entropy: true
+          enable_dominant: true
+          enable_quality_metrics: true
+          disable_silence_detection: true
+        render:
+          enable_render: true  # Генерировать render-context JSON
+          enable_html_render: true  # Генерировать HTML debug страницу
+      
+      # Source separation
+      source_separation:
+        enabled: false
+        model_size: "large"  # large (единственный поддерживаемый размер)
+        batch_size: 8  # Размер батча для обработки окон
+        silence_peak_threshold: 1e-3  # Порог peak для детекции тишины
+        silence_rms_threshold: 1e-4  # Порог RMS для детекции тишины
+        # Индивидуальные настройки параллелизма для Source Separation (GPU extractor inprocess)
+        parallelism:
+          preprocess_workers: 4  # Количество воркеров для параллельной загрузки/предобработки сегментов
+        feature_flags:
+          # Базовые фичи
+          enable_share_sequence: true  # Включить share_sequence (per-segment shares) - требуется для расширенных фич (transition, stability, distribution, energy balance, musical heuristics)
+          enable_energy_sequence: false  # Включить energy_sequence (per-segment energies)
+          enable_share_mean: true  # Включить share_mean (mean shares по всем сегментам)
+          enable_share_std: true  # Включить share_std (std shares по всем сегментам)
+          enable_quality_metrics: false  # Включить source_quality_metrics (метрики качества разделения)
+          disable_silence_detection: false  # Отключить проверку на тишину (если true, silence detection пропускается)
+          # Примечание: Расширенные фичи (transition, stability, distribution, energy balance, musical heuristics)
+          # автоматически вычисляются при включении enable_share_sequence=true и не требуют отдельных флагов
+        render:
+          enable_render: true  # Генерировать render-context JSON
+          enable_html_render: true  # Генерировать HTML debug страницу
+      
+      # Speech analysis (bundle extractor)
+      speech_analysis:
+        enabled: false
+        pitch_enabled: false  # Включить анализ высоты тона (требует включения extractor "pitch" или pitch_result)
+        silence_peak_threshold: 1e-3  # Порог peak для детекции тишины
+        silence_rms_threshold: 1e-4  # Порог RMS для детекции тишины
+        # Архитектура зависимостей (NO FALLBACK):
+        # - Компонент использует существующие результаты от asr и speaker_diarization из extractor_results
+        # - Размеры моделей определяются самими зависимыми компонентами (asr, speaker_diarization), а не этим компонентом
+        # - Если enable_asr_metrics=true, требуется включить extractor "asr" (обязательная зависимость, падение при отсутствии)
+        # - Если enable_diarization_metrics=true, требуется включить extractor "speaker_diarization" (обязательная зависимость, падение при отсутствии)
+        # - Если enable_pitch_metrics=true и pitch_enabled=true, требуется включить extractor "pitch" (обязательная зависимость, падение при отсутствии)
+        # - Если зависимости не включены, компонент выдаст ошибку (fail-fast, no fallback)
+        feature_flags:
+          enable_asr_metrics: true  # Включить ASR метрики (требует включения extractor "asr" - обязательная зависимость, падение при отсутствии)
+          enable_diarization_metrics: false  # Включить diarization метрики (требует включения extractor "speaker_diarization" - обязательная зависимость, падение при отсутствии)
+          enable_pitch_metrics: true  # Включить pitch метрики (требует pitch_enabled=true и включения extractor "pitch" - обязательная зависимость, падение при отсутствии)
+          disable_silence_detection: false  # Отключить проверку на тишину (если true, silence detection пропускается)
+        render:
+          enable_render: true  # Генерировать render-context JSON
+          enable_html_render: true  # Генерировать HTML debug страницу
+      
+      # Spectral extractor
+      spectral:
+        enabled: false
+        sample_rate: 22050
+        hop_length: 512
+        n_fft: 2048
+        average_channels: true
+        keep_contrast_bands: true
+        # Индивидуальные настройки параллелизма для Spectral (CPU extractor)
+        # Примечание: spectral_extractor поддерживает batch processing через extract_batch_segments()
+        # с CPU parallelism для обработки сегментов из нескольких видео одновременно
+        parallelism:
+          segment_workers: 8  # Количество параллельных воркеров для обработки сегментов внутри одного файла (run_segments)
+          max_inflight: null  # Максимальное количество одновременно выполняемых задач внутри одного файла (null = segment_workers)
+          # batch_max_workers: null  # Количество параллельных воркеров для batch processing нескольких файлов (null = os.cpu_count())
+          # Примечание: batch_max_workers используется только если extractor поддерживает extract_batch_segments()
+          # и включен batch processing режим. По умолчанию используется общий параметр batch_max_video_workers
+        feature_flags:
+          enable_normalization: true
+          enable_basic_features: true
+          enable_contrast: true
+          enable_advanced_features: true
+          enable_time_series: true
+      
+      # Quality extractor
+      quality:
+        enabled: false
+        sample_rate: 22050
+        frame_len_ms: 50.0
+        hop_ms: 25.0
+        clip_threshold: 0.999
+        average_channels: true
+        # Индивидуальные настройки параллелизма для Quality (CPU extractor)
+        # Примечание: quality_extractor поддерживает batch processing через extract_batch_segments()
+        # с CPU parallelism для обработки сегментов из нескольких видео одновременно
+        parallelism:
+          segment_workers: 8  # Количество параллельных воркеров для обработки сегментов внутри одного файла (run_segments)
+          max_inflight: null  # Максимальное количество одновременно выполняемых задач внутри одного файла (null = segment_workers)
+          # batch_max_workers: null  # Количество параллельных воркеров для batch processing нескольких файлов (null = os.cpu_count())
+          # Примечание: batch_max_workers используется только если extractor поддерживает extract_batch_segments()
+          # и включен batch processing режим. По умолчанию используется общий параметр batch_max_video_workers
+        feature_flags:
+          enable_normalization: false  # Включить нормализацию аудио перед обработкой
+          enable_basic_metrics: true  # Включить базовые метрики (dc_offset, clipping_ratio, crest_factor_db)
+          enable_dynamic_metrics: true  # Включить динамические метрики (dynamic_range_db, snr_db)
+          enable_frame_analysis: false  # Включить анализ кадров (frame-level метрики)
+          enable_time_series: false  # Включить временные серии для всех метрик
+      
+      # MFCC extractor
+      mfcc:
+        enabled: false
+        sample_rate: 22050
+        n_mfcc: 13
+        n_fft: 2048
+        hop_length: 512
+        n_mels: 128
+        fmin: 0.0
+        fmax: null  # null = sample_rate // 2
+        min_gpu_duration_sec: 3.0
+        min_gpu_file_size_mb: 5.0
+        # Индивидуальные настройки параллелизма для MFCC (CPU/GPU extractor)
+        # Примечание: mfcc_extractor поддерживает batch processing через extract_batch_segments()
+        # с CPU parallelism для обработки сегментов из нескольких видео одновременно
+        parallelism:
+          segment_workers: 8  # Количество параллельных воркеров для обработки сегментов внутри одного файла (run_segments)
+          max_inflight: null  # Максимальное количество одновременно выполняемых задач внутри одного файла (null = segment_workers)
+          # batch_max_workers: null  # Количество параллельных воркеров для batch processing нескольких файлов (null = os.cpu_count())
+          # Примечание: batch_max_workers используется только если extractor поддерживает extract_batch_segments()
+          # и включен batch processing режим. По умолчанию используется общий параметр batch_max_video_workers
+        feature_flags:
+          enable_audio_normalization: true  # Включить нормализацию аудио перед обработкой (по умолчанию true)
+          enable_basic_features: true  # Включить базовые фичи (mfcc_features, mfcc_statistics: mean, std, min, max)
+          enable_deltas: true  # Включить дельты (delta_mean, delta_std, delta_delta_mean, delta_delta_std)
+          enable_time_series: true  # Включить временные серии для всех фичей
+          enable_normalization: true  # Включить нормализацию MFCC по времени (z-score)
+      
+      # Mel extractor
+      mel:
+        enabled: false
+        sample_rate: 22050
+        hop_length: 512
+        n_fft: 2048
+        n_mels: 128
+        fmin: 0.0
+        fmax: null  # null = sample_rate // 2
+        power: 2.0
+        mix_to_mono: true
+        # Индивидуальные настройки параллелизма для Mel (CPU/GPU extractor)
+        # Примечание: mel_extractor поддерживает batch processing через extract_batch_segments()
+        # с CPU parallelism для обработки сегментов из нескольких видео одновременно
+        parallelism:
+          segment_workers: 8  # Количество параллельных воркеров для обработки сегментов внутри одного файла (run_segments)
+          max_inflight: null  # Максимальное количество одновременно выполняемых задач внутри одного файла (null = segment_workers)
+          # batch_max_workers: null  # Количество параллельных воркеров для batch processing нескольких файлов (null = os.cpu_count())
+          # Примечание: batch_max_workers используется только если extractor поддерживает extract_batch_segments()
+          # и включен batch processing режим. По умолчанию используется общий параметр batch_max_video_workers
+        feature_flags:
+          enable_audio_normalization: true  # Включить нормализацию аудио перед обработкой (по умолчанию true)
+          enable_basic_features: true  # Включить базовые фичи (mel_shape, mel_elements, mel_spectrogram_npy)
+          enable_statistics: true  # Включить статистики (mel_mean, mel_std, mel_min, mel_max, freq_mean, freq_std)
+          enable_spectral_features: true  # Включить спектральные фичи (spectral_centroid, spectral_bandwidth)
+          enable_time_series: true  # Включить временные серии для всех фичей
+          enable_stats_vector: true  # Включить компактный вектор статистик (mel_stats_vector)
+      
+      # Onset extractor
+      onset:
+        enabled: false
+        sample_rate: 22050
+        hop_length: 512
+        pre_max: 3
+        post_max: 3
+        pre_avg: 3
+        post_avg: 5
+        delta: 0.2
+        wait: 10
+        backend: "essentia"  # librosa|essentia (no-fallback policy)
+        units: "time"  # time|frames
+        backtrack: true
+        energy: true
+        normalize: true
+        # Индивидуальные настройки параллелизма для Onset (CPU extractor)
+        # Примечание: onset_extractor поддерживает batch processing через extract_batch_segments()
+        # с CPU parallelism для обработки сегментов из нескольких видео одновременно
+        parallelism:
+          segment_workers: 8  # Количество параллельных воркеров для обработки сегментов внутри одного файла (run_segments)
+          max_inflight: null  # Максимальное количество одновременно выполняемых задач внутри одного файла (null = segment_workers)
+          # batch_max_workers: null  # Количество параллельных воркеров для batch processing нескольких файлов (null = os.cpu_count())
+          # Примечание: batch_max_workers используется только если extractor поддерживает extract_batch_segments()
+          # и включен batch processing режим. По умолчанию используется общий параметр batch_max_video_workers
+        feature_flags:
+          enable_audio_normalization: true  # Включить нормализацию аудио перед обработкой
+          enable_basic_features: true  # Включить базовые фичи (onset_times, onset_count, onset_density_per_sec, insufficient_onsets)
+          enable_interval_stats: true  # Включить статистики интервалов (avg_interval_sec, interval_std, interval_min, interval_max, interval_median)
+          enable_rhythmic_metrics: true  # Включить ритмические метрики (regularity, clustering, tempo_estimate, syncopation, strength, density_variance, tempo_consistency)
+          enable_time_series: true  # Включить временные серии (onset_times как time series)
+      
+      # Chroma extractor
+      chroma:
+        enabled: false
+        sample_rate: 22050
+        hop_length: 512
+        n_fft: 4096
+        mix_to_mono: true
+        chroma_type: "cqt"  # cqt|stft (no-fallback policy)
+        normalize: "l1"  # null|l1|l2 (нормализация по кадрам)
+        n_chroma: 12
+        fmin: null  # Минимальная частота (Hz, null = default)
+        fmax: null  # Максимальная частота (Hz, null = default)
+        n_bins: null  # Количество бинов для CQT (null = default)
+        # Индивидуальные настройки параллелизма для Chroma (CPU extractor)
+        # Примечание: chroma_extractor поддерживает batch processing через extract_batch_segments()
+        # с CPU parallelism для обработки сегментов из нескольких видео одновременно
+        parallelism:
+          segment_workers: 8  # Количество параллельных воркеров для обработки сегментов внутри одного файла (run_segments)
+          max_inflight: null  # Максимальное количество одновременно выполняемых задач внутри одного файла (null = segment_workers)
+          # batch_max_workers: null  # Количество параллельных воркеров для batch processing нескольких файлов (null = os.cpu_count())
+          # Примечание: batch_max_workers используется только если extractor поддерживает extract_batch_segments()
+          # и включен batch processing режим. По умолчанию используется общий параметр batch_max_video_workers
+        feature_flags:
+          enable_audio_normalization: true  # Включить нормализацию аудио перед обработкой
+          enable_basic_stats: true  # Включить базовые статистики (chroma_mean, chroma_std, chroma_min, chroma_max)
+          enable_extended_stats: true  # Включить расширенные статистики (chroma_median, chroma_p25, chroma_p75)
+          enable_stats_vector: true  # Включить компактный вектор статистик (chroma_stats_vector)
+          enable_time_series: true  # Включить временные серии (chroma spectrogram)
+      
+      # Rhythmic extractor
+      rhythmic:
+        enabled: false
+        sample_rate: 22050
+        hop_length: 512
+        average_channels: true
+        backend: "librosa"  # librosa|essentia
+        # Librosa parameters (optional)
+        start_bpm: null  # Начальный BPM для librosa beat tracking (null = auto)
+        std_bpm: null  # Стандартное отклонение BPM для librosa (null = auto)
+        ac_size: 4  # Размер автокорреляции для librosa (1-16)
+        max_tempo: null  # Максимальный темп для librosa (null = auto)
+        feature_flags:
+          enable_audio_normalization: true  # Включить нормализацию аудио перед обработкой
+          enable_basic_metrics: true  # Включить базовые метрики (tempo_bpm, beats_count, beat_density)
+          enable_interval_stats: true  # Включить статистики интервалов (avg_period, std_period, min/max/median)
+          enable_regularity_metrics: true  # Включить метрики регулярности (regularity, syncopation, polyrhythm, beat_strength, metrical_stability)
+          enable_beat_times: true  # Включить временные метки ударов (beat_times array)
+          enable_tempo_metrics: true  # Включить метрики темпа (median_bpm, tempo_variation, beat_consistency, tempo_mean/std/min/max)
+      
+      # Pitch extractor
+      pitch:
+        enabled: false  # По умолчанию отключен, требуется для voice_quality и speech_analysis с pitch метриками
+        sample_rate: 22050
+        fmin: 50.0  # Минимальная частота f0 (Hz)
+        fmax: 2000.0  # Максимальная частота f0 (Hz)
+        hop_length: 512  # Размер шага между кадрами (samples)
+        frame_length: 2048  # Размер окна анализа (samples)
+        backend: "torchcrepe"  # classic|torchcrepe (classic = PYIN/YIN, torchcrepe = CREPE)
+        channel_mode: "first"  # first|mean|max (режим обработки многоканального аудио)
+        torchcrepe_batch_size: 4  # Размер батча для torchcrepe (только если backend=torchcrepe)
+        # Индивидуальные настройки параллелизма для Pitch (CPU/GPU extractor)
+        parallelism:
+          segment_workers: 8  # Количество параллельных воркеров для обработки сегментов (null = auto, по умолчанию 1)
+          max_inflight: null  # Максимальное количество одновременно выполняемых задач (null = segment_workers)
+        feature_flags:
+          enable_basic_stats: true  # Включить базовые статистики (f0_mean, f0_std, f0_min, f0_max, f0_median)
+          enable_stability_metrics: true  # Включить метрики стабильности (pitch_variation, pitch_stability, pitch_range)
+          enable_delta_features: true  # Включить delta-признаки (f0_delta_mean, f0_delta_std, f0_delta_abs_mean)
+          enable_method_stats: true  # Включить статистики по каждому методу (PYIN, YIN, torchcrepe)
+          enable_time_series: false  # Включить временные серии (f0_series_pyin, f0_series_yin, f0_series_torchcrepe)
+        render:
+          enable_render: true  # Генерировать render-context JSON
+          enable_html_render: true  # Генерировать HTML debug страницу
+      
+      # Voice quality extractor
+      voice_quality:
+        enabled: false
+        sample_rate: 16000
+        hnr_frame_ms: 20.0
+        rms_mask_threshold: 1e-4
+        f0_fmin: 50.0
+        f0_fmax: 500.0
+        f0_method: "torchcrepe"  # pyin|yin|torchcrepe
+        average_channels: true
+        # Индивидуальные настройки параллелизма для Voice Quality (CPU/GPU extractor)
+        # КРИТИЧЕСКИ ВАЖНО: без segment_parallelism обработка очень медленная (~6-7 сек/сегмент)
+        parallelism:
+          segment_workers: 8  # Количество параллельных воркеров для обработки сегментов (null = auto, по умолчанию 1)
+          max_inflight: null  # Максимальное количество одновременно выполняемых задач (null = segment_workers)
+          # Рекомендации:
+          # - CPU-only (yin/pyin): segment_workers=8-16 (зависит от количества ядер)
+          # - GPU (torchcrepe): segment_workers=2-4 (ограничено GPU памятью и batch size)
+        feature_flags:
+          enable_audio_normalization: true
+          enable_jitter: true
+          enable_shimmer: true
+          enable_hnr: true
+          enable_f0_stats: true
+          enable_time_series: true
+      
+      # HPSS extractor
+      hpss:
+        enabled: false
+        kernel_size: 31
+        margin: 2
+        power: 2.0
+        # Индивидуальные настройки параллелизма для HPSS (CPU extractor)
+        # Примечание: hpss_extractor поддерживает batch processing через extract_batch_segments()
+        # с CPU parallelism для обработки сегментов из нескольких видео одновременно
+        parallelism:
+          segment_workers: 8  # Количество параллельных воркеров для обработки сегментов внутри одного файла (run_segments)
+          max_inflight: null  # Максимальное количество одновременно выполняемых задач внутри одного файла (null = segment_workers)
+          # batch_max_workers: null  # Количество параллельных воркеров для batch processing нескольких файлов (null = os.cpu_count())
+          # Примечание: batch_max_workers используется только если extractor поддерживает extract_batch_segments()
+          # и включен batch processing режим. По умолчанию используется общий параметр batch_max_video_workers
+        feature_flags:
+          enable_audio_normalization: true
+          enable_energy_metrics: true  # Включить энергетические метрики (shares, energies, stability, separation quality, balance score, dominance)
+          enable_waveforms: true  # Включить восстановленные временные сигналы (harmonic и percussive)
+          enable_spectral_features: true  # Включить спектральные фичи из разделённых компонент (centroid, bandwidth, rolloff)
+          enable_time_series: true  # Включить временные серии (harmonic и percussive share series)
+      
+      # Key extractor
+      key:
+        enabled: false
+        sample_rate: 22050
+        hop_length: 512
+        chroma_type: "cqt"  # cqt|stft
+        key_method: "essentia"  # auto|essentia|librosa
+        use_beat_sync: true
+        top_k: 5
+        parallelism:
+          segment_workers: 8
+          max_inflight: null
+        feature_flags:
+          enable_audio_normalization: true
+          enable_detailed_scores: true
+          enable_top_k: true
+          enable_time_series: true
+          enable_key_changes: true
+          enable_stability_metrics: true
+      
+      # Band energy extractor
+      band_energy:
+        enabled: false
+        sample_rate: 22050
+        n_fft: 2048
+        hop_length: 512
+        bands: []  # Список частотных полос [(low, high), ...]
+        use_mel_bands: true
+        n_mels: 128
+        average_channels: true
+        feature_flags:
+          enable_audio_normalization: true
+          enable_basic_stats: true
+          enable_time_series: true
+          enable_extended_stats: true
+          enable_dynamics: true
+          enable_balance_metrics: true
+      
+      # Spectral entropy extractor
+      spectral_entropy:
+        enabled: false
+        sample_rate: 22050
+        n_fft: 2048
+        hop_length: 512
+        average_channels: true
+        smoothing_window: 0
+        use_mel: true
+        n_mels: 128
+        feature_flags:
+          enable_audio_normalization: true
+          enable_basic_stats: true
+          enable_flatness: true
+          enable_spread: true
+          enable_time_series: true
+          enable_extended_stats: true
+          enable_dynamics: true
+  
+  # TextProcessor
+  text:
+    enabled: false  # Включите и укажите input_json для использования
+    required: false
+    input_json: /home/ilya/Рабочий стол/TrendFlowML/example/example_text_documents/video_document_1.json  # Путь к VideoDocument JSON (обязателен если enabled=true)
+    feature_flags:
+      enable_embeddings: true  # GPU-heavy text embedders
+      include_primary_embedding: true  # Include primary_embedding in NPZ
+      store_raw_payload: false  # Debug-only: store raw payload (privacy risk)
+      no_strict_extractors: false  # Graceful degradation on extractor errors (not recommended)
+    
+    # Batch processing configuration (Stage 4)
+    batch_processing:
+      enabled: false  # Enable batch processing optimizations (GPU batching + CPU parallelism)
+      max_workers: 4  # Number of parallel workers for CPU extractors (null = auto, typically os.cpu_count())
+      enable_gpu_batching: true  # Use extract_batch() for GPU extractors with supports_batch=True
+      enable_cpu_parallel: true  # Parallelize CPU extractors across documents using ThreadPoolExecutor
+      # Note: batch processing is currently used internally for optimization;
+      # CLI still processes one document at a time, but extractors use batch-aware implementations
+    
+    # Extractors и их настройки
+    extractors:
+      # Lexical static features
+      lexico_static_features:
+        enabled: false
+        feature_flags:
+          enable_title: true
+          enable_description: true
+          enable_transcript: true
+          enable_emoji: true  # Requires 'emoji' package to be installed
+          enable_clickbait_heuristic: true
+        transcript_source_policy: "asr_only"  # asr_only|asr_then_legacy|legacy_only
+        emoji_policy: "required"  # required|optional
+        max_title_chars: null
+        max_description_chars: null
+        max_transcript_chars: null
+      
+      # Tags extractor
+      tags_extractor:
+        enabled: false
+        feature_flags:
+          enable_extract_hashtags: true
+          mutate_doc_clean_texts: true
+          mutate_doc_hashtags: true
+        require_title: true
+        unicode_normalization: "NFKC"  # NFKC|NFC|NFKD|NFD|NONE
+        max_text_chars: 5000
+        max_tags_total: 64
+        top_k_slots: 5
+        export_cleaned_texts_mode: "none"  # none|raw
+        export_hashtags_mode: "none"  # none|raw|hashed
+        max_tag_len: 64
+      
+      # ASR text proxy audio features
+      asr_text_proxy_audio_features:
+        enabled: false
+        feature_flags:
+          enable_basic: true
+          enable_noise: true
+          enable_rhythm: true
+          enable_intonation: true
+        low_conf_threshold: 0.5
+        words_per_minute_baseline: 160.0
+        max_text_chars: 200000
+      
+      # Title embedder
+      title_embedder:
+        enabled: false  # Requires --enable-embeddings
+        model_name: "intfloat/multilingual-e5-large"
+        cache_enabled: false
+        cache_ttl_days: 30.0
+        cache_max_items: 200000
+        cache_max_bytes: 2000000000
+        device: "cuda"  # cpu|cuda - для одного элемента CPU быстрее из-за отсутствия overhead переноса данных
+        fp16: false  # FP16 не используется на CPU
+        batch_size: 128  # Используется при батчинге нескольких заголовков (Stage 3: supports_batch=True)
+        require_title: false
+        compute_embedding: true
+        write_artifact: true
+        compute_raw_norm: true
+        emit_extra_metrics: false
+        # Note: TitleEmbedder supports batch processing (extract_batch()) for GPU batching optimization
+      
+      # Description embedder
+      description_embedder:
+        enabled: false  # Requires --enable-embeddings
+        model_name: "intfloat/multilingual-e5-large"
+        cache_enabled: false
+        cache_ttl_days: 30.0
+        cache_max_items: 200000
+        cache_max_bytes: 2000000000
+        device: "cuda"
+        fp16: true
+        batch_size: 32
+        tokenizer_spec_name: "shared_tokenizer_v1"
+        max_chunk_tokens_model: 512
+        pooling_strategy: "length_weighted_mean"
+        compute_embedding: true
+        write_artifact: true
+        compute_raw_norm: true
+        emit_extra_metrics: false
+      
+      # Hashtag embedder
+      hashtag_embedder:
+        enabled: false  # Requires --enable-embeddings
+        model_name: "intfloat/multilingual-e5-large"
+        cache_enabled: false
+        cache_ttl_days: 7.0
+        cache_max_items: 50000
+        cache_max_bytes: 5000000000
+        device: "cuda"
+        fp16: true
+        batch_size: 128  # Используется при батчинге хештегов из нескольких документов (Stage 3: supports_batch=True)
+        require_hashtags: false
+        max_tags: 50
+        max_tag_len: 64
+        normalize_casefold: true
+        strip_hash_prefix: true
+        use_frequencies: false
+        aggregation: "mean"
+        compute_embedding: true
+        write_artifact: true
+        emit_extra_metrics: false
+        # Note: HashtagEmbedder supports batch processing (extract_batch()) for GPU batching optimization
+      
+      # Transcript chunk embedder
+      transcript_chunk_embedder:
+        enabled: false  # Requires --enable-embeddings
+        model_name: "intfloat/multilingual-e5-large"
+        tokenizer_spec_name: "shared_tokenizer_v1"
+        cache_enabled: false
+        cache_ttl_days: 30.0
+        cache_max_items: 50000
+        cache_max_bytes: 5000000000
+        device: "cuda"
+        fp16: true
+        batch_size: 64  # Используется при батчинге чанков из нескольких документов (Stage 3: supports_batch=True)
+        # Source policy parameters (not feature flags)
+        use_asr: true
+        use_youtube_auto: false
+        require_asr: false
+        require_any_source: false
+        # Chunking / cost controls
+        max_chunk_tokens_model: 256
+        overlap_ratio: 0.15
+        max_chunks_total: 256
+        emit_confidence_metrics: true
+        emit_extra_metrics: false
+      
+      # Comments embedder
+      comments_embedder:
+        enabled: false  # Requires --enable-embeddings
+        model_name: "intfloat/multilingual-e5-large"
+        cache_enabled: false
+        cache_ttl_days: 7.0
+        cache_max_items: 50000
+        cache_max_bytes: 5000000000
+        device: "cuda"
+        fp16: true
+        batch_size: 64  # Используется при батчинге комментариев из нескольких документов (Stage 3: supports_batch=True)
+        max_comments: 200
+        max_total_chars: 20000
+        max_chars_per_comment: 400
+        min_chars_per_comment: 3
+        dedup_comments: true
+        selection_policy: "by_likes_then_recency"
+        compute_embeddings: true
+        write_artifact: true
+        emit_extra_metrics: false
+        # Note: CommentsEmbedder supports batch processing (extract_batch()) for GPU batching optimization
+      
+      # Transcript aggregator
+      transcript_aggregator:
+        enabled: false  # Requires transcript_chunk_embedder
+        model_name: "intfloat/multilingual-e5-large"
+        device: "cuda"
+        decay_rate: 0.01
+        feature_flags:
+          compute_std: false
+          compute_mean: true
+          compute_max: true
+          compute_combined: true
+        write_artifacts: true
+        require_chunks: false
+        sources: ["whisper", "youtube_auto"]
+        emit_extra_metrics: false
+      
+      # Comments aggregator
+      comments_aggregator:
+        enabled: false  # Requires comments_embedder
+        model_name: "intfloat/multilingual-e5-large"
+        feature_flags:
+          compute_mean: true
+          compute_median: true
+          compute_std: false
+        write_artifacts: true
+        require_comment_embeddings: false
+        emit_extra_metrics: false
+      
+      # Cosine metrics extractor
+      cosine_metrics_extractor:
+        enabled: false
+        transcript_source_priority: ["combined", "whisper", "youtube_auto"]
+        comments_mode: "aggregates"
+        feature_flags:
+          compute_title_desc: true
+          compute_title_transcript: true
+          compute_desc_transcript: true
+          compute_transcript_comments_mean: true
+          compute_transcript_comments_median: true
+        require_any_metric: false
+        require_title: false
+        require_description: false
+        require_transcript: false
+        require_comments_for_tc: false
+        emit_extra_metrics: false
+      
+      # Embedding pair top-k extractor
+      embedding_pair_topk_extractor:
+        enabled: false
+        top_k: 10
+        top_k_slots: 5
+        transcript_source_priority: ["whisper", "youtube_auto"]
+        feature_flags:
+          compute_title_desc: true
+          compute_title_transcript_topk: true
+          export_topk_slots: true
+          export_topk_indices: true
+          export_topk_summary: true
+        use_faiss_mode: "auto"  # auto|never|always
+        min_corpus_for_faiss: 512
+        require_faiss: false
+        use_cross_encoder: false
+        temperature: 0.1
+        device: "cuda"
+        require_title_embedding: false
+        require_description_embedding: false
+        require_transcript_chunks: false
+        emit_extra_metrics: false
+      
+      # Embedding stats extractor
+      embedding_stats_extractor:
+        enabled: false
+        transcript_source_priority: ["whisper", "youtube_auto"]
+        top_k_slots: 8
+        topk: 8
+        min_chunks_required: 2
+        variance_ddof: 0
+        require_chunks: false
+        feature_flags:
+          compute_topic_entropy: true
+        require_topic_distribution: false
+        emit_extra_metrics: false
+      
+      # Embedding shift indicator extractor
+      embedding_shift_indicator_extractor:
+        enabled: false
+        n_window_chunks: 2
+        cosine_threshold: 0.85
+        transcript_source_priority: ["whisper", "youtube_auto"]
+        require_transcript_chunks: false
+        require_min_chunks: 2
+        feature_flags:
+          compute_shift_flag: true
+          compute_extra_cosines: false
+        emit_extra_metrics: false
+      
+      # Embedding source ID extractor
+      embedding_source_id_extractor:
+        enabled: false
+        vector_store_uri: "faiss://semantic_titles_v1"
+        model_version: "unknown"
+        primary_source_policy: "transcript_first"  # transcript_first|title_first|description_first|title_only|transcript_only
+        strict_missing_primary: true
+      
+      # Speaker turn embeddings aggregator
+      speaker_turn_embeddings_aggregator:
+        enabled: false
+        model_name: "intfloat/multilingual-e5-large"
+        device: "cuda"
+        fp16: true
+        batch_size: 64
+        feature_flags:
+          compute_mean: true
+          compute_max: true
+        write_artifacts: true
+        require_input: false
+        max_speakers: 16
+        max_turns_per_speaker: 64
+        min_chars_per_turn: 5
+        max_chars_per_turn: 600
+        dedup_turn_texts: true
+        emit_extra_metrics: false
+      
+      # Title to hashtag cosine extractor
+      title_to_hashtag_cosine_extractor:
+        enabled: false
+        require_title_embedding: false
+        require_hashtag_embedding: false
+      
+      # Top-K similar titles extractor
+      topk_similar_titles_extractor:
+        enabled: false
+        corpus_spec_name: "similar_titles_corpus_v1"
+        k: 5
+        export_topk_mode: "ids_and_scores"  # ids_and_scores|ids_only|scores_only
+        max_export_k: 50
+        require_title_embedding: false
+        require_faiss: false
+        require_faiss_above_corpus_size: 200000
+        allow_numpy_large_corpus: false
+        max_corpus_for_numpy: 100000
+        hnsw_m: 32
+        hnsw_ef_construction: 200
+        hnsw_ef_search: 128
+        cache_enabled: true
+        cache_ttl_s: 3600.0
+        cache_max_entries: 2
+      
+      # Title embedding cluster entropy extractor
+      title_embedding_cluster_entropy_extractor:
+        enabled: false
+        clusters_spec_name: "semantic_clusters_v1"
+        top_k_slots: 5
+        temperature: 0.1
+        export_topk_distribution: false
+        require_title_embedding: false
+        require_faiss: false
+        use_faiss: true
+        emit_extra_metrics: false
+      
+      # Semantic cluster extractor
+      semantic_cluster_extractor:
+        enabled: false
+        clusters_spec_name: "semantic_clusters_v1"
+        primary_source: "title"  # title|description|hashtag
+        allow_fallback_sources: null  # list[str] subset of {title,description,hashtag}
+        require_primary_source: false
+        require_embedding: false
+        use_faiss: true
+        require_faiss: false
+        emit_extra_metrics: false
+      
+      # QA embedding pairs extractor
+      qa_embedding_pairs_extractor:
+        enabled: false
+        model_name: "sentence-transformers/all-MiniLM-L6-v2"
+        device: "cuda"
+        fp16: true
+        batch_size: 64
+        allow_legacy_transcripts: false
+        transcript_source_policy: "asr_only"
+        feature_flags:
+          use_title: true
+          use_description: true
+          use_transcript: true
+          use_comments: true
+        question_langs: "ru,en"
+        question_words_ru: null
+        question_words_en: null
+        min_chars_per_question: 8
+        max_question_chars: 240
+        dedup_questions: true
+        max_questions_total: 128
+        max_questions_per_source: 64
+        max_comments: 200
+        max_chars_per_comment: 280
+        max_transcript_chars: 200000
+        require_min_questions: 0
+        write_question_hashes_artifact: false
+        write_question_source_ids_artifact: false
+        emit_extra_metrics: false
+      
+      # Semantics topics keyphrases extractor
+      semantics_topics_keyphrases:
+        enabled: false
+        device: "cuda" # > x8 ускорение чем на CPU
+        feature_flags:
+          enable_topic_distribution: true
+          enable_keyphrases: true
+          enable_keyphrase_embeddings: true
+          enable_style_flags: true
+        topics_db_spec_name: "topics_taxonomy_v1"
+        model_name: "intfloat/multilingual-e5-large"
+        top_k_topics: 5
+        top_k_slots: 5
+        temperature: 0.07
+        max_keyphrases: 10
+        keyphrase_slots: 10
+        max_keyphrase_len_chars: 64
+        export_keyphrases_mode: "none"  # none|raw|hashed
+        style_instruction_words_ru: null
+        style_audience_words_ru: null
+        style_cta_words_ru: null
+        allow_legacy_transcripts: false
+        transcript_source_policy: "asr_only"
+        max_text_chars: 20000
+        cache_enabled: true
+        cache_ttl_s: 604800.0  # 7 days
+        cache_max_total_mb: 512
+  
+  # VisualProcessor
+  visual:
+    enabled: true  # Всегда включен
+    required: true
+    # Batch processing configuration (Stage 2+) - глобальные настройки для batch mode
+    batch_processing:
+      enabled: true  # Enable batch processing optimizations (GPU batching + CPU parallelism)
+      max_video_workers: 4  # Number of parallel workers for video-level processing (null = auto, typically os.cpu_count())
+      enable_video_parallel: false  # Enable parallel processing of multiple videos (Stage 4+)
+      max_frames_per_gpu_batch: 32  # Limit batch size for GPU components (null = no limit, uses component batch_size)
+      enable_gpu_batching: true  # Enable GPU batching for frames from multiple videos (Stage 2+)
+      enable_cpu_parallel: true  # Enable CPU parallelism for independent components (Stage 4+)
+      # Note: batch processing is currently used internally for optimization;
+      # CLI still processes one video at a time, but components use batch-aware implementations
+    # Inline конфиг (все настройки здесь, не ссылаемся на внешний файл)
+    inline_config:
+      # Core providers (базовые провайдеры)
+      core_providers:
+        core_clip: true
+        core_depth_midas: false
+        core_optical_flow: true
+        core_object_detections: true
+        ocr_extractor: false
+        core_face_landmarks: true
+        content_domain: false
+        franchise_recognition: false
+        brand_semantics: false
+        car_semantics: false
+        face_identity: false
+        place_semantics: false
+      
+      # Modules (модули обработки)
+      modules:
+        cut_detection: true
+        scene_classification: true
+        video_pacing: false
+        uniqueness: false
+        shot_quality: false
+        story_structure: false
+        detalize_face: false
+        emotion_face: false
+        behavioral: false
+        optical_flow: false
+        action_recognition: false
+
+        color_light: true
+        frames_composition: false
+        
+        high_level_semantic: false
+        micro_emotion: false
+        similarity_metrics: false
+        text_scoring: false
+      
+      # Global settings
+      global:
+        root_path: null
+        frames_dir: null
+        rs_path: null
+        max_parallel_modules: 1
+        gpu_max_concurrent: "auto"  # auto|number
+      
+      # Core provider configurations
+      core_clip:
+        runtime: "triton"  # triton|inprocess
+        batch_size: 16
+        triton_preprocess_preset: "openai_clip_224"
+        model_name: "ViT-B/32"  # Used only for inprocess runtime
+        model_version: "unknown"
+        weights_digest: "unknown"
+        engine: "torch"  # Used only for inprocess runtime
+        precision: "fp16"  # fp16|fp32
+        # Triton configuration (recommended path via ModelManager)
+        triton_image_model_spec: null  # ModelManager spec name (e.g., "clip_image_triton"), null = use legacy path
+        triton_text_model_spec: null  # ModelManager spec name (e.g., "clip_text_triton"), null = use legacy path
+        # Legacy Triton configuration (used if model_spec is null)
+        triton_http_url: "http://localhost:8000"  # Triton HTTP endpoint (or use TRITON_HTTP_URL env var)
+        triton_image_model_name: "clip_image_224"  # Triton model name for image embeddings (clip_image_224|clip_image_336|clip_image_448)
+        triton_image_model_version: null  # Triton model version (null = latest)
+        triton_image_input_name: "INPUT__0"
+        triton_image_output_name: "OUTPUT__0"
+        triton_image_datatype: "UINT8"  # FP32|UINT8 (UINT8 for ensemble with preprocess, FP32 for direct ONNX)
+        triton_text_model_name: "clip_text"  # Triton model name for text embeddings
+        triton_text_model_version: null  # Triton model version (null = latest)
+        triton_text_input_name: "INPUT__0"
+        triton_text_output_name: "OUTPUT__0"
+        triton_text_datatype: "INT64"
+        triton_timeout_sec: 240
+        disable_text_cache: false  # Text embeddings cache: computed once per model size (224/336/448) and reused for all videos
+        # Cache location: DP_MODELS_ROOT/cache/core_clip_text_embeddings/size_{224|336|448}/{cache_key}.npz
+        # Cache includes: embeddings, prompts_version, model_size, created_at (versioned for reproducibility)
+        render:
+          enable_render: true  # Generate render-context JSON (for LLM/frontend)
+          enable_html_render: true  # Generate HTML debug page
+      
+      core_depth_midas:
+        runtime: "triton"
+        batch_size: 16
+        triton_preprocess_preset: "midas_256"
+        out_width: 256
+        out_height: 256
+        triton_http_url: "http://localhost:8000"
+        triton_model_spec: ""
+        triton_model_name: "midas_256"
+        triton_model_version: ""
+        triton_input_name: "INPUT__0"
+        triton_output_name: "OUTPUT__0"
+        triton_datatype: "UINT8"
+        model_version: "unknown"
+        weights_digest: "unknown"
+        precision: "fp32"
+        frames_bgr: false
+        render:
+          enable_render: true  # Generate render-context JSON (for LLM/frontend)
+          enable_html_render: true  # Generate HTML debug page (best-effort)
+      
+      core_optical_flow:
+        runtime: "triton"
+        triton_preprocess_preset: "raft_256"
+        triton_http_url: "http://localhost:8000"
+        triton_model_spec: ""
+        triton_model_name: "raft_256"
+        triton_model_version: ""
+        triton_input0_name: "INPUT0__0"
+        triton_input1_name: "INPUT1__0"
+        triton_output_name: "OUTPUT__0"
+        triton_datatype: "UINT8"
+        model_version: "unknown"
+        weights_digest: "unknown"
+        precision: "fp32"
+        batch_size: 16
+      
+      core_object_detections:
+        runtime: "ultralytics"  # ultralytics
+        model: "visual/yolo/yolo11x_41_best.pt"  # Path relative to DP_MODELS_ROOT
+        batch_size: 16
+        device: "cuda"  # cuda|cpu|auto
+        box_threshold: 0.6
+        iou_threshold: 0.3
+        triton_model_spec: ""
+        triton_http_url: ""
+        triton_model_name: ""
+        triton_model_version: ""
+        triton_input_name: "images"
+        triton_output_name: "output0"
+        triton_preprocess_preset: "yolo11x_640"
+        render:
+          enable_render: true  # Generate render-context JSON (for LLM/frontend)
+          enable_html_render: true  # Generate HTML debug page
+      
+      core_face_landmarks:
+        use_pose: true
+        use_hands: true
+        use_face_mesh: true
+        use_person_mask: true
+        person_window_radius: 0
+        face_detection_target_frames: 50
+        face_detection_min_frames: 20
+        face_detection_max_frames: 200
+        face_detection_model_selection: 0
+        face_detection_min_confidence: 0.5
+        face_mesh_window_radius: ""
+        pose_static_image_mode: false
+        pose_model_complexity: 2
+        pose_enable_segmentation: false
+        pose_min_detection_confidence: 0.5
+        pose_min_tracking_confidence: 0.5
+        hands_static_image_mode: false
+        hands_max_num_hands: 2
+        hands_model_complexity: 1
+        hands_min_detection_confidence: 0.5
+        hands_min_tracking_confidence: 0.5
+        face_mesh_static_image_mode: false
+        face_mesh_max_num_faces: 1
+        face_mesh_refine_landmarks: true
+        face_mesh_min_detection_confidence: 0.5
+        face_mesh_min_tracking_confidence: 0.5
+        enable_async: true
+        enable_parallel: true
+        num_workers: 2
+        enable_temporal_filter: true
+        temporal_filter_min_cutoff: 1
+        temporal_filter_beta: 0
+        enable_profiling: true
+        render:
+          enable_render: true  # Generate render-context JSON (for LLM/frontend)
+          enable_html_render: true  # Generate HTML debug page
+      
+      content_domain:
+        domain_db_dir: "dp_models/bundled_models/semantics/content_domain/v1"
+        clip_text_model_spec: "clip_text_triton"
+        triton_http_url: "http://localhost:8000"  # Triton HTTP endpoint (or use TRITON_HTTP_URL env var)
+        topk: 5
+        threshold_global: 0.23
+        thresholds_json: ""
+        render:
+          enable_render: true  # Generate render-context JSON (for LLM/frontend)
+          enable_html_render: true  # Generate HTML debug page
+      
+      franchise_recognition:
+        franchise_db_dir: "dp_models/bundled_models/semantics/franchises/v1"
+        ocr_npz: "null"
+        clip_text_model_spec: "clip_text_triton"
+        topk: 5
+        threshold_global: 0.23
+        max_full_labels: 500
+        ocr_min_confidence: 0.4
+        ocr_max_events: 5000
+        thresholds_json: ""
+        embedding_service_url: "http://localhost:8005"
+        similarity_threshold: 0.0
+        use_ocr_filtering: false
+        batch_size: 16
+        render:
+          enable_render: true
+          enable_html_render: true
+      
+      ocr_extractor:
+        proposal_class: "text_region"
+        min_det_score: 0.5
+        max_boxes_per_frame: 5
+        max_total_boxes: 5000
+        crop_margin_frac: 0.02
+        tesseract_lang: "eng+rus"
+        tesseract_psm: 6
+        render:
+          enable_render: true  # Generate render-context JSON (for LLM/frontend)
+          enable_html_render: true  # Generate HTML debug page
+      
+      brand_semantics:
+        embedding_service_url: "http://localhost:8005"
+        topk: 5
+        similarity_threshold: 0
+        max_tracks: ""
+        max_dets_per_frame: ""
+        pad_ratio: 0.15
+        use_sharpness: false
+        render:
+          enable_render: true  # Generate render-context JSON (for LLM/frontend)
+          enable_html_render: true  # Generate HTML debug page
+      
+      car_semantics:
+        embedding_service_url: "http://localhost:8005"
+        topk: 5
+        similarity_threshold: 0
+        max_tracks: ""
+        max_dets_per_frame: ""
+        pad_ratio: 0.15
+        use_sharpness: false
+        render:
+          enable_render: true
+          enable_html_render: true
+      
+      face_identity:
+        embedding_service_url: "http://localhost:8005"
+        topk: 5
+        similarity_threshold: 0
+        render:
+          enable_render: true
+          enable_html_render: true
+      
+      place_semantics:
+        embedding_service_url: "http://localhost:8005"
+        topk: 5
+        similarity_threshold: 0
+        min_track_length: 3
+        max_gap_sec: 5.0
+        render:
+          enable_render: true
+          enable_html_render: true
+      
+      # Module configurations
+      cut_detection:
+        device: "auto"  # auto|cpu|cuda
+        use_clip: true  # Use CLIP for transition classification
+        use_deep_features: false  # Use deep features for detection (not supported in baseline)
+        use_adaptive_thresholds: true  # Use adaptive thresholds
+        use_semantic_clustering: true  # Use semantic clustering
+        fade_threshold: 0.02  # Threshold for fade detection
+        min_duration_frames: 4  # Minimum duration in frames
+        use_flow_consistency: true  # Use flow consistency
+        ssim_max_side: 512  # Max side (px) for SSIM computation (0 = no downscale)
+        flow_max_side: 320  # Max side (px) for optical flow computation (0 = no downscale)
+        hard_cuts_preset: "default"  # quality|default|fast
+        hard_cuts_cascade: true  # Enable cascade mode for hard cuts
+        hard_cuts_cascade_keep_top_p: 0.25  # Keep top-p histogram pairs in cascade mode
+        hard_cuts_cascade_hist_margin: 0.0  # Histogram margin in cascade mode
+        prefer_core_optical_flow: true  # Prefer reusing core_optical_flow/flow.npz
+        require_core_optical_flow: true  # Require core_optical_flow aligned artifact
+        write_model_facing_npz: true  # Write model-facing NPZ
+        require_model_facing_npz: false  # Require model-facing NPZ (fail-fast if write fails)
+        clip_image_model_spec: "clip_image_224_triton"  # dp_models Triton spec for CLIP image encoder (required when use_clip=true)
+        triton_http_url: "http://localhost:8000"  # Triton HTTP URL (can also be set via TRITON_HTTP_URL env var)
+        render:
+          enable_render: true  # Generate render-context JSON (for LLM/frontend)
+          enable_html_render: true  # Generate HTML debug page
+      
+      scene_classification:
+        runtime: "triton"
+        triton_model_spec: "places365_resnet50_224_triton"
+        triton_http_url: "http://localhost:8000"  # Triton HTTP URL (can also be set via TRITON_HTTP_URL env var)
+        batch_size: 16
+        label_fusion: "places"
+        enable_advanced_features: true
+        min_scene_seconds: 2.0
+        render:
+          enable_render: true  # Генерировать render-context JSON
+          enable_html_render: true  # Генерировать HTML debug страницу
+      
+      video_pacing:
+        min_frames: 30
+        downscale_factor: 0.25
+        min_shot_length_seconds: 0.15
+        shot_detect_k: 6.0
+        feature_flags:
+          enable_entropy_features: true
+          enable_histograms: true
+          enable_pace_curve_peaks: true
+          enable_periodicity: true
+          enable_bursts: true
+        render:
+          enable_render: true  # Генерировать render-context JSON
+          enable_html_render: true  # Генерировать HTML debug страницу
+      
+      similarity_metrics:
+        reference_set_id: null
+        top_n: 10
+        ui_topk: 5
+        enable_overall_score: false
+        overall_weights: {}
+        render:
+          enable_render: true  # Генерировать render-context JSON
+          enable_html_render: true  # Генерировать HTML debug страницу
+      
+      uniqueness:
+        repeat_threshold: 0.97
+        repeat_threshold_mode: "auto"  # auto|fixed (auto=Otsu by distribution)
+        repeat_threshold_min: 0.90
+        repeat_threshold_max: 0.99
+        ui_topk: 8
+        max_frames: 200
+        render:
+          enable_render: true  # Генерировать render-context JSON
+          enable_html_render: true  # Генерировать HTML debug страницу
+      
+      shot_quality:
+        preset: "default"  # fast|default|quality
+        analysis_max_dim: 320
+        feature_flags:
+          enable_entropy_features: true
+          enable_rolling_shutter: false
+          enable_lens_features: false
+        matmul_chunk_size: 2048
+        progress_every_n_frames: 25
+        ui_topk: 3
+        render:
+          enable_render: true  # Генерировать render-context JSON
+          enable_html_render: true  # Генерировать HTML debug страницу
+      
+      story_structure:
+        min_frames: 30
+        max_frames: 200
+        energy_smoothing_sigma: 1.0
+        text_mode: "ocr_clip_text"  # none|ocr_clip_text
+        clip_text_model_spec: "clip_text_triton"
+        clip_text_batch_size: 64
+        ocr_max_chars_per_frame: 256
+        render:
+          enable_render: true  # Генерировать render-context JSON
+          enable_html_render: true  # Генерировать HTML debug страницу
+      
+      detalize_face:
+        modules: null  # comma-separated string: "geometry,pose,quality,eyes,motion,structure,lip_reading"
+        max_faces: 4
+        refine_landmarks: true
+        min_detection_confidence: 0.7
+        min_tracking_confidence: 0.7
+        min_face_size: 30
+        max_face_size_ratio: 0.8
+        min_aspect_ratio: 0.6
+        max_aspect_ratio: 1.4
+        validate_landmarks: true
+        visualize: false
+        show_landmarks: false
+        ocr_npz: "null"
+        use_face_data: false
+        alignment_window_seconds: 0.5
+        motion_weight: 0.0
+        face_weight: 1.0
+        audio_weight: 0.0
+        min_ocr_confidence: 0.4
+        retain_raw_ocr_text: false
+        feature_flags:
+          enable_text_peaks: true
+          enable_language_entropy: true
+          enable_text_movement_speed: true
+        render:
+          enable_render: true  # Генерировать render-context JSON (for LLM/frontend)
+          enable_html_render: true  # Генерировать HTML debug страницу
+      
+      emotion_face:
+        face_frame_stride: 4
+        max_frames: 200
+        max_faces_per_frame: 2
+        face_bbox_margin: 0.2
+        emonet_model_spec: "emonet_8_inprocess"
+        emo_path: null  # Will use ModelManager if available, otherwise fallback to default path in module
+        device: "cuda"
+        feature_flags:
+          enable_microexpressions: true
+          enable_emotional_individuality: true
+          enable_face_asymmetry: true
+        render:
+          enable_render: true
+          enable_html_render: true
+      
+      optical_flow:
+        render:
+          enable_render: true  # Generate render-context JSON (for LLM/frontend)
+          enable_html_render: true  # Generate HTML debug page
+
+      behavioral:
+        # Behavioral module configuration
+        # Note: Behavioral is a CPU module that depends on core_face_landmarks
+        # It uses default process_batch() from BaseModule (sequential processing)
+        render:
+          enable_render: true  # Generate render-context JSON (for LLM/frontend)
+          enable_html_render: true  # Generate HTML debug page
+
+      action_recognition:
+        clip_len: 32  # Длина клипа в кадрах (T_fast для SlowFast, минимум 32 для T_slow=8, должно быть кратно alpha)
+        stride: null  # Шаг для создания клипов (null = clip_len // 2)
+        batch_size: 8  # Размер батча для inference
+        embedding_dim: 256  # Размерность эмбеддингов после проекции
+        alpha: 4  # SlowFast alpha (T_fast / T_slow, по умолчанию 4, как в pytorchvideo)
+        model_name: "slowfast_r50_action_recognition"  # ModelManager spec name (pytorchvideo.models.hub.slowfast_r50)
+        device: "cuda"  # Устройство для обработки (cuda/cpu/auto)
+        render:
+          enable_render: true  # Generate render-context JSON (for LLM/frontend)
+          enable_html_render: true  # Generate HTML debug page
+
+      color_light:
+        max_frames_per_scene: 350  # Максимальное количество кадров для обработки на сцену
+        stride: 5  # Шаг для выборки кадров (deprecated, используется frame_indices из metadata)
+        render:
+          enable_render: true  # Generate render-context JSON (for LLM/frontend)
+          enable_html_render: true  # Generate HTML debug page
+
+      frames_composition:
+        feature_set: "default"  # Feature set preset: default|ml|all
+        features: null  # Comma-separated feature groups to enable (overrides --feature-set). Groups: anchors,balance,symmetry,negative_space,complexity,leading_lines,depth,objects,faces,style
+        num_workers: null  # Per-frame compute workers (CPU, null = auto, typically min(8, os.cpu_count()))
+        render:
+          enable_render: true  # Generate render-context JSON (for LLM/frontend)
+          enable_html_render: true  # Generate HTML debug page
+
