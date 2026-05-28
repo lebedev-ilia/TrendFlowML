@@ -7,6 +7,7 @@ from .triton_http import TritonHttpProvider
 from .torchscript import TorchScriptProvider
 from .torch_state_dict import TorchStateDictProvider
 from .pyannote import PyannoteProvider
+from .onnxruntime_onnx import OnnxRuntimeOnnxProvider
 
 __all__ = [
     "ModelProvider",
@@ -17,6 +18,7 @@ __all__ = [
     "TorchScriptProvider",
     "TorchStateDictProvider",
     "PyannoteProvider",
+    "OnnxRuntimeOnnxProvider",
 ]
 
 

@@ -22,11 +22,18 @@ logger = logging.getLogger(__name__)
 def safe_log_warning(logger_instance, message, *args, **kwargs):
     """Safely log a warning message, catching I/O errors from closed handlers."""
     try:
-        # Try to log directly - catch all exceptions to prevent crashes
-        logger_instance.warning(message, *args, **kwargs)
+        # Temporarily disable logging error reporting to prevent traceback output
+        old_raise_exceptions = logging.raiseExceptions
+        logging.raiseExceptions = False
+        try:
+            logger_instance.warning(message, *args, **kwargs)
+        finally:
+            # Restore original setting
+            logging.raiseExceptions = old_raise_exceptions
     except Exception:
         # Catch ALL exceptions silently - handlers may be closed, streams may be closed,
         # or logging infrastructure may be in an invalid state during shutdown
+        # This is expected behavior during cleanup/shutdown phases
         pass
 
 
@@ -82,9 +89,14 @@ def _load_renderer(component_name: str):
         # clap_extractor -> clap_extractor
         module_name = component_name
         
-        # Импортируем модуль render
-        module_path = f"src.extractors.{module_name}.render"
-        module = importlib.import_module(module_path)
+        # Импортируем модуль render (utils/render.py)
+        module_path = f"src.extractors.{module_name}.utils.render"
+        try:
+            module = importlib.import_module(module_path)
+        except ImportError:
+            # Fallback: render в корне extractor'а (legacy)
+            module_path = f"src.extractors.{module_name}.render"
+            module = importlib.import_module(module_path)
         
         # Ищем функцию render_<component_name>
         render_func_name = f"render_{module_name}"
@@ -171,7 +183,10 @@ def render_component(
         # Try to generate HTML if HTML renderer function exists and enabled
         if enable_html_render:
             try:
-                render_module = importlib.import_module(f"src.extractors.{component_name}.render")
+                try:
+                    render_module = importlib.import_module(f"src.extractors.{component_name}.utils.render")
+                except ImportError:
+                    render_module = importlib.import_module(f"src.extractors.{component_name}.render")
                 html_renderer_name = f"render_{component_name}_html"
                 logger.debug(f"Looking for HTML renderer: {html_renderer_name} in module {render_module}")
                 html_renderer = getattr(render_module, html_renderer_name, None)

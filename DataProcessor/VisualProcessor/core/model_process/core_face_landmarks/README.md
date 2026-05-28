@@ -1,5 +1,8 @@
 ## Component: `core_face_landmarks` (Tier‑0 baseline)
 
+- **Контракт NPZ, melt/QA, примеры команд:** [docs/FEATURE_DESCRIPTION.md](docs/FEATURE_DESCRIPTION.md)
+- **Валидатор:** `utils/validate_core_face_landmarks_npz.py` (`--struct`, `--qa`, `--ranges` или батч `--results-base`)
+
 ### Назначение
 
 `core_face_landmarks` извлекает landmarks лица (MediaPipe FaceMesh) по выборке кадров (union-domain).
@@ -29,24 +32,34 @@ No-fallback: отсутствие/пустота `frame_indices` ⇒ **error**.
 - `ARTIFACT_FILENAME = "landmarks.npz"` — фиксированное имя артефакта (один NPZ per run)
 - `frame_indices (N,) int32`
 - `times_s (N,) float32` — `union_timestamps_sec[frame_indices]` (required by baseline contract)
-- `face_landmarks (N, FACES, 468, 3) float32` (NaN если лицо не найдено)
+- `face_landmarks (N, FACES, 468, 3) float32` — **filtered** landmarks (по умолчанию, для downstream)  
+  (NaN если лицо не найдено)
+- `face_landmarks_raw (N, FACES, 468, 3) float32` — **raw** landmarks (QA/debug source-of-truth)
 - `face_present (N, FACES) bool`
+- `person_present (N,) bool` — person-mask из `core_object_detections` (до window расширения)
+- `face_mesh_ran (N,) bool` — на каких primary позициях **реально запускали** FaceMesh (person + window)
 - `has_any_face bool`
-- `empty_reason object|null` (валидный empty: `"no_faces_in_video"`)
+- `empty_reason object|null`:
+  - валидный empty: `"no_faces_in_video"` (FaceMesh запускался, но лиц нет)
+  - валидный empty: `"skipped_due_to_person_mask_no_person"` (person-mask пуст, FaceMesh не запускался)
 
 Опциональные (если включены флаги):
-- `pose_landmarks`, `pose_present`, `has_any_pose`
-- `hands_landmarks`, `hands_present`, `has_any_hands`
+- `pose_landmarks`, `pose_landmarks_raw`, `pose_present`, `has_any_pose`
+- `hands_landmarks`, `hands_landmarks_raw`, `hands_present`, `has_any_hands`
 
 Extended empty reasons (не меняют provider-status кроме face):
 - `face_empty_reason`, `pose_empty_reason`, `hands_empty_reason`
 
 ### Empty semantics
 
-- Если `face_mesh` включён и **лиц нет**: это **валидный empty**:
+- Если `face_mesh` включён и **FaceMesh реально запускался**, но лиц нет: это **валидный empty**:
   - `status="empty"`
   - `empty_reason="no_faces_in_video"`
-  - данные `face_landmarks` остаются NaN, `face_present=False`
+  - данные `face_landmarks`/`face_landmarks_raw` остаются NaN, `face_present=False`
+- Если `face_mesh` включён, но **person-mask пуст** (`person_present.sum()==0` ⇒ `face_mesh_ran.sum()==0`): это тоже **валидный empty**:
+  - `status="empty"`
+  - `empty_reason="skipped_due_to_person_mask_no_person"`
+  - важно: это **не утверждение** “лиц нет”, это утверждение “мы не запускали FaceMesh из-за gating”
 - Если `pose/hands` включены и не детектируются: это **не error**,
   но записываются `pose_empty_reason="no_pose_detected"` / `hands_empty_reason="no_hands_detected"`.
 
@@ -63,6 +76,11 @@ Extended empty reasons (не меняют provider-status кроме face):
 - `total_total_ms` — общее время работы компонента (от старта до записи NPZ)
 - `process_video_total_ms` — время основного цикла обработки кадров (pose/hands/face + optional temporal filtering)
 - Дополнительно: стадии из внутреннего `Profiler` (например, `io.frame_load_total_ms`, `inference.face_total_ms`, `postproc.temporal_filter_total_ms`)
+
+**Профилирование**:
+- Профилирование включено по умолчанию (`--enable-profiling`, можно отключить через `--disable-profiling`)
+- Внутренний `Profiler` собирает детальные тайминги для каждой стадии обработки
+- Тайминги логируются в консоль после завершения обработки
 
 ### Progress / state events
 
@@ -185,6 +203,7 @@ Extended empty reasons (не меняют provider-status кроме face):
 4. **Отдельные экземпляры моделей на воркер**: Каждый воркер создает свои экземпляры MediaPipe моделей для thread-safety (избегает SIGSEGV)
 5. **Person-mask фильтрация**: FaceMesh запускается только на кадрах с детектированными людьми (значительное сокращение обрабатываемых кадров)
 6. **Stage-1/Stage-2 оптимизация**: Легковесное face detection на sparse выборке перед запуском FaceMesh
+7. **Temporal filtering**: OneEuro filter для сглаживания landmarks во времени (включен по умолчанию, можно отключить через `--disable-temporal-filter`)
 
 **Рекомендации по оптимизации**:
 
@@ -212,6 +231,32 @@ core_face_landmarks:
 
 **Важно**: Оптимизации не влияют на качество результатов — все формулы остались идентичными, изменилась только производительность.
 
+### Temporal Filtering
+
+Компонент поддерживает **temporal filtering** для сглаживания landmarks во времени:
+
+- **OneEuro filter**: адаптивный фильтр для сглаживания временных рядов landmarks
+- **Параметры**: `--temporal-filter-min-cutoff` (по умолчанию 1.0), `--temporal-filter-beta` (по умолчанию 0.0)
+- **Включен по умолчанию**: можно отключить через `--disable-temporal-filter`
+- **Применяется к**: face, pose и hands landmarks (если включены)
+- **FPS**: автоматически определяется из `metadata.json` (по умолчанию 30.0)
+
+**Примечание (Audit v3)**:
+- temporal filter **не должен “галлюцинировать”** landmarks на кадрах без детекции.
+  Выходные `*_landmarks` сохраняют `NaN` на кадрах, где исходно не было landmarks (source-of-truth = `*_landmarks_raw`).
+- для визуальных QA overlays в `render.html` используем `*_landmarks_raw` и рисуем bbox только при `*_present=True`.
+
+### Качество face детекта при sparse sampling (~4 fps)
+
+При редкой выборке кадров (например `rate_fps≈4.0`) режим трекинга FaceMesh между кадрами может давать **false negatives**.
+Для повышения recall рекомендуем:
+
+- `face_mesh_static_image_mode=true` (детект каждый кадр, без reliance на трекинг)
+- слегка снизить пороги:
+  - `face_mesh_min_detection_confidence=0.4`
+  - `face_mesh_min_tracking_confidence=0.4`
+  - (stage1) `face_detection_min_confidence=0.4`
+
 ---
 
 ## Quality validation & human-friendly inspection
@@ -232,12 +277,17 @@ Render-context может быть использован:
 - **Frontend** для построения графиков и визуализаций (timeline charts, distributions)
 - **Debugging**: быстрая проверка качества landmarks без загрузки NPZ
 
-**HTML debug страница** (опционально):
+**HTML debug страница** (опционально, offline mini-dashboard):
 - Путь: `result_store/.../core_face_landmarks/_render/render.html`
-- Содержит интерактивные графики (Chart.js):
-  - Timeline: наличие landmarks (face/pose/hands) по времени
-  - Distributions: статистики по landmarks
-  - Summary metrics: ключевые показатели в удобном формате
+- **Offline** (без CDN/интернета), содержит:
+  - навигацию по секциям (Overview / QA / Previews / Table),
+  - Key facts (версии, coverage, тайминги),
+  - QA peaks: top/anti-top (и jump-to к строкам),
+  - таблицу кадров с search/sort + фильтр по `face_area_norm`,
+  - галерею примеров с overlays (если доступен `frames_dir`).
+
+**Assets** (если доступны `frames_dir` и включён HTML render):
+- `_render/assets/*.jpg` — downscaled кадры с bbox + landmarks overlay (dev-only; privacy-sensitive).
 
 **Конфигурация** (в `global_config.yaml`):
 ```yaml

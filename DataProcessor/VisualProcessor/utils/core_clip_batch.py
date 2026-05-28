@@ -526,6 +526,12 @@ def process_core_clip_batch(
                 "total_frames": metadata.get("total_frames"),
                 "processed_frames": len(video_frame_indices),
             }
+            # Audit v3: prompt sets + backend proxy outputs versioning
+            save_metadata["prompts_version"] = PROMPTS_VERSION
+            save_metadata["backend_proxy_version"] = "core_clip_backend_proxy_v1"
+            places365_topk_k = int(config.get("places365_topk", 5) or 5)
+            save_metadata["export_prompt_scores"] = True
+            save_metadata["places365_topk_k"] = places365_topk_k
             
             # Models used
             models_used = []
@@ -557,6 +563,44 @@ def process_core_clip_batch(
             save_metadata = apply_models_meta(save_metadata, models_used=models_used)
             
             # Сохранение NPZ
+            # Backend-friendly proxies (computed per-video)
+            consecutive_cosine_prev = np.full((int(video_embeddings.shape[0]),), np.nan, dtype=np.float32)
+            if video_embeddings.ndim == 2 and video_embeddings.shape[0] >= 2:
+                consecutive_cosine_prev[1:] = np.sum(video_embeddings[1:] * video_embeddings[:-1], axis=1).astype(np.float32)
+
+            def _score_matrix(img_emb: np.ndarray, txt_emb: np.ndarray) -> np.ndarray:
+                if img_emb.size == 0 or txt_emb.size == 0:
+                    return np.zeros((int(img_emb.shape[0]), int(txt_emb.shape[0])), dtype=np.float32)
+                return (img_emb @ txt_emb.T).astype(np.float32, copy=False)
+
+            shot_quality_scores = _score_matrix(video_embeddings, shot_quality_text_embeddings)
+            scene_aesthetic_scores = _score_matrix(video_embeddings, scene_aesthetic_text_embeddings)
+            scene_luxury_scores = _score_matrix(video_embeddings, scene_luxury_text_embeddings)
+            scene_atmosphere_scores = _score_matrix(video_embeddings, scene_atmosphere_text_embeddings)
+            cut_detection_transition_scores = _score_matrix(video_embeddings, cut_detection_transition_text_embeddings)
+            popularity_topic_scores = _score_matrix(video_embeddings, popularity_topic_text_embeddings)
+
+            _p365_scores = _score_matrix(video_embeddings, places365_text_embeddings)  # (N,365)
+            if _p365_scores.size == 0:
+                places365_topk_indices = np.full((int(video_embeddings.shape[0]), places365_topk_k), -1, dtype=np.int32)
+                places365_topk_scores = np.full((int(video_embeddings.shape[0]), places365_topk_k), np.nan, dtype=np.float32)
+                places365_video_topk_indices = np.full((places365_topk_k,), -1, dtype=np.int32)
+                places365_video_topk_scores = np.full((places365_topk_k,), np.nan, dtype=np.float32)
+            else:
+                K = min(places365_topk_k, int(_p365_scores.shape[1]))
+                idx = np.argpartition(-_p365_scores, K - 1, axis=1)[:, :K]
+                top = np.take_along_axis(_p365_scores, idx, axis=1)
+                ord2 = np.argsort(-top, axis=1)
+                places365_topk_indices = np.take_along_axis(idx, ord2, axis=1).astype(np.int32, copy=False)
+                places365_topk_scores = np.take_along_axis(top, ord2, axis=1).astype(np.float32, copy=False)
+
+                mean_scores = np.mean(_p365_scores, axis=0)
+                vid_idx = np.argpartition(-mean_scores, K - 1)[:K]
+                vid_top = mean_scores[vid_idx]
+                vid_ord = np.argsort(-vid_top)
+                places365_video_topk_indices = vid_idx[vid_ord].astype(np.int32, copy=False)
+                places365_video_topk_scores = vid_top[vid_ord].astype(np.float32, copy=False)
+
             npz_dict = {
                 "frame_indices": np.asarray(video_frame_indices, dtype=np.int32),
                 "times_s": video_times_s,
@@ -573,6 +617,18 @@ def process_core_clip_batch(
                 "cut_detection_transition_text_embeddings": cut_detection_transition_text_embeddings,
                 "popularity_topic_prompts": np.asarray(POPULARITY_TOPIC_PROMPTS, dtype=object),
                 "popularity_topic_text_embeddings": popularity_topic_text_embeddings,
+                # backend-friendly proxies
+                "consecutive_cosine_prev": consecutive_cosine_prev,
+                "shot_quality_scores": shot_quality_scores,
+                "scene_aesthetic_scores": scene_aesthetic_scores,
+                "scene_luxury_scores": scene_luxury_scores,
+                "scene_atmosphere_scores": scene_atmosphere_scores,
+                "cut_detection_transition_scores": cut_detection_transition_scores,
+                "popularity_topic_scores": popularity_topic_scores,
+                "places365_topk_indices": places365_topk_indices,
+                "places365_topk_scores": places365_topk_scores,
+                "places365_video_topk_indices": places365_video_topk_indices,
+                "places365_video_topk_scores": places365_video_topk_scores,
                 "meta": np.asarray(save_metadata, dtype=object),
             }
             

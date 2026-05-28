@@ -48,7 +48,14 @@ def render_semantic_cluster_extractor(
                 return None
             return float(v)
         return v
-    
+
+    def _bool_flag(key: str) -> bool:
+        v = extractor_features.get(key, 0.0)
+        try:
+            return float(v) > 0.5
+        except (TypeError, ValueError):
+            return False
+
     # Extract cluster metrics
     cluster = {}
     if "tp_semclust_id" in extractor_features:
@@ -78,12 +85,26 @@ def render_semantic_cluster_extractor(
     if "tp_semclust_hashtag_present" in extractor_features:
         presence["hashtag"] = bool(extractor_features["tp_semclust_hashtag_present"] > 0.5)
     
-    # Extract safety flags
-    safety = {}
-    if "tp_semclust_dim_mismatch_flag" in extractor_features:
-        safety["dim_mismatch_flag"] = bool(extractor_features["tp_semclust_dim_mismatch_flag"] > 0.5)
-    if "tp_semclust_backend_faiss" in extractor_features:
-        safety["backend_faiss"] = bool(extractor_features["tp_semclust_backend_faiss"] > 0.5)
+    # Extract safety / diagnostics flags
+    safety = {
+        "dim_mismatch_flag": _bool_flag("tp_semclust_dim_mismatch_flag"),
+        "backend_faiss": _bool_flag("tp_semclust_backend_faiss"),
+        "unsafe_relpath": _bool_flag("tp_semclust_unsafe_relpath_flag"),
+        "title_embed_missing": _bool_flag("tp_semclust_title_embed_missing_flag"),
+        "description_embed_missing": _bool_flag("tp_semclust_description_embed_missing_flag"),
+        "hashtag_embed_missing": _bool_flag("tp_semclust_hashtag_embed_missing_flag"),
+    }
+
+    configuration = {
+        "require_primary_source": _bool_flag("tp_semclust_require_primary_source_enabled"),
+        "require_embedding": _bool_flag("tp_semclust_require_embedding_enabled"),
+        "use_faiss": _bool_flag("tp_semclust_use_faiss_enabled"),
+        "require_faiss": _bool_flag("tp_semclust_require_faiss_enabled"),
+        "emit_extra_metrics": _bool_flag("tp_semclust_emit_extra_metrics_enabled"),
+        "config_primary_title": _bool_flag("tp_semclust_config_primary_title"),
+        "config_primary_description": _bool_flag("tp_semclust_config_primary_description"),
+        "config_primary_hashtag": _bool_flag("tp_semclust_config_primary_hashtag"),
+    }
     
     # Try to get cluster metadata from payload
     cluster_meta = {}
@@ -110,6 +131,7 @@ def render_semantic_cluster_extractor(
     render["cluster"] = cluster
     render["source"] = source
     render["presence"] = presence
+    render["configuration"] = configuration
     render["safety"] = safety
     render["cluster_meta"] = cluster_meta
     render["extra_metrics"] = extra_metrics
@@ -153,6 +175,7 @@ def render_semantic_cluster_extractor_html(
     cluster = render.get("cluster", {})
     source = render.get("source", {})
     presence = render.get("presence", {})
+    configuration = render.get("configuration", {})
     safety = render.get("safety", {})
     cluster_meta = render.get("cluster_meta", {})
     extra_metrics = render.get("extra_metrics", {})
@@ -216,6 +239,21 @@ def render_semantic_cluster_extractor_html(
                     <div class="feature-value">{{'Да' if summary.get('fallback_used') else 'Нет'}}</div>
                 </div>
             </div>
+        </div>
+
+        <div class="section">
+            <h2>Конфигурация (зеркала features_flat)</h2>
+            <table>
+                <tr><th>Параметр</th><th>Включено</th></tr>
+                <tr><td>require_primary_source</td><td>{{'Да' if configuration.get('require_primary_source') else 'Нет'}}</td></tr>
+                <tr><td>require_embedding</td><td>{{'Да' if configuration.get('require_embedding') else 'Нет'}}</td></tr>
+                <tr><td>use_faiss</td><td>{{'Да' if configuration.get('use_faiss') else 'Нет'}}</td></tr>
+                <tr><td>require_faiss</td><td>{{'Да' if configuration.get('require_faiss') else 'Нет'}}</td></tr>
+                <tr><td>emit_extra_metrics</td><td>{{'Да' if configuration.get('emit_extra_metrics') else 'Нет'}}</td></tr>
+                <tr><td>primary в конфиге: title</td><td>{{'Да' if configuration.get('config_primary_title') else 'Нет'}}</td></tr>
+                <tr><td>primary в конфиге: description</td><td>{{'Да' if configuration.get('config_primary_description') else 'Нет'}}</td></tr>
+                <tr><td>primary в конфиге: hashtag</td><td>{{'Да' if configuration.get('config_primary_hashtag') else 'Нет'}}</td></tr>
+            </table>
         </div>
         
         <div class="section">
@@ -390,6 +428,26 @@ def render_semantic_cluster_extractor_html(
                     <td>Backend FAISS</td>
                     <td>{{'Да' if safety.get('backend_faiss') else 'Нет'}}</td>
                     <td>Использовался ли FAISS для поиска</td>
+                </tr>
+                <tr>
+                    <td>Небезопасный relpath</td>
+                    <td>{{'Да' if safety.get('unsafe_relpath') else 'Нет'}}</td>
+                    <td>Путь артефакта вне разрешённого join (unsafe)</td>
+                </tr>
+                <tr>
+                    <td>Нет файла / ошибка title .npy</td>
+                    <td>{{'Да' if safety.get('title_embed_missing') else 'Нет'}}</td>
+                    <td>Безопасный путь, но файл отсутствует или невалиден</td>
+                </tr>
+                <tr>
+                    <td>Нет файла / ошибка description .npy</td>
+                    <td>{{'Да' if safety.get('description_embed_missing') else 'Нет'}}</td>
+                    <td>Безопасный путь, но файл отсутствует или невалиден</td>
+                </tr>
+                <tr>
+                    <td>Нет файла / ошибка hashtag .npy</td>
+                    <td>{{'Да' if safety.get('hashtag_embed_missing') else 'Нет'}}</td>
+                    <td>Безопасный путь, но файл отсутствует или невалиден</td>
                 </tr>
             </table>
         </div>

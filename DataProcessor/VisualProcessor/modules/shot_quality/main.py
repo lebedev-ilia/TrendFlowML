@@ -5,11 +5,23 @@ CLI для `shot_quality` (production, NPZ output, BaseModule).
 import argparse
 import os
 import sys
+from pathlib import Path
 from typing import Optional, List, Dict, Any
 
-sys.path.append(os.path.dirname(os.path.dirname(os.path.dirname(__file__))))
+_vp = str(Path(__file__).resolve().parents[2])
+if _vp not in sys.path:
+    sys.path.insert(0, _vp)
+elif sys.path[0] != _vp:
+    try:
+        sys.path.remove(_vp)
+    except ValueError:
+        pass
+    sys.path.insert(0, _vp)
+_repo_root = str(Path(_vp).parent)
+if _repo_root not in sys.path:
+    sys.path.append(_repo_root)
 
-from modules.shot_quality.shot_quality import ShotQualityModule
+from modules.shot_quality.utils.shot_quality import ShotQualityModule
 from utils.logger import get_logger
 
 MODULE_NAME = "shot_quality"

@@ -1,0 +1,52 @@
+{
+  "schema_system_version": "vp_schema_v1",
+  "schema_version": "quality_extractor_npz_v2",
+  "producer": "quality_extractor",
+  "artifact_kind": "npz",
+  "allow_extra_keys": false,
+  "meta": {
+    "required_keys": [
+      "producer",
+      "producer_version",
+      "schema_version",
+      "created_at",
+      "platform_id",
+      "video_id",
+      "run_id",
+      "config_hash",
+      "sampling_policy_version",
+      "dataprocessor_version",
+      "status",
+      "empty_reason",
+      "models_used",
+      "model_signature",
+      "stage_timings_ms"
+    ],
+    "optional_keys": [
+      "device_used",
+      "scheduler_knobs",
+      "resource_metrics",
+      "error",
+      "features_enabled",
+      "quality_contract_version",
+      "dc_offset_series_npy",
+      "clipping_ratio_series_npy",
+      "crest_factor_db_series_npy",
+      "dynamic_range_db_series_npy",
+      "frame_levels_db_series_npy",
+      "frame_rms_series_npy",
+      "clipping_segments_series_npy"
+    ]
+  },
+  "fields": {
+    "feature_names": { "required": true, "tier": "model_facing", "dtype": "object", "shape": ["F"] },
+    "feature_values": { "required": true, "tier": "model_facing", "dtype": "float32", "shape": ["F"] },
+
+    "segment_start_sec": { "required": false, "tier": "analytics", "dtype": "float32", "shape": ["N"] },
+    "segment_end_sec": { "required": false, "tier": "analytics", "dtype": "float32", "shape": ["N"] },
+    "segment_center_sec": { "required": false, "tier": "analytics", "dtype": "float32", "shape": ["N"] },
+    "segment_mask": { "required": false, "tier": "analytics", "dtype": "bool", "shape": ["N"] },
+
+    "meta": { "required": true, "tier": "debug", "dtype": "object", "shape": [] }
+  }
+}

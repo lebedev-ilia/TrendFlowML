@@ -1,7 +1,6 @@
 """
 NPZ савер для clap_extractor.
 """
-import os
 import numpy as np
 from typing import Any, Dict, Optional, Callable
 
@@ -28,11 +27,15 @@ def save_clap_npz(
     """
     Сохраняет NPZ артефакт для clap_extractor.
     """
-    # Embeddings can be provided directly (preferred) or as a .npy path (legacy).
+    # Embeddings are expected to be provided directly in audited contract.
     emb_present = False
     emb = np.zeros((0,), dtype=np.float32)
     emb_seq = np.zeros((0, 0), dtype=np.float32)
+    seg_start = np.zeros((0,), dtype=np.float32)
+    seg_end = np.zeros((0,), dtype=np.float32)
     seg_centers = np.zeros((0,), dtype=np.float32)
+    seg_mask = np.zeros((0,), dtype=np.bool_)
+    seg_norm = np.zeros((0,), dtype=np.float32)
 
     if payload.get("embedding") is not None:
         try:
@@ -42,14 +45,9 @@ def save_clap_npz(
             emb_present = False
             emb = np.zeros((0,), dtype=np.float32)
     else:
-        emb_path = payload.get("clap_embeddings_npy")
-        if isinstance(emb_path, str) and emb_path and os.path.exists(emb_path):
-            try:
-                emb = np.asarray(np.load(emb_path), dtype=np.float32).reshape(-1)
-                emb_present = emb.size > 0
-            except Exception:
-                emb_present = False
-                emb = np.zeros((0,), dtype=np.float32)
+        # Legacy path support was removed in audited contract.
+        emb_present = False
+        emb = np.zeros((0,), dtype=np.float32)
 
     if payload.get("embedding_sequence") is not None:
         try:
@@ -58,18 +56,38 @@ def save_clap_npz(
                 emb_seq = emb_seq.reshape(emb_seq.shape[0], -1) if emb_seq.size else np.zeros((0, 0), dtype=np.float32)
         except Exception:
             emb_seq = np.zeros((0, 0), dtype=np.float32)
-    if payload.get("segment_centers_sec") is not None:
+
+    if payload.get("segment_start_sec") is not None:
         try:
-            seg_centers = np.asarray(payload.get("segment_centers_sec"), dtype=np.float32).reshape(-1)
+            seg_start = np.asarray(payload.get("segment_start_sec"), dtype=np.float32).reshape(-1)
+        except Exception:
+            seg_start = np.zeros((0,), dtype=np.float32)
+    if payload.get("segment_end_sec") is not None:
+        try:
+            seg_end = np.asarray(payload.get("segment_end_sec"), dtype=np.float32).reshape(-1)
+        except Exception:
+            seg_end = np.zeros((0,), dtype=np.float32)
+    if payload.get("segment_center_sec") is not None:
+        try:
+            seg_centers = np.asarray(payload.get("segment_center_sec"), dtype=np.float32).reshape(-1)
         except Exception:
             seg_centers = np.zeros((0,), dtype=np.float32)
+    if payload.get("segment_mask") is not None:
+        try:
+            seg_mask = np.asarray(payload.get("segment_mask"), dtype=np.bool_).reshape(-1)
+        except Exception:
+            seg_mask = np.zeros((0,), dtype=np.bool_)
+    if payload.get("segment_embedding_norm") is not None:
+        try:
+            seg_norm = np.asarray(payload.get("segment_embedding_norm"), dtype=np.float32).reshape(-1)
+        except Exception:
+            seg_norm = np.zeros((0,), dtype=np.float32)
 
+    # Audit v3: minimal model-facing tabular subset (frozen within schema_version).
     add("embedding_dim", payload.get("embedding_dim"))
-    add("sample_rate", payload.get("sample_rate"))
     add("clap_norm", payload.get("clap_norm"))
     add("clap_magnitude_mean", payload.get("clap_magnitude_mean"))
     add("clap_magnitude_std", payload.get("clap_magnitude_std"))
-    add("clap_non_zero_count", payload.get("clap_non_zero_count"))
     add("segments_count", payload.get("segments_count"))
 
     atomic_save_npz(
@@ -79,7 +97,11 @@ def save_clap_npz(
         embedding=emb,
         embedding_present=np.asarray(emb_present, dtype=np.bool_),
         embedding_sequence=emb_seq,
-        segment_centers_sec=seg_centers,
+        segment_start_sec=seg_start,
+        segment_end_sec=seg_end,
+        segment_center_sec=seg_centers,
+        segment_mask=seg_mask,
+        segment_embedding_norm=seg_norm,
         meta=build_meta(
             producer="clap_extractor",
             producer_version=producer_version,
@@ -89,6 +111,16 @@ def save_clap_npz(
                 **(extra_meta or {}),
                 **({"error": error} if error else {}),
                 "empty_reason": empty_reason,
+                # Audit v3: extractor-specific debug meta (not tabular)
+                # Audit v4.2: observability
+                "stage_timings_ms": payload.get("stage_timings_ms"),
+                "clap_resource_profile": payload.get("clap_resource_profile"),
+                "sample_rate": payload.get("sample_rate"),
+                "device_used": payload.get("device_used"),
+                "embedding_dim": payload.get("embedding_dim"),
+                "max_audio_length_sec": payload.get("max_audio_length_sec"),
+                "trimmed_segments_count": payload.get("trimmed_segments_count"),
+                "trimmed_ratio": payload.get("trimmed_ratio"),
             },
         ),
     )

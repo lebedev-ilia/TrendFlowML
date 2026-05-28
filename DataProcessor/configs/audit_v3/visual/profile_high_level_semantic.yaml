@@ -1,0 +1,4 @@
+visual:
+  cfg_path: "DataProcessor/configs/audit_v3/visual/visual_high_level_semantic_only.yaml"
+
+

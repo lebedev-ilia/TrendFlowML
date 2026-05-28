@@ -85,16 +85,60 @@ class SpeechBrainProvider:
         
         # Set HF cache environment variables to ensure transformers uses the correct cache
         if hf_hub_cache:
-            # Force set (not setdefault) to ensure transformers uses the correct cache
+            # Use realpath for symlinks (e.g. bundled_models/hf_cache/hub -> ~/.cache/huggingface/hub)
+            hf_hub_cache = os.path.realpath(hf_hub_cache)
             os.environ["HF_HUB_CACHE"] = hf_hub_cache
             os.environ["TRANSFORMERS_CACHE"] = hf_hub_cache
             # Also set HF_HOME if not already set
             if not current_hf_home:
                 os.environ["HF_HOME"] = os.path.dirname(hf_hub_cache)
+        
+        # Configure logging BEFORE importing speechbrain to prevent logging errors during import
+        import logging
+        import sys
+        
+        # Disable logging error reporting to prevent tracebacks from closed handlers
+        old_raise_exceptions = logging.raiseExceptions
+        logging.raiseExceptions = False
+        
+        # Set environment variables to suppress logs
+        os.environ["TRANSFORMERS_VERBOSITY"] = "error"
+        os.environ["TQDM_DISABLE"] = "1"
+        os.environ["HF_HUB_DISABLE_PROGRESS_BARS"] = "1"
+        os.environ["PYTHONWARNINGS"] = "ignore"
+        
+        # Configure loggers BEFORE import (speechbrain logs during import)
+        transformers_logger = logging.getLogger("transformers")
+        transformers_logger.setLevel(logging.ERROR)
+        transformers_logger.propagate = False
+        
+        hf_logger = logging.getLogger("huggingface_hub")
+        hf_logger.setLevel(logging.ERROR)
+        hf_logger.propagate = False
+        
+        accelerate_logger = logging.getLogger("accelerate")
+        accelerate_logger.setLevel(logging.ERROR)
+        accelerate_logger.propagate = False
+        
+        sb_logger = logging.getLogger("speechbrain")
+        sb_logger.setLevel(logging.ERROR)
+        sb_logger.propagate = False
+        
+        tqdm_logger = logging.getLogger("tqdm")
+        tqdm_logger.setLevel(logging.ERROR)
+        tqdm_logger.propagate = False
+        
+        sb_utils_logger = logging.getLogger("speechbrain.utils")
+        sb_utils_logger.setLevel(logging.ERROR)
+        sb_utils_logger.propagate = False
+        
+        sb_checkpoints_logger = logging.getLogger("speechbrain.utils.checkpoints")
+        sb_checkpoints_logger.setLevel(logging.ERROR)
+        sb_checkpoints_logger.propagate = False
+        
         # Try to import SpeechBrain (prefer local version from component if available)
         try:
             # First try local speechbrain from emotion_diarization_extractor
-            import sys
             extractor_dir = Path(__file__).resolve().parent.parent.parent / "AudioProcessor" / "src" / "extractors" / "emotion_diarization_extractor"
             speechbrain_path = extractor_dir / "speechbrain"
             if speechbrain_path.exists() and str(speechbrain_path) not in sys.path:
@@ -106,64 +150,27 @@ class SpeechBrainProvider:
             try:
                 from speechbrain.inference.diarization import Speech_Emotion_Diarization  # type: ignore
             except Exception as e:
+                # Restore logging.raiseExceptions before raising
+                logging.raiseExceptions = old_raise_exceptions
                 raise ModelManagerError(
                     message="speechbrain is not installed (neither local nor system)",
                     error_code="dependency_missing",
                     details={"import_error": str(e), "hint": "Install speechbrain or ensure local copy exists in emotion_diarization_extractor/speechbrain/"},
                 ) from e
-        
+        # Note: We keep logging.raiseExceptions = False for model loading below
 
-        # Load model from local directory using from_hparams
+        # Load model from local directory using from_hparams (strict local-only, no-network).
         try:
-            import logging
             import contextlib
-            import sys
+            # logging.raiseExceptions is already False from above
 
-            # Подавляем логи загрузки весов от transformers
-            # Отключаем tqdm прогресс-бары и HF progress bars
-            os.environ["TRANSFORMERS_VERBOSITY"] = "error"
-            os.environ["TQDM_DISABLE"] = "1"
-            os.environ["HF_HUB_DISABLE_PROGRESS_BARS"] = "1"
-            os.environ["PYTHONWARNINGS"] = "ignore"
-            
-            # Устанавливаем уровень логирования для transformers
-            transformers_logger = logging.getLogger("transformers")
-            transformers_logger.setLevel(logging.ERROR)
-            transformers_logger.propagate = False
-            
-            # Подавляем логи от huggingface_hub
-            hf_logger = logging.getLogger("huggingface_hub")
-            hf_logger.setLevel(logging.ERROR)
-            hf_logger.propagate = False
-            
-            # Подавляем логи от accelerate
-            accelerate_logger = logging.getLogger("accelerate")
-            accelerate_logger.setLevel(logging.ERROR)
-            accelerate_logger.propagate = False
-            
-            # Подавляем логи от speechbrain
-            sb_logger = logging.getLogger("speechbrain")
-            sb_logger.setLevel(logging.ERROR)
-            sb_logger.propagate = False
-            
-            # Подавляем логи от tqdm
-            tqdm_logger = logging.getLogger("tqdm")
-            tqdm_logger.setLevel(logging.ERROR)
-            tqdm_logger.propagate = False
-            
-            # Подавляем логи от speechbrain.utils
-            sb_utils_logger = logging.getLogger("speechbrain.utils")
-            sb_utils_logger.setLevel(logging.ERROR)
-            sb_utils_logger.propagate = False
-            
-            # Подавляем логи от speechbrain.utils.checkpoints
-            sb_checkpoints_logger = logging.getLogger("speechbrain.utils.checkpoints")
-            sb_checkpoints_logger.setLevel(logging.ERROR)
-            sb_checkpoints_logger.propagate = False
-
-            # Всегда используем HuggingFace модель (как в скрипте)
-            # Не используем redirect_stdout/stderr, так как это может вызывать блокировки
-            model_source = "speechbrain/emotion-diarization-wavlm-large"
+            model_dir_abs = os.path.normpath(os.path.join(models_root, model_dir_rel))
+            if (not os.path.isdir(model_dir_abs)) or (not os.listdir(model_dir_abs)):
+                raise ModelManagerError(
+                    message="SpeechBrain model directory is missing or empty",
+                    error_code="weights_missing",
+                    details={"model_name": spec.model_name, "model_dir": model_dir_abs},
+                )
 
             # Подавляем stdout/stderr во время загрузки модели для скрытия прогресс-баров
             @contextlib.contextmanager
@@ -180,42 +187,34 @@ class SpeechBrainProvider:
                         sys.stdout = old_stdout
                         sys.stderr = old_stderr
 
-            # Загружаем модель без run_opts сначала (как в скрипте), чтобы избежать лишней инициализации
-            # Устройство будет установлено автоматически или через hparams
-            # Убеждаемся, что cache_dir явно указан для WavLM модели, чтобы избежать создания локального checkpoint
-            with suppress_output():
-                # Важно: устанавливаем переменные окружения ДО загрузки модели
-                # Это гарантирует, что transformers будет использовать правильный кэш для WavLM
-                if hf_hub_cache:
-                    # Force set (не setdefault) чтобы гарантировать использование правильного кэша
-                    os.environ["HF_HUB_CACHE"] = hf_hub_cache
-                    os.environ["TRANSFORMERS_CACHE"] = hf_hub_cache
-                    # Также устанавливаем HF_HOME если не установлен
-                    if not current_hf_home:
-                        os.environ["HF_HOME"] = os.path.dirname(hf_hub_cache)
-                
-                # Дополнительно: убеждаемся, что рабочая директория не влияет на создание checkpoint
-                # Сохраняем текущую рабочую директорию и временно меняем её, чтобы избежать создания checkpoint в DataProcessor/
-                original_cwd = os.getcwd()
+            # Resolve WavLM local path for offline loading (hyperparams reference microsoft/wavlm-large).
+            # SpeechBrain Wav2Vec2 passes cache_dir=save_path to transformers, which can override
+            # HF_HUB_CACHE. Use explicit local path to avoid "couldn't find in cached files" in offline.
+            # Use realpath so symlinks (e.g. bundled_models/hf_cache/hub -> ~/.cache/huggingface/hub)
+            # resolve to the actual path where preprocessor_config.json may exist.
+            hparams_overrides = {}
+            hf_hub_resolved = os.path.realpath(hf_hub_cache) if hf_hub_cache and os.path.exists(hf_hub_cache) else (hf_hub_cache or "")
+            wavlm_cache = os.path.join(hf_hub_resolved, "models--microsoft--wavlm-large", "snapshots")
+            if hf_hub_resolved and os.path.isdir(wavlm_cache):
                 try:
-                    # Временно меняем рабочую директорию на временную, чтобы избежать создания checkpoint в DataProcessor/
-                    import tempfile
-                    temp_dir = tempfile.mkdtemp()
-                    os.chdir(temp_dir)
-                    
-                    model = Speech_Emotion_Diarization.from_hparams(
-                        source=model_source,
-                    )
-                finally:
-                    # Восстанавливаем рабочую директорию
-                    os.chdir(original_cwd)
-                    # Удаляем временную директорию (если она пустая)
-                    try:
-                        if os.path.exists(temp_dir) and not os.listdir(temp_dir):
-                            os.rmdir(temp_dir)
-                    except Exception:
-                        pass
+                    revs = sorted(p for p in os.listdir(wavlm_cache) if os.path.isdir(os.path.join(wavlm_cache, p)))
+                    if revs:
+                        wavlm_local = os.path.join(wavlm_cache, revs[-1])
+                        if os.path.isfile(os.path.join(wavlm_local, "config.json")):
+                            hparams_overrides["wav2vec2_hub"] = os.path.realpath(wavlm_local)
+                except OSError:
+                    pass
 
+            with suppress_output():
+                # IMPORTANT: do NOT disable offline env here.
+                # If the SpeechBrain pipeline internally references transformer checkpoints (e.g. WavLM),
+                # those must already be present in the HuggingFace cache configured by ModelManager.
+                model = Speech_Emotion_Diarization.from_hparams(
+                    source=model_dir_abs,
+                    savedir=model_dir_abs,
+                    run_opts={"device": device},
+                    overrides=hparams_overrides,
+                )
         except Exception as e:
             # SpeechBrain will raise its own errors if files are missing
             # We wrap them in ModelManagerError for consistency
@@ -223,8 +222,11 @@ class SpeechBrainProvider:
             raise ModelManagerError(
                 message="Failed to load SpeechBrain model",
                 error_code="model_load_failed",
-                details={"model_name": spec.model_name, "model_source": model_source, "error": error_msg, "error_type": type(e).__name__},
+                details={"model_name": spec.model_name, "model_dir": model_dir_abs, "error": error_msg, "error_type": type(e).__name__},
             ) from e
+        finally:
+            # Restore logging.raiseExceptions after model loading (always, even on exception)
+            logging.raiseExceptions = old_raise_exceptions
         
         return model
 

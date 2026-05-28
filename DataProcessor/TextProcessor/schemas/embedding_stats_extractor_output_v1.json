@@ -1,0 +1,250 @@
+{
+  "schema_system_version": "vp_schema_v1",
+  "schema_version": "embedding_stats_extractor_output_v1",
+  "producer": "embedding_stats_extractor",
+  "artifact_kind": "extractor_features_flat",
+  "allow_extra_keys": false,
+  "description": "EmbeddingStatsExtractor: transcript chunk embedding variance (8 fixed topvar slots, top_k_slots clamped) + optional topic entropy from upstream topic_probs. Canonical transcript source flags: whisper, youtube_auto.",
+  "meta": {
+    "required_keys": [],
+    "optional_keys": []
+  },
+  "fields": {
+    "tp_embstats_present": {
+      "required": true,
+      "tier": "model_facing",
+      "dtype": "float32",
+      "shape": []
+    },
+    "tp_embstats_enabled": {
+      "required": true,
+      "tier": "analytics",
+      "dtype": "float32",
+      "shape": []
+    },
+    "tp_embstats_disabled_by_policy": {
+      "required": true,
+      "tier": "analytics",
+      "dtype": "float32",
+      "shape": []
+    },
+    "tp_embstats_emit_extra_metrics_enabled": {
+      "required": true,
+      "tier": "analytics",
+      "dtype": "float32",
+      "shape": []
+    },
+    "tp_embstats_require_chunks_enabled": {
+      "required": true,
+      "tier": "analytics",
+      "dtype": "float32",
+      "shape": []
+    },
+    "tp_embstats_compute_topic_entropy_enabled": {
+      "required": true,
+      "tier": "analytics",
+      "dtype": "float32",
+      "shape": []
+    },
+    "tp_embstats_require_topic_distribution_enabled": {
+      "required": true,
+      "tier": "analytics",
+      "dtype": "float32",
+      "shape": []
+    },
+    "tp_embstats_schema_topvar_slots_max": {
+      "required": true,
+      "tier": "analytics",
+      "dtype": "float32",
+      "shape": []
+    },
+    "tp_embstats_top_k_slots_requested": {
+      "required": true,
+      "tier": "analytics",
+      "dtype": "float32",
+      "shape": []
+    },
+    "tp_embstats_top_k_slots": {
+      "required": true,
+      "tier": "analytics",
+      "dtype": "float32",
+      "shape": []
+    },
+    "tp_embstats_top_k_slots_clamped": {
+      "required": true,
+      "tier": "analytics",
+      "dtype": "float32",
+      "shape": []
+    },
+    "tp_embstats_min_chunks_required": {
+      "required": true,
+      "tier": "analytics",
+      "dtype": "float32",
+      "shape": []
+    },
+    "tp_embstats_topk": {
+      "required": true,
+      "tier": "analytics",
+      "dtype": "float32",
+      "shape": []
+    },
+    "tp_embstats_variance_ddof": {
+      "required": true,
+      "tier": "analytics",
+      "dtype": "float32",
+      "shape": []
+    },
+    "tp_embstats_n_chunks": {
+      "required": true,
+      "tier": "analytics",
+      "dtype": "float32",
+      "shape": []
+    },
+    "tp_embstats_dim": {
+      "required": true,
+      "tier": "analytics",
+      "dtype": "float32",
+      "shape": []
+    },
+    "tp_embstats_l2_variance": {
+      "required": true,
+      "tier": "model_facing",
+      "dtype": "float32",
+      "shape": []
+    },
+    "tp_embstats_topic_entropy": {
+      "required": true,
+      "tier": "analytics",
+      "dtype": "float32",
+      "shape": []
+    },
+    "tp_embstats_topic_entropy_norm": {
+      "required": true,
+      "tier": "analytics",
+      "dtype": "float32",
+      "shape": []
+    },
+    "tp_embstats_topic_perplexity": {
+      "required": true,
+      "tier": "analytics",
+      "dtype": "float32",
+      "shape": []
+    },
+    "tp_embstats_topic_entropy_present": {
+      "required": true,
+      "tier": "analytics",
+      "dtype": "float32",
+      "shape": []
+    },
+    "tp_embstats_topic_probs_present": {
+      "required": true,
+      "tier": "analytics",
+      "dtype": "float32",
+      "shape": []
+    },
+    "tp_embstats_topic_probs_invalid_flag": {
+      "required": true,
+      "tier": "analytics",
+      "dtype": "float32",
+      "shape": []
+    },
+    "tp_embstats_used_legacy_key_flag": {
+      "required": true,
+      "tier": "analytics",
+      "dtype": "float32",
+      "shape": []
+    },
+    "tp_embstats_unsafe_relpath_flag": {
+      "required": true,
+      "tier": "analytics",
+      "dtype": "float32",
+      "shape": []
+    },
+    "tp_embstats_dim_mismatch_flag": {
+      "required": true,
+      "tier": "analytics",
+      "dtype": "float32",
+      "shape": []
+    },
+    "tp_embstats_nan_inf_flag": {
+      "required": true,
+      "tier": "analytics",
+      "dtype": "float32",
+      "shape": []
+    },
+    "tp_embstats_load_ms": {
+      "required": true,
+      "tier": "analytics",
+      "dtype": "float32",
+      "shape": [],
+      "description": "NaN when emit_extra_metrics=False."
+    },
+    "tp_embstats_compute_ms": {
+      "required": true,
+      "tier": "analytics",
+      "dtype": "float32",
+      "shape": [],
+      "description": "NaN when emit_extra_metrics=False."
+    },
+    "tp_embstats_topvar_1": {
+      "required": true,
+      "tier": "analytics",
+      "dtype": "float32",
+      "shape": []
+    },
+    "tp_embstats_topvar_2": {
+      "required": true,
+      "tier": "analytics",
+      "dtype": "float32",
+      "shape": []
+    },
+    "tp_embstats_topvar_3": {
+      "required": true,
+      "tier": "analytics",
+      "dtype": "float32",
+      "shape": []
+    },
+    "tp_embstats_topvar_4": {
+      "required": true,
+      "tier": "analytics",
+      "dtype": "float32",
+      "shape": []
+    },
+    "tp_embstats_topvar_5": {
+      "required": true,
+      "tier": "analytics",
+      "dtype": "float32",
+      "shape": []
+    },
+    "tp_embstats_topvar_6": {
+      "required": true,
+      "tier": "analytics",
+      "dtype": "float32",
+      "shape": []
+    },
+    "tp_embstats_topvar_7": {
+      "required": true,
+      "tier": "analytics",
+      "dtype": "float32",
+      "shape": []
+    },
+    "tp_embstats_topvar_8": {
+      "required": true,
+      "tier": "analytics",
+      "dtype": "float32",
+      "shape": []
+    },
+    "tp_embstats_source_used_whisper": {
+      "required": true,
+      "tier": "analytics",
+      "dtype": "float32",
+      "shape": []
+    },
+    "tp_embstats_source_used_youtube_auto": {
+      "required": true,
+      "tier": "analytics",
+      "dtype": "float32",
+      "shape": []
+    }
+  }
+}

@@ -1,0 +1,72 @@
+{
+  "schema_system_version": "vp_schema_v1",
+  "schema_version": "action_recognition_npz_v2",
+  "producer": "action_recognition",
+  "artifact_kind": "npz",
+  "allow_extra_keys": false,
+  "allowed_extra_key_prefixes": ["metric__"],
+  "meta": {
+    "required_keys": [
+      "producer",
+      "producer_version",
+      "schema_version",
+      "created_at",
+      "platform_id",
+      "video_id",
+      "run_id",
+      "config_hash",
+      "sampling_policy_version",
+      "dataprocessor_version",
+      "status",
+      "empty_reason",
+      "models_used",
+      "model_signature",
+      "stage_timings_ms"
+    ],
+    "optional_keys": [
+      "total_frames",
+      "processed_frames",
+      "frames_dir",
+      "clip_len",
+      "stride",
+      "batch_size",
+      "embedding_dim",
+      "model_name",
+      "processed_tracks",
+      "ui_payload",
+      "segment_gap_sec",
+      "min_person_confidence"
+    ]
+  },
+  "fields": {
+    "tracks": {
+      "required": true,
+      "tier": "model_facing",
+      "dtype": "int32",
+      "shape": ["T"],
+      "description": "Track IDs (segment IDs from person detections)"
+    },
+    "embeddings": {
+      "required": true,
+      "tier": "model_facing",
+      "dtype": "object",
+      "shape": ["T"],
+      "description": "Per-track embeddings: embedding_normed_256d arrays [num_clips, 256] float32"
+    },
+    "results_json": {
+      "required": true,
+      "tier": "analytics",
+      "dtype": "object",
+      "shape": ["T"],
+      "description": "Per-track metrics and diagnostics (dict per track, see SCHEMA.md for structure)"
+    },
+    "meta": {
+      "required": true,
+      "tier": "debug",
+      "dtype": "object",
+      "shape": [],
+      "description": "boxed dict"
+    }
+  }
+}
+

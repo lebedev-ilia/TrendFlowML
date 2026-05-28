@@ -26,10 +26,11 @@ Backend хранит их в таблице `analysis_profiles`.
 
 ## 3) Публичные профили (seed)
 
-На старте приложения выполняется `seed_public_profiles(db)`:
+На старте приложения выполняется `seed_public_profiles(db, profiles_dir)` (см. `app/main.py`, `app/services/profiles.py`):
 
-- читает YAML из `DataProcessor/profiles/*.yaml`
-- создаёт public профили (`is_public=true`) если их ещё нет в БД
+- читает YAML из `DataProcessor/profiles/*.yaml` (путь задаётся через `dataproc_root`)
+- создаёт public профили (`is_public=true`) в таблице `analysis_profiles`, если профиля с таким именем (по имени файла) ещё нет
+- `config_hash` вычисляется функцией `compute_config_hash` (SHA-256 от JSON с сортировкой ключей)
 
 ## 4) API
 

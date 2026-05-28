@@ -1,0 +1,2 @@
+# Dependencies for micro_emotion module
+# Add module-specific dependencies here

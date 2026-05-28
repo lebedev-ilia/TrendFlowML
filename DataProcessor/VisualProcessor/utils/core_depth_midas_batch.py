@@ -129,9 +129,35 @@ def process_core_depth_midas_batch(
     start_time = time.perf_counter()
     
     # Инициализация Triton клиента
-    triton_http_url = config.get("triton_http_url") or os.environ.get("TRITON_HTTP_URL")
+    # Audit v3: prefer ModelManager spec (no-network, reproducible) over explicit triton_* args.
+    triton_http_url = ""
+    triton_model_name = config.get("triton_model_name", "midas_256")
+    triton_model_version = config.get("triton_model_version", "1")
+    triton_input_name = config.get("triton_input_name", "INPUT__0")
+    triton_output_name = config.get("triton_output_name", "OUTPUT__0")
+    triton_datatype = config.get("triton_datatype", "UINT8")
+    triton_preprocess_preset = config.get("triton_preprocess_preset", "midas_256")
+
+    spec_name = config.get("triton_model_spec")
+    if spec_name:
+        # core_depth_midas main module is already loaded above; reuse its resolver to avoid duplication.
+        _load_spec = getattr(core_depth_midas_module, "_load_triton_spec_via_model_manager", None)
+        if not callable(_load_spec):
+            raise RuntimeError("core_depth_midas | batch | triton_model_spec provided but ModelManager resolver is unavailable")
+        mm_entry = _load_spec(str(spec_name))
+        rp = mm_entry.get("rp") if isinstance(mm_entry, dict) else None
+        if isinstance(rp, dict):
+            triton_http_url = str(rp.get("triton_http_url") or "").strip()
+            triton_model_name = str(rp.get("triton_model_name") or triton_model_name)
+            triton_model_version = str(rp.get("triton_model_version") or triton_model_version)
+            triton_input_name = str(rp.get("triton_input_name") or triton_input_name)
+            triton_output_name = str(rp.get("triton_output_name") or triton_output_name)
+            triton_datatype = str(rp.get("triton_input_datatype") or rp.get("triton_datatype") or triton_datatype)
+            triton_preprocess_preset = str(config.get("triton_preprocess_preset") or triton_preprocess_preset)
     if not triton_http_url:
-        raise RuntimeError("core_depth_midas | batch | runtime=triton requires triton_http_url")
+        triton_http_url = str(config.get("triton_http_url") or os.environ.get("TRITON_HTTP_URL") or "").strip()
+    if not triton_http_url:
+        raise RuntimeError("core_depth_midas | batch | runtime=triton requires TRITON_HTTP_URL (env) or config.triton_http_url or config.triton_model_spec")
     
     from dp_triton import TritonHttpClient, TritonError
     
@@ -445,6 +471,48 @@ def process_core_depth_midas_batch(
             # Подготовка метаданных
             metadata = video_ctx.load_metadata()
             total_frames = int(metadata.get("total_frames", 0))
+
+            # ------------------------------------------------------------
+            # Backend-friendly proxies (Audit v3)
+            # ------------------------------------------------------------
+            eps = np.float32(1e-6)
+            denom = (video_depth_p95 - video_depth_p05).astype(np.float32)
+            denom = np.where(np.isfinite(denom) & (denom > 0), denom, eps).astype(np.float32)
+            video_depth_maps_norm = ((video_depth_maps - video_depth_p05[:, None, None]) / denom[:, None, None]).astype(np.float32)
+            video_depth_maps_norm = np.clip(video_depth_maps_norm, 0.0, 1.0).astype(np.float32)
+
+            video_depth_range_robust = (video_depth_p95 - video_depth_p05).astype(np.float32)
+            video_fg_bg_sep = (video_depth_range_robust / (video_depth_std.astype(np.float32) + eps)).astype(np.float32)
+
+            gx = np.abs(np.diff(video_depth_maps_norm, axis=2))
+            gy = np.abs(np.diff(video_depth_maps_norm, axis=1))
+            video_depth_complexity = (0.5 * (gx.mean(axis=(1, 2)) + gy.mean(axis=(1, 2)))).astype(np.float32)
+
+            preview_k = 10
+            n_prev = int(min(preview_k, video_depth_maps.shape[0]))
+            if n_prev <= 0:
+                raise RuntimeError(f"core_depth_midas | batch | internal error: n_prev<=0 with N={video_depth_maps.shape[0]}")
+            if n_prev == video_depth_maps.shape[0]:
+                sel = np.arange(video_depth_maps.shape[0], dtype=np.int64)
+            else:
+                sel = np.unique(np.round(np.linspace(0, video_depth_maps.shape[0] - 1, n_prev)).astype(np.int64))
+                if sel.size < n_prev:
+                    missing = n_prev - int(sel.size)
+                    tail = np.arange(video_depth_maps.shape[0] - 1, -1, -1, dtype=np.int64)
+                    seen = set(map(int, sel.tolist()))
+                    for t in tail:
+                        if int(t) not in seen:
+                            sel = np.append(sel, t)
+                            seen.add(int(t))
+                            missing -= 1
+                            if missing <= 0:
+                                break
+                    sel = np.sort(sel.astype(np.int64))
+
+            preview_frame_indices = np.asarray(video_frame_indices, dtype=np.int32)[sel]
+            preview_times_s = video_times_s.astype(np.float32)[sel]
+            preview_depth_maps = video_depth_maps[sel].astype(np.float32, copy=False)
+            preview_depth_maps_norm = video_depth_maps_norm[sel].astype(np.float32, copy=False)
             
             save_metadata = {
                 "producer": NAME,
@@ -467,36 +535,47 @@ def process_core_depth_midas_batch(
                 "runtime": "triton-gpu",
                 "device": "cuda",
                 "triton_preprocess_preset": str(triton_preprocess_preset),
+                "backend_proxy_version": "core_depth_midas_backend_proxy_v1",
+                "preview_k": int(n_prev),
             }
             
             # Models used
-            models_used = [
-                model_used(
-                    model_name=str(triton_model_name),
-                    model_version=config.get("model_version", "unknown"),
-                    weights_digest=config.get("weights_digest", "unknown"),
-                    runtime="triton-gpu",
-                    engine="onnx",
-                    precision=config.get("precision", "fp32"),
-                    device="cuda",
-                )
-            ]
-            save_metadata["models_used"] = models_used
+            # Models used (prefer ModelManager identity when spec is used)
+            if isinstance(mm_entry, dict) and isinstance(mm_entry.get("models_used_entry"), dict):
+                models_used = [mm_entry["models_used_entry"]]
+                save_metadata["triton_model_spec"] = str(spec_name)
+                save_metadata["triton_model_name"] = str(triton_model_name)
+            else:
+                models_used = [
+                    model_used(
+                        model_name=str(triton_model_name),
+                        model_version=config.get("model_version", "unknown"),
+                        weights_digest=config.get("weights_digest", "unknown"),
+                        runtime="triton-gpu",
+                        engine="onnx",
+                        precision=config.get("precision", "fp32"),
+                        device="cuda",
+                    )
+                ]
             save_metadata = apply_models_meta(save_metadata, models_used=models_used)
             
             # Сохранение NPZ
             npz_dict = {
-                "version": VERSION,
-                "model_name": str(triton_model_name),
-                "created_at": datetime.utcnow().isoformat(),
-                "total_frames": total_frames,
                 "frame_indices": np.asarray(video_frame_indices, dtype=np.int32),
                 "times_s": video_times_s.astype(np.float32),
                 "depth_maps": video_depth_maps,
+                "depth_maps_norm": video_depth_maps_norm,
                 "depth_mean": video_depth_mean.astype(np.float32),
                 "depth_std": video_depth_std.astype(np.float32),
                 "depth_p05": video_depth_p05.astype(np.float32),
                 "depth_p95": video_depth_p95.astype(np.float32),
+                "depth_range_robust": video_depth_range_robust.astype(np.float32),
+                "depth_complexity_score": video_depth_complexity.astype(np.float32),
+                "foreground_background_separation_proxy": video_fg_bg_sep.astype(np.float32),
+                "preview_frame_indices": preview_frame_indices.astype(np.int32),
+                "preview_times_s": preview_times_s.astype(np.float32),
+                "preview_depth_maps": preview_depth_maps.astype(np.float32, copy=False),
+                "preview_depth_maps_norm": preview_depth_maps_norm.astype(np.float32, copy=False),
                 "meta": np.asarray(save_metadata, dtype=object),
             }
             

@@ -1,7 +1,6 @@
 """
 NPZ савер для chroma_extractor.
 """
-import os
 import numpy as np
 from typing import Any, Dict, Optional, Callable
 
@@ -28,85 +27,38 @@ def save_chroma_npz(
     """
     Сохраняет NPZ артефакт для chroma_extractor.
     """
-    # Metadata (always saved)
-    add("sample_rate", payload.get("sample_rate"))
-    add("hop_length", payload.get("hop_length"))
-    add("n_fft", payload.get("n_fft"))
-    add("duration", payload.get("duration"))
-    add("chroma_frames", payload.get("chroma_frames"))
-    add("n_chroma", payload.get("n_chroma", 12))
-    add("tuning_estimate", payload.get("tuning_estimate"))
-    add("chroma_dominant_class", payload.get("chroma_dominant_class"))
-    add("chroma_dominant_energy", payload.get("chroma_dominant_energy"))
-    add("chroma_harmonic_stability", payload.get("chroma_harmonic_stability"))
-    add("chroma_entropy", payload.get("chroma_entropy"))
-    add("chroma_contrast", payload.get("chroma_contrast"))
-    add("chroma_centroid", payload.get("chroma_centroid"))
-    add("chroma_rolloff", payload.get("chroma_rolloff"))
-    add("segments_count", payload.get("segments_count"))
-    
-    # Feature-gated arrays
-    features_enabled = payload.get("_features_enabled", [])
-    n_chroma = int(payload.get("n_chroma", 12))
-    
-    # Basic stats (feature-gated)
-    chroma_mean_arr = _arr("chroma_mean", dtype=np.float32) if "basic_stats" in features_enabled else np.zeros((n_chroma,), dtype=np.float32)
-    chroma_std_arr = _arr("chroma_std", dtype=np.float32) if "basic_stats" in features_enabled else np.zeros((n_chroma,), dtype=np.float32)
-    chroma_min_arr = _arr("chroma_min", dtype=np.float32) if "basic_stats" in features_enabled else np.zeros((n_chroma,), dtype=np.float32)
-    chroma_max_arr = _arr("chroma_max", dtype=np.float32) if "basic_stats" in features_enabled else np.zeros((n_chroma,), dtype=np.float32)
-    
-    # Extended stats (feature-gated)
-    chroma_median_arr = _arr("chroma_median", dtype=np.float32) if "extended_stats" in features_enabled else np.zeros((n_chroma,), dtype=np.float32)
-    chroma_p25_arr = _arr("chroma_p25", dtype=np.float32) if "extended_stats" in features_enabled else np.zeros((n_chroma,), dtype=np.float32)
-    chroma_p75_arr = _arr("chroma_p75", dtype=np.float32) if "extended_stats" in features_enabled else np.zeros((n_chroma,), dtype=np.float32)
-    
-    # Stats vector (feature-gated)
-    chroma_stats_vector_arr = _arr("chroma_stats_vector", dtype=np.float32) if "stats_vector" in features_enabled else np.zeros((0,), dtype=np.float32)
-    
-    # Time series (feature-gated)
-    chroma = None
-    if "time_series" in features_enabled:
-        chroma = payload.get("chroma")
-        if chroma is None:
-            chroma_npy = payload.get("chroma_npy")
-            if isinstance(chroma_npy, str) and chroma_npy.startswith("_artifacts/"):
-                # Load from .npy file
-                npy_path = os.path.join(run_rs_path, "chroma_extractor", chroma_npy)
-                if os.path.exists(npy_path):
-                    try:
-                        chroma = np.load(npy_path)
-                    except Exception:
-                        chroma = np.zeros((n_chroma, 0), dtype=np.float32)
-                else:
-                    chroma = np.zeros((n_chroma, 0), dtype=np.float32)
-    
-    if chroma is None:
-        chroma = np.zeros((n_chroma, 0), dtype=np.float32)
-    else:
-        chroma = np.asarray(chroma, dtype=np.float32)
-        if chroma.ndim != 2:
-            chroma = chroma.reshape(chroma.shape[0], -1) if chroma.size else np.zeros((n_chroma, 0), dtype=np.float32)
-    
-    # Per-segment data (for run_segments)
-    segment_centers_sec = _arr("segment_centers_sec", dtype=np.float32)
-    segment_durations_sec = _arr("segment_durations_sec", dtype=np.float32)
-    
-    atomic_save_npz(
-        out_path,
-        feature_names=np.asarray(feature_names, dtype=object),
-        feature_values=np.asarray(feature_values, dtype=np.float32),
-        chroma=chroma if chroma.size > 0 else np.zeros((n_chroma, 0), dtype=np.float32),
-        chroma_mean=chroma_mean_arr,
-        chroma_std=chroma_std_arr,
-        chroma_min=chroma_min_arr,
-        chroma_max=chroma_max_arr,
-        chroma_median=chroma_median_arr,
-        chroma_p25=chroma_p25_arr,
-        chroma_p75=chroma_p75_arr,
-        chroma_stats_vector=chroma_stats_vector_arr,
-        segment_centers_sec=segment_centers_sec,
-        segment_durations_sec=segment_durations_sec,
-        meta=build_meta(
+    features_enabled = payload.get("_features_enabled") or []
+
+    # Canonical arrays (Audit v3)
+    chroma_mean = np.asarray(payload.get("chroma_mean"), dtype=np.float32).reshape(-1)
+    chroma_entropy = np.asarray(payload.get("chroma_entropy"), dtype=np.float32).reshape(())
+    chroma_harmonic_stability = np.asarray(payload.get("chroma_harmonic_stability"), dtype=np.float32).reshape(())
+    chroma_contrast = np.asarray(payload.get("chroma_contrast"), dtype=np.float32).reshape(())
+    _dc = payload.get("chroma_dominant_class")
+    chroma_dominant_class = np.asarray(int(_dc) if _dc is not None else -1, dtype=np.int32).reshape(())
+    chroma_dominant_energy = np.asarray(payload.get("chroma_dominant_energy"), dtype=np.float32).reshape(())
+    tuning_estimate = np.asarray(payload.get("tuning_estimate"), dtype=np.float32).reshape(())
+
+    # Tabular model_facing: stable names
+    chroma_names = ["C", "C#", "D", "D#", "E", "F", "F#", "G", "G#", "A", "A#", "B"]
+    for i, n in enumerate(chroma_names):
+        add(f"chroma_mean_{n}", float(chroma_mean[i]) if i < chroma_mean.size else np.nan)
+    add("chroma_entropy", float(chroma_entropy))
+    add("chroma_harmonic_stability", float(chroma_harmonic_stability))
+    add("chroma_contrast", float(chroma_contrast))
+    add("chroma_dominant_energy", float(chroma_dominant_energy))
+
+    arrays: Dict[str, Any] = {
+        "feature_names": np.asarray(feature_names, dtype=object),
+        "feature_values": np.asarray(feature_values, dtype=np.float32),
+        "chroma_mean": chroma_mean.astype(np.float32),
+        "chroma_entropy": chroma_entropy.astype(np.float32),
+        "chroma_harmonic_stability": chroma_harmonic_stability.astype(np.float32),
+        "chroma_contrast": chroma_contrast.astype(np.float32),
+        "chroma_dominant_class": chroma_dominant_class.astype(np.int32),
+        "chroma_dominant_energy": chroma_dominant_energy.astype(np.float32),
+        "tuning_estimate": tuning_estimate.astype(np.float32),
+        "meta": build_meta(
             producer="chroma_extractor",
             producer_version=producer_version,
             schema_version=schema_version,
@@ -117,10 +69,39 @@ def save_chroma_npz(
                 "empty_reason": empty_reason,
                 "chroma_contract_version": payload.get("chroma_contract_version"),
                 "features_enabled": features_enabled,
+                # Observability (Audit v3+): stage timings are produced by the extractor.
+                "stage_timings_ms": payload.get("stage_timings_ms", {}),
+                # Optional per-extractor profiling (env-gated; best-effort).
+                "chroma_resource_profile": payload.get("chroma_resource_profile"),
+                "device_used": payload.get("device_used"),
                 "chroma_type": payload.get("chroma_type"),
                 "normalize": payload.get("normalize"),
+                "tuning_failed": bool(payload.get("tuning_failed", False)),
+                "chroma_time_series_omitted": bool(payload.get("chroma_time_series_omitted", False)),
+                "sample_rate": payload.get("sample_rate"),
+                "hop_length": payload.get("hop_length"),
+                "n_fft": payload.get("n_fft"),
+                "duration_sec": payload.get("duration"),
+                "segments_count": payload.get("segments_count"),
             },
         ),
-    )
+    }
+
+    # Optional debug chroma time series (only if present)
+    if "time_series" in features_enabled and isinstance(payload.get("chroma"), np.ndarray):
+        arrays["chroma"] = np.asarray(payload.get("chroma"), dtype=np.float32)
+
+    # Optional segment-level sequence
+    if "time_series" in features_enabled:
+        if payload.get("segment_centers_sec") is not None:
+            arrays["segment_centers_sec"] = np.asarray(payload.get("segment_centers_sec"), dtype=np.float32).reshape(-1)
+        if payload.get("segment_durations_sec") is not None:
+            arrays["segment_durations_sec"] = np.asarray(payload.get("segment_durations_sec"), dtype=np.float32).reshape(-1)
+        if payload.get("segment_mask") is not None:
+            arrays["segment_mask"] = np.asarray(payload.get("segment_mask"), dtype=bool).reshape(-1)
+        if payload.get("chroma_mean_by_segment") is not None:
+            arrays["chroma_mean_by_segment"] = np.asarray(payload.get("chroma_mean_by_segment"), dtype=np.float32)
+
+    atomic_save_npz(out_path, **arrays)
     return out_path
 

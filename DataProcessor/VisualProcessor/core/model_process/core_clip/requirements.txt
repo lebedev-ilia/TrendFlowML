@@ -1,0 +1,2 @@
+# Dependencies for core_clip component
+# Add component-specific dependencies here

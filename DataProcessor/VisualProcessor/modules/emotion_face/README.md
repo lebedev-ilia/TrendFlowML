@@ -6,6 +6,16 @@
 
 Модуль `emotion_face` обрабатывает видео и анализирует эмоциональные состояния на лицах. Использует модель EmoNet для распознавания 8 базовых эмоций Ekman (Neutral, Happy, Sad, Surprise, Fear, Disgust, Anger, Contempt), а также извлекает непрерывные значения валентности (valence) и активации (arousal).
 
+**Примечание**: Модуль по умолчанию отключён в `global_config.yaml` (`emotion_face: false`). Для использования модуля необходимо явно включить его в конфигурации.
+
+**Версия (producer_version)**: 2.0.2  
+**schema_version**: `emotion_face_npz_v3`  
+**Schemas**:
+- Human: `DataProcessor/VisualProcessor/modules/emotion_face/docs/SCHEMA.md`
+- Machine: `DataProcessor/VisualProcessor/schemas/emotion_face_npz_v3.json`
+
+**Проверка NPZ:** `utils/validate_emotion_face.py` — `<npz>` `--struct` / `--qa` или батч `--results-base` / `--platform-id` · краткий обзор ключей и meta: `docs/FEATURE_DESCRIPTION.md`.
+
 ### Основные возможности
 
 - **Распознавание эмоций**: 8 классов эмоций Ekman с вероятностями
@@ -30,47 +40,39 @@
 
 ## Sampling / units-of-processing requirements
 
-В baseline v1 sampling для `emotion_face` определяется так (decision):
+В baseline sampling для `emotion_face` определяется так (decision):
 
-1) берём **все кадры**, где `core_face_landmarks.face_present` имеет хотя бы одно лицо  
-2) применяем собственную выборку **по этим кадрам**: `face_frame_stride` (по умолчанию **каждый 4-й**)  
-3) применяем cap `max_frames` (по умолчанию **200**)  
+1) **Axis alignment**: output выровнен по `metadata[emotion_face].frame_indices` (Segmenter contract; union-domain).  
+   Fallback (legacy): `core_face_landmarks.frame_indices` (warning).  
+2) берём **все кадры на axis**, где `face_present=true`  
+3) применяем собственную выборку **по этим кадрам**: `face_frame_stride` (по умолчанию **каждый 4-й**)  
+4) применяем cap `max_frames` (по умолчанию **200**)  
 
 Важно: модуль **не** делает fallback на `fps` и не генерирует sampling по времени самостоятельно.
 
 ## Models (ModelManager)
 
-Модель EmoNet грузится через `dp_models.ModelManager` (локально, no-network):
+Модель EmoNet грузится через `dp_models.ModelManager` (локально, **no-network**):
 
 - **Spec name (default)**: `emonet_8_inprocess`
 - **Weights**: `DP_MODELS_ROOT/bundled_models/visual/emonet/emonet_8.pth`
-- Legacy override (не рекомендуется): `emo_path` (явный путь к весам).
-
-**Fallback механизм загрузки модели**:
-Если ModelManager не может найти модель, модуль автоматически пытается найти её в следующих местах (в порядке приоритета):
-1. Путь из `emo_path` (если указан в конфиге)
-2. `DP_MODELS_ROOT/bundled_models/visual/emonet/emonet_8.pth` (если `DP_MODELS_ROOT` указывает на `dp_models`)
-3. `DP_MODELS_ROOT/visual/emonet/emonet_8.pth` (если `DP_MODELS_ROOT` указывает на `dp_models/bundled_models`)
-4. Абсолютный путь на основе корня DataProcessor: `DataProcessor/dp_models/bundled_models/visual/emonet/emonet_8.pth`
-5. Путь по умолчанию в модуле: `modules/emotion_face/models/emonet/pretrained/emonet_8.pth`
+- Legacy override (debug, не рекомендуется): `emo_path` (явный путь к весам).  
+  Если ModelManager не доступен/не нашёл модель, модуль **ошибается** (fail-fast), кроме случая явного `emo_path`.
 
 ## Output artifact
 
 - **Path**: `result_store/.../emotion_face/emotion_face.npz`
-- **Schema**: `emotion_face_npz_v1`
+- **Schema**: `emotion_face_npz_v3`
 
 ### Основные ключи (NPZ)
 
-- **`sequence_features`** (dict):
-  - `frame_indices (N,) int32`
-  - `times_s (N,) float32`
-  - `valence (N,) float32`
-  - `arousal (N,) float32`
-  - `intensity (N,) float32`
-  - `emotion_confidence (N,) float32`
-  - `emotion_probs (N,8) float32` (порядок классов фиксирован)
-  - `dominant_emotion_id (N,) int8` (0..7)
-  - `face_count (N,) int16`
+- **`frame_indices (N,)` / `times_s (N,)`**: time-axis (Segmenter-aligned)
+- **`sequence_features`** (dict, axis-aligned):
+  - `face_present (N,) bool`
+  - `processed_mask (N,) bool`
+  - `valence/arousal/intensity/emotion_confidence (N,) float32` (NaN если `processed_mask=false`)
+  - `emotion_probs (N,8) float32`, `dominant_emotion_id (N,) int8` (`-1` если не обработано)
+  - `face_count (N,) int16` (число лиц по core_face_landmarks)
   - multi-face (per-frame): `*_faces` массивы с shape `(N, max_faces_per_frame, ...)` и `NaN` для отсутствующих лиц
 - **`keyframes`** (list[dict]): события `emotion_peak` / `transition` с `global_index`, `local_index`, `time_s`, `score`.
 - **`summary`** (dict): содержит `stage_timings_ms`.
@@ -108,12 +110,12 @@ Render-context может быть использован:
 - **Frontend** для построения графиков и визуализаций (timeline charts, distributions)
 - **Debugging**: быстрая проверка качества эмоционального анализа без загрузки NPZ
 
-**HTML debug страница** (опционально):
+**HTML debug страница** (опционально, offline):
 - Путь: `result_store/.../emotion_face/_render/render.html`
-- Содержит интерактивные графики (Chart.js):
-  - Timeline: valence, arousal и intensity по времени
-  - Distributions: статистики по valence, arousal, intensity
-  - Summary metrics: ключевые показатели в удобном формате
+- Содержит offline SVG графики:
+  - Timeline: valence/arousal/intensity/confidence/face_count
+  - Distributions: статистики по valence/arousal/intensity
+  - Key facts: status/versions/stage_timings_ms
 
 **Конфигурация** (в `global_config.yaml`):
 ```yaml
@@ -126,6 +128,14 @@ visual:
 ```
 
 **Примечание**: Render генерируется автоматически после успешной обработки компонента (best-effort: ошибки render не валят основной процесс).
+
+## Quality Status & Refinements (Audit v3)
+
+- `schema_version`: `emotion_face_npz_v3`, `producer_version=2.0.2`
+- **Axis alignment**: Segmenter axis + fallback на core_face_landmarks axis (legacy)
+- **Compute gating**: inference только на face-кадрах; `processed_mask` фиксирует внутреннюю выборку
+- **No-network**: EmoNet только через ModelManager (кроме explicit `emo_path` debug override)
+- **Offline render**: без CDN (SVG)
 
 ### Legacy HTML-отчёт
 
@@ -159,6 +169,62 @@ visual:
 - Batch processing автоматически активируется при вызове `run_batch()` в `VisualProcessor/main.py`
 - Модуль реализует `supports_batch = True` и метод `process_batch()`
 - Batch processing utility: `utils/emotion_face_batch.py`
+
+## CLI параметры
+
+Модуль поддерживает следующие CLI параметры (все опциональны, кроме `--frames-dir` и `--rs-path`):
+
+### Обязательные параметры
+- `--frames-dir` (required): Директория с кадрами (должна содержать metadata.json)
+- `--rs-path` (required): Путь к директории ResultsStore для сохранения результатов
+
+### Параметры валидации
+- `--min-frames-ratio` (default: 0.8): Минимальное соотношение кадров
+- `--min-keyframes` (default: 3): Минимальное количество ключевых кадров
+- `--min-transitions` (default: 2): Минимальное количество переходов
+- `--min-diversity-threshold` (default: 0.2): Минимальный порог разнообразия
+- `--quality-threshold` (default: 0.4): Порог качества
+
+### Параметры производительности (адаптивные батчи)
+- `--memory-threshold-low` (default: 2000): Порог памяти (низкий уровень, MB)
+- `--batch-load-low` (default: 20): Размер батча загрузки (низкий уровень)
+- `--batch-process-low` (default: 8): Размер батча обработки (низкий уровень)
+- `--memory-threshold-medium` (default: 4000): Порог памяти (средний уровень, MB)
+- `--batch-load-medium` (default: 30): Размер батча загрузки (средний уровень)
+- `--batch-process-medium` (default: 12): Размер батча обработки (средний уровень)
+- `--memory-threshold-high` (default: 8000): Порог памяти (высокий уровень, MB)
+- `--batch-load-high` (default: 50): Размер батча загрузки (высокий уровень)
+- `--batch-process-high` (default: 15): Размер батча обработки (высокий уровень)
+- `--batch-load-very-high` (default: 80): Размер батча загрузки (очень высокий уровень)
+- `--batch-process-very-high` (default: 24): Размер батча обработки (очень высокий уровень)
+
+### Параметры обработки
+- `--enable-structured-metrics` (default: False): Включить структурированные метрики
+- `--min-faces-threshold` (default: 1): Минимальный порог лиц
+- `--target-length` (default: 256): Целевая длина последовательности
+- `--max-retries` (default: 2): Максимальное количество повторных попыток
+- `--transition-threshold` (default: 0.3): Порог перехода
+- `--max-gap-seconds` (default: 0.5): Максимальный разрыв в секундах
+- `--max-samples-per-segment` (default: 10): Максимальное количество сэмплов на сегмент
+
+### Параметры модели
+- `--emo-path` (optional): Путь к модели EmoNet (legacy, не рекомендуется)
+- `--emonet-model-spec` (default: "emonet_8_inprocess"): ModelManager spec name для EmoNet (предпочтительно)
+- `--device` (default: "cuda"): Устройство для обработки (cuda/cpu)
+
+### Baseline v1 sampling / multi-face параметры
+- `--face-frame-stride` (default: 4): Stride по кадрам с лицами из core_face_landmarks
+- `--max-frames` (default: 200): Максимальное количество кадров для обработки после stride
+- `--max-faces-per-frame` (default: 2): Максимальное количество лиц на кадр для inference
+- `--face-bbox-margin` (default: 0.20): Отступ для обрезки лица (bbox margin ratio)
+
+### Feature gating (noisy/expensive, off by default)
+- `--enable-microexpressions`: Включить микроэмоции (noisy/expensive)
+- `--enable-emotional-individuality`: Включить эмоциональную индивидуальность (noisy/expensive)
+- `--enable-face-asymmetry`: Включить асимметрию лица (noisy/expensive)
+
+### Логирование
+- `--log-level` (default: "INFO"): Уровень логирования (DEBUG/INFO/WARN/ERROR)
 
 ## Performance characteristics
 

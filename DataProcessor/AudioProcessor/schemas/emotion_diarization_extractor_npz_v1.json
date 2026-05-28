@@ -1,0 +1,65 @@
+{
+  "schema_system_version": "vp_schema_v1",
+  "schema_version": "emotion_diarization_extractor_npz_v1",
+  "producer": "emotion_diarization_extractor",
+  "artifact_kind": "npz",
+  "allow_extra_keys": false,
+  "meta": {
+    "required_keys": [
+      "producer",
+      "producer_version",
+      "schema_version",
+      "created_at",
+      "platform_id",
+      "video_id",
+      "run_id",
+      "config_hash",
+      "sampling_policy_version",
+      "dataprocessor_version",
+      "status",
+      "empty_reason",
+      "models_used",
+      "model_signature",
+      "stage_timings_ms"
+    ],
+    "optional_keys": [
+      "device_used",
+      "scheduler_knobs",
+      "resource_metrics",
+      "error",
+      "emotion_contract_version",
+      "features_enabled",
+      "sample_rate",
+      "model_name",
+      "weights_digest",
+      "segments_total",
+      "silence_peak_threshold",
+      "silence_rms_threshold"
+    ]
+  },
+  "fields": {
+    "feature_names": { "required": true, "tier": "model_facing", "dtype": "object", "shape": ["F"] },
+    "feature_values": { "required": true, "tier": "model_facing", "dtype": "float32", "shape": ["F"] },
+
+    "segment_start_sec": { "required": true, "tier": "analytics", "dtype": "float32", "shape": ["N"] },
+    "segment_end_sec": { "required": true, "tier": "analytics", "dtype": "float32", "shape": ["N"] },
+    "segment_center_sec": { "required": true, "tier": "analytics", "dtype": "float32", "shape": ["N"] },
+    "segment_mask": { "required": true, "tier": "analytics", "dtype": "bool", "shape": ["N"] },
+
+    "emotion_id": { "required": true, "tier": "model_facing", "dtype": "int32", "shape": ["N"] },
+    "emotion_confidence": { "required": true, "tier": "model_facing", "dtype": "float32", "shape": ["N"] },
+
+    "emotion_labels": { "required": true, "tier": "analytics", "dtype": "object", "shape": ["C"] },
+
+    "emotion_probs": { "required": false, "tier": "analytics", "dtype": "float32", "shape": ["N", "C"] },
+    "emotion_mean_probs": { "required": false, "tier": "analytics", "dtype": "float32", "shape": ["C"] },
+
+    "emotion_distribution": { "required": false, "tier": "analytics", "dtype": "object", "shape": [] },
+    "emotion_segments_per_emotion": { "required": false, "tier": "analytics", "dtype": "object", "shape": [] },
+    "emotion_duration_per_emotion": { "required": false, "tier": "analytics", "dtype": "object", "shape": [] },
+    "emotion_quality_metrics": { "required": false, "tier": "analytics", "dtype": "object", "shape": [] },
+
+    "meta": { "required": true, "tier": "debug", "dtype": "object", "shape": [] }
+  }
+}
+

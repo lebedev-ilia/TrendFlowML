@@ -1,0 +1,67 @@
+{
+  "schema_system_version": "vp_schema_v1",
+  "schema_version": "spectral_entropy_extractor_npz_v2",
+  "producer": "spectral_entropy_extractor",
+  "artifact_kind": "npz",
+  "allow_extra_keys": false,
+  "meta": {
+    "required_keys": [
+      "producer",
+      "producer_version",
+      "schema_version",
+      "created_at",
+      "platform_id",
+      "video_id",
+      "run_id",
+      "config_hash",
+      "sampling_policy_version",
+      "dataprocessor_version",
+      "status",
+      "empty_reason",
+      "models_used",
+      "model_signature",
+      "stage_timings_ms"
+    ],
+    "optional_keys": [
+      "device_used",
+      "scheduler_knobs",
+      "resource_metrics",
+      "error",
+      "spectral_entropy_contract_version",
+      "features_enabled",
+      "sample_rate",
+      "n_fft",
+      "hop_length",
+      "use_mel",
+      "n_mels",
+      "smoothing_window",
+      "average_channels",
+      "duration",
+      "segments_count"
+    ]
+  },
+  "fields": {
+    "feature_names": { "required": true, "tier": "model_facing", "dtype": "object", "shape": ["F"] },
+    "feature_values": { "required": true, "tier": "model_facing", "dtype": "float32", "shape": ["F"] },
+
+    "segment_start_sec": { "required": true, "tier": "analytics", "dtype": "float32", "shape": ["N"] },
+    "segment_end_sec": { "required": true, "tier": "analytics", "dtype": "float32", "shape": ["N"] },
+    "segment_center_sec": { "required": true, "tier": "analytics", "dtype": "float32", "shape": ["N"] },
+    "segment_mask": { "required": true, "tier": "analytics", "dtype": "bool", "shape": ["N"] },
+
+    "entropy_mean_by_segment": { "required": true, "tier": "analytics", "dtype": "float32", "shape": ["N"] },
+    "entropy_std_by_segment": { "required": true, "tier": "analytics", "dtype": "float32", "shape": ["N"] },
+
+    "entropy_min_by_segment": { "required": false, "tier": "analytics", "dtype": "float32", "shape": ["N"] },
+    "entropy_max_by_segment": { "required": false, "tier": "analytics", "dtype": "float32", "shape": ["N"] },
+
+    "flatness_mean_by_segment": { "required": false, "tier": "analytics", "dtype": "float32", "shape": ["N"] },
+    "flatness_std_by_segment": { "required": false, "tier": "analytics", "dtype": "float32", "shape": ["N"] },
+
+    "spread_mean_by_segment": { "required": false, "tier": "analytics", "dtype": "float32", "shape": ["N"] },
+    "spread_std_by_segment": { "required": false, "tier": "analytics", "dtype": "float32", "shape": ["N"] },
+
+    "meta": { "required": true, "tier": "debug", "dtype": "object", "shape": [] }
+  }
+}
+

@@ -105,6 +105,8 @@ embedding_service/
 
 - `GET /categories` - Список категорий
 - `GET /categories/{category}/count` - Количество объектов в категории
+- `GET /categories/{category}/embeddings` - Все embeddings категории (bulk, для локального сравнения)
+- `GET /categories/{category}/labels` - Label-space без embeddings (bulk, для db_digest/маппинга id)
 - `GET /health` - Health check
 
 **Документация API**: http://localhost:8001/docs (Swagger UI)

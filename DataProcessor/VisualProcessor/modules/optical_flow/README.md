@@ -1,5 +1,8 @@
 # Модуль `optical_flow`
 
+- **Контракт NPZ, melt/QA, примеры команд:** [docs/FEATURE_DESCRIPTION.md](docs/FEATURE_DESCRIPTION.md)
+- **Валидатор:** `utils/validate_optical_flow_npz.py` (`--struct`, `--qa`, `--ranges` или батч `--results-base`)
+
 ## Описание
 
 Модуль `optical_flow` — это модуль-потребитель (consumer), который обрабатывает данные оптического потока, полученные от компонента `core_optical_flow`. Модуль **не вычисляет RAFT самостоятельно**, а использует предварительно вычисленные данные движения для извлечения агрегированных признаков.
@@ -100,15 +103,22 @@ modules:
 <rs_path>/optical_flow/optical_flow.npz
 ```
 
-### Структура выходных данных
+### Структура выходных данных (Audit v3)
 
 ```python
 {
     "frame_indices": np.ndarray[int32],      # Индексы обработанных кадров
     "times_s": np.ndarray[float32],          # Временная ось: union_timestamps_sec[frame_indices]
     "motion_norm_per_sec_mean": np.ndarray[float32],  # Кривая движения (нормализованная на секунду)
-    "features": dict                         # Агрегированные признаки (boxed object scalar)
+    "frame_feature_names": np.ndarray[object], # Имена per-frame compact фич
+    "frame_feature_values": np.ndarray[float32],# Per-frame compact фичи (N,D)
+    "feature_names": np.ndarray[object],     # Имена агрегатов (табличный формат)
+    "feature_values": np.ndarray[float32]    # Значения агрегатов (табличный формат)
 }
+
+# В NPZ meta также сохраняется:
+# - ui_payload: dict с данными для фронтенда (schema_version, frame_indices, times_s, motion_norm_per_sec_mean)
+# - stage_timings_ms: dict (baseline contract)
 ```
 
 ### Описание полей
@@ -124,23 +134,33 @@ modules:
 - **Размерность**: Соответствует количеству кадров в `frame_indices`
 - **Примечание**: Первый элемент обычно равен 0.0 (нет предыдущего кадра для сравнения)
 
-#### `features`
-- **Тип**: `dict` (в NPZ хранится как scalar object)
-- **Описание**: Агрегированные статистические признаки движения
+#### `feature_names` / `feature_values`
+- **Тип**: `object[F]` / `float32[F]`
+- **Описание**: табличные агрегаты для baseline моделей/QA.
 
-**Структура `features`:**
-```python
-{
-    "motion_curve_mean": float,      # Среднее значение кривой движения
-    "motion_curve_median": float,   # Медианное значение кривой движения
-    "motion_curve_p90": float,       # 90-й перцентиль кривой движения
-    "motion_curve_variance": float   # Дисперсия кривой движения
-}
-```
+Текущий фиксированный набор:
+- `motion_curve_mean`
+- `motion_curve_median`
+- `motion_curve_p90`
+- `motion_curve_variance`
+- `missing_frame_ratio`
+- `cam_shake_std_mean`
+- `cam_rotation_abs_mean`
+- `cam_translation_abs_mean`
+- `flow_consistency_mean`
 
 **Обработка NaN значений:**
 - Для статистик используются `nan*` функции.
-- Первый элемент кривой может быть “особым” (нет предыдущего кадра); статистики считаются по `curve[1:]` (если доступно).
+- Первый элемент кривой может быть "особым" (нет предыдущего кадра); статистики считаются по `curve[1:]` (если доступно).
+
+#### Stage timings
+
+Audit v3: тайминги пишутся в `meta.stage_timings_ms`.
+
+#### Метаданные NPZ (`meta`)
+
+NPZ meta содержит baseline identity keys +:
+- `ui_payload`: JSON для фронта (внутри NPZ meta, не отдельный JSON-артефакт). Содержит `schema_version`, `frame_indices`, `times_s`, `motion_norm_per_sec_mean` для построения графиков на фронтенде.
 
 ### Пример загрузки результатов
 
@@ -152,10 +172,12 @@ data = np.load("result_store/.../optical_flow/optical_flow.npz", allow_pickle=Tr
 
 frame_indices = data["frame_indices"]
 motion_curve = data["motion_norm_per_sec_mean"]
-features = data["features"].item()  # dict
+names = data["feature_names"].astype(object).reshape(-1).tolist()
+vals = data["feature_values"].astype(np.float32).reshape(-1).tolist()
+features = dict(zip(names, vals))
 
 print(f"Обработано кадров: {len(frame_indices)}")
-print(f"Среднее движение: {features['motion_curve_mean']:.2f} px/sec")
+print(f"Среднее движение: {features.get('motion_curve_mean', float('nan')):.2f} px/sec")
 print(f"Медианное движение: {features['motion_curve_median']:.2f} px/sec")
 print(f"90-й перцентиль: {features['motion_curve_p90']:.2f} px/sec")
 ```
@@ -176,7 +198,7 @@ print(f"90-й перцентиль: {features['motion_curve_p90']:.2f} px/sec")
 
 4. **Вычисление агрегатов**
    - Вычисляются статистические признаки: mean, median, p90, variance
-   - Результаты упаковываются в словарь `features`
+   - Результаты упаковываются в табличный формат `feature_names/feature_values`
 
 5. **Сохранение результатов**
    - Результаты сохраняются в NPZ формате через `BaseModule.run()`
@@ -222,7 +244,7 @@ modules:
 - **Distributions**: распределения motion_norm_per_sec_mean (min, max, mean, std, median, percentiles)
 
 **HTML debug страница** содержит:
-- Интерактивные графики (Chart.js): timeline движения по времени
+- Offline SVG графики (без CDN): timeline движения по времени
 - Таблицы со статистиками распределений
 - Summary метрики в удобном формате
 
@@ -290,7 +312,7 @@ Render-context может быть использован:
 
 **HTML debug страница** (опционально):
 - Путь: `result_store/.../optical_flow/_render/render.html`
-- Содержит интерактивные графики (Chart.js):
+- Содержит offline графики (SVG, без CDN):
   - Timeline: motion_norm_per_sec_mean по времени
   - Distributions: статистики по motion_norm_per_sec_mean
   - Summary metrics: ключевые показатели в удобном формате

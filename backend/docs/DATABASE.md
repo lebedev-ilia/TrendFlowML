@@ -1,140 +1,207 @@
-# Database schema (as implemented)
+# Database schema
 
-Модели определены в `backend/app/models.py`. Это **фактическая** схема,
-которая создаётся на старте через `Base.metadata.create_all`.
+Backend использует **PostgreSQL** и **SQLAlchemy 2.0**.
 
-## 1) Таблицы
+Основная схема доменной модели — **`core.*`** (модели в `backend/app/dbv2/models.py`). В том же проекте Alembic может управлять **legacy**-метаданными в `public` (см. `alembic/env.py`, `app/models.py`); новый API ориентирован на `core.*`.
 
-### users
+> **Для полной спецификации** с дополнительными таблицами (subscription_usage, billing_transactions, video_snapshots, processing_configs, explainability_summary, recommendations, api_keys, audit_logs и др.) см. [DATABASE_ARCH.md](DATABASE_ARCH.md).
 
-- `id` (uuid string)
-- `email` (unique)
-- `password_hash`
-- `role` (`user`/`admin`)
-- `created_at`, `updated_at`
+## 1) Таблицы (core.*)
 
-### videos
+### Users & Auth
 
-- `id`
-- `platform_id` (`upload` сейчас)
-- `video_id` (каноничный id)
-- `source_type` (`upload`)
-- `title/description/language/category`
-- `created_at`
+#### core.users
+- `id` (UUID, primary key)
+- `email` (unique, not null)
+- `email_verified` (boolean, default false)
+- `password_hash` (string, nullable)
+- `created_at`, `updated_at` (timestamps)
+- `deleted_at` (timestamp, nullable, soft delete)
 
-### video_files
-
-- `id`
-- `sha256_hex` (unique)
-- `size_bytes`
-- `mime_type`
-- `object_key` (путь к raw файлу)
-- `created_at`
-- `retention_until` (не используется логикой)
-
-### video_sources
-
-Связь видео с источником и метаданными.
-
-- `video_id` (FK → videos)
-- `youtube_url` (не используется)
-- `uploaded_file_id` (FK → video_files)
-- `fetched_at`, `duration_sec`, `width`, `height`
-
-### user_video_links
-
-ACL таблица: кто имеет доступ к видео.
-
+#### core.user_oauth_accounts
+- `id` (UUID, primary key)
 - `user_id` (FK → users)
-- `video_id` (FK → videos)
-- `created_at`
+- `provider` (string, e.g. "google", "github")
+- `provider_user_id` (string)
+- `access_token`, `refresh_token` (text, nullable)
+- `token_expires_at` (timestamp, nullable)
+- Unique constraint: `(provider, provider_user_id)`
 
-### analysis_profiles
+#### core.user_security
+- `user_id` (UUID, primary key, FK → users)
+- `two_factor_enabled` (boolean, default false)
+- `two_factor_secret` (string, nullable)
+- `password_reset_token` (string, nullable)
+- `password_reset_expires_at` (timestamp, nullable)
 
-- `id`
-- `user_id` (nullable: public profiles)
-- `name`, `description`
-- `is_public`
-- `config_json` (jsonb)
-- `config_hash`
-- `created_at`, `updated_at`
+### Workspaces
 
-### profile_components
+#### core.workspaces
+- `id` (UUID, primary key)
+- `name` (string, not null)
+- `slug` (string, unique, not null)
+- `owner_user_id` (UUID, FK → users)
+- `archived_at` (timestamp, nullable)
+- `created_at`, `updated_at` (timestamps)
 
-В коде пока не используется, но создана для будущей детализации.
+#### core.workspace_members
+- `id` (UUID, primary key)
+- `workspace_id` (UUID, FK → workspaces)
+- `user_id` (UUID, FK → users)
+- `role` (enum: `owner|admin|editor|viewer`)
+- `invited_by` (UUID, FK → users, nullable)
+- `joined_at` (timestamp)
+- `archived_at` (timestamp, nullable)
+- Unique constraint: `(workspace_id, user_id)`
 
-- `profile_id` (FK → analysis_profiles)
-- `component_name`
-- `enabled`, `required`
-- `component_params`
-- `cost_units`
+### Billing
 
-### runs
+#### core.subscription_plans
+- `id` (integer, primary key)
+- `name` (string, not null)
+- `max_videos_per_month` (integer)
+- `max_analyses_per_month` (integer)
+- `max_channels` (integer)
+- `max_storage_gb` (integer)
+- `has_api_access` (boolean)
+- `has_advanced_explainability` (boolean)
+- `price` (float)
 
-- `id`
-- `user_id` (FK → users)
-- `video_id` (FK → videos)
-- `profile_id` (nullable)
-- `config_hash`
-- `status` (`queued|running|succeeded|failed|cancelled`)
-- `stage` (`segmenter|audio|text|visual|render`)
-- `created_at`, `started_at`, `finished_at`
-- `cancel_requested_at`
-- `error_code`, `error_message`
-- `estimated_cost_units`, `actual_cost_units` (пока не заполняются)
+#### core.subscriptions
+- `id` (UUID, primary key)
+- `workspace_id` (UUID, FK → workspaces)
+- `plan_id` (integer, FK → subscription_plans)
+- `status` (enum: `active|canceled|expired`)
+- `current_period_start` (timestamp)
+- `current_period_end` (timestamp)
+- `cancel_at_period_end` (boolean, default false)
+- `created_at`, `updated_at` (timestamps)
 
-### run_components
+### Channels
 
-- `run_id`
-- `component_name`
-- `status`
-- `schema_version`, `producer_version`
-- `started_at`, `finished_at`, `duration_ms`
-- `device_used`
-- `empty_reason`, `error_code`, `error_message`
-- `cost_units`
+#### core.channels
+- `id` (UUID, primary key)
+- `workspace_id` (UUID, FK → workspaces)
+- `platform` (string, e.g. "youtube", "tiktok")
+- `external_channel_id` (string, nullable)
+- `channel_name` (string)
+- `connected_oauth_id` (UUID, FK → user_oauth_accounts, nullable)
+- `archived_at` (timestamp, nullable)
+- `created_at`, `updated_at` (timestamps)
+- Index: `(platform, external_channel_id)`
 
-### artifacts
+### Videos
 
-- `id`
-- `run_id`
-- `component_name`
-- `kind` (`npz|json|html|...`)
-- `object_key` (путь)
-- `size_bytes`, `sha256_hex`
-- `created_at`
+#### core.videos
+- `id` (UUID, primary key)
+- `channel_id` (UUID, FK → channels)
+- `external_video_id` (string, nullable)
+- `title` (string)
+- `description` (text, nullable)
+- `duration_seconds` (integer)
+- `video_type` (enum: `shorts|video`)
+- `source_type` (enum: `upload|link`)
+- `source_url` (string, nullable)
+- `storage_path` (string, nullable)
+- `file_size_mb` (float, nullable)
+- `checksum` (string, nullable)
+- `archived_at` (timestamp, nullable)
+- `created_at`, `updated_at` (timestamps)
+- Unique constraint: `(channel_id, external_video_id)`
 
-### run_logs
+### Analysis
 
-- `id` (bigserial)
-- `run_id`
-- `ts`
-- `level` (`info|warning|error|debug`)
-- `message`
+#### core.analysis_jobs
+- `id` (UUID, primary key)
+- `workspace_id` (UUID, FK → workspaces)
+- `video_id` (UUID, FK → videos)
+- `triggered_by_user_id` (UUID, FK → users)
+- `processing_config_id` (UUID)  # Временная ссылка на legacy analysis_profiles
+- `model_version_id` (string)
+- `status` (enum: `queued|processing|completed|failed|canceled`)
+- `retry_count` (integer, default 0)
+- `error_message` (text, nullable)
+- `started_at` (timestamp, nullable)
+- `completed_at` (timestamp, nullable)
+- `created_at`, `updated_at` (timestamps)
+- Indexes: `(workspace_id)`, `(video_id)`
 
-### uploads
+#### core.ingestion_runs
+Ингестия по URL (YouTube и др.); связь с Fetcher. PK — `run_id` (тот же UUID, что уходит в Fetcher).
 
-Служебная таблица для upload‑flow.
+- `run_id` (UUID, primary key)
+- `user_id` (UUID, FK → users)
+- `source_url` (string)
+- `workspace_id` (UUID, FK → workspaces, nullable)
+- `ingestion_status` (string, например `pending|running|completed|failed`)
+- `idempotency_key` (string, nullable, unique)
+- `fetcher_stage`, `fetcher_error_code`, `fetcher_error_message` — синхронизация из Fetcher (polling)
+- `created_at`, `updated_at` (timestamps)
+- Indexes: `(user_id)`, `(workspace_id)`
 
-- `id`
-- `user_id`
-- `video_id`
-- `status` (`init|uploaded|completed`)
-- `temp_path`, `filename`
-- `created_at`, `updated_at`
+#### core.predictions
+- `id` (UUID, primary key)
+- `analysis_job_id` (UUID, FK → analysis_jobs)
+- `horizon_days` (integer)
+- `predicted_views` (float)
+- `predicted_likes` (float)
+- `percentile_score` (float)
+- `confidence_lower` (float)
+- `confidence_upper` (float)
+- `model_version_id` (string)
+- `created_at`, `updated_at` (timestamps)
 
-## 2) Индексы и миграции
+## 2) ENUM типы (core.*)
 
-Сейчас индексы не создаются вручную (кроме `unique`/`primary key`),
-а миграции отсутствуют: используется `create_all` на старте приложения.
+Все ENUM-типы находятся в schema `core`:
 
-## 3) Что **не** реализовано в схеме backend
+- `core.workspace_role`: `owner`, `admin`, `editor`, `viewer`
+- `core.subscription_status`: `active`, `canceled`, `expired`
+- `core.video_type`: `shorts`, `video`
+- `core.source_type`: `upload`, `link`
+- `core.analysis_status`: `queued`, `processing`, `completed`, `failed`, `canceled`
+
+## 3) Миграции (Alembic)
+
+Конфиг:
+- `backend/alembic.ini`
+- `backend/alembic/env.py`
+- миграции: `backend/alembic/versions/*`
+
+Запуск:
+
+```bash
+cd backend
+export TF_BACKEND_DB_DSN="postgresql+psycopg://trendflow:trendflow@localhost:5432/trendflow"
+alembic -c alembic.ini upgrade head
+```
+
+Миграции:
+- `0001_core_init`: создаёт schema `core`, ENUM-типы и все таблицы
+- `0002_legacy_init`: создаёт legacy таблицы в schema `public` (для обратной совместимости с DataProcessor)
+
+## 4) Auto-create (dev режим)
+
+Если `TF_BACKEND_DB_AUTO_CREATE=true`, то на старте приложения выполняется:
+- `CREATE SCHEMA IF NOT EXISTS core`
+- `BaseV2.metadata.create_all(bind=engine)`
+
+**Рекомендация**: в production использовать `TF_BACKEND_DB_AUTO_CREATE=false` и полагаться на Alembic миграции.
+
+## 5) Legacy таблицы (для обратной совместимости)
+
+Legacy таблицы в schema `public.*` используются только для:
+- Обратной совместимости с DataProcessor (через адаптер)
+- Хранения артефактов и логов (legacy таблицы `artifacts`, `run_logs`)
+
+Эти таблицы создаются через миграцию `0002_legacy_init` и не используются основным API.
+
+## 6) Что **не** реализовано (gap относительно целевой архитектуры)
 
 Сравнение с каноничными контрактами:
 
-- нет `billing_ledger`, `user_balances`, `render_cache`
-- нет `profile_model_mapping`
+- нет `billing_ledger`, `user_balances`, `render_cache` в core.*
+- нет `processing_configs` в core.* (временно используется legacy `analysis_profiles`)
 - нет аналитических индексов
 
 Список расхождений фиксируется в `backend/docs/GAPS_AND_ALIGNMENT.md`.
-

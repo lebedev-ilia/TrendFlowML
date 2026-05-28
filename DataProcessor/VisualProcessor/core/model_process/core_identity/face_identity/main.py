@@ -1,19 +1,22 @@
 #!/usr/bin/env python3
 """
-core_face_identity (semantic head, v1)
+core_face_identity (semantic head, Audit v3)
 
 Face identity recognition using Embedding Service:
 - Extracts face crops from core_face_landmarks
 - Searches for similar faces via Embedding Service
-- Returns per-frame top-K face identifications
+- Returns per-frame top-K face identifications with deterministic label-space
+- Schema v2: db_digest, meta_json, face_bbox_xyxy for render assets
 """
 
 from __future__ import annotations
 
 import argparse
+import hashlib
 import json
 import os
 import sys
+import tempfile
 import time
 from datetime import datetime
 from pathlib import Path
@@ -23,27 +26,82 @@ import cv2
 import numpy as np
 
 _vp_root = os.path.dirname(
-    os.path.dirname(os.path.dirname(os.path.dirname(os.path.dirname(__file__))))
+    os.path.dirname(os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__)))))
 )
 if _vp_root not in sys.path:
-    sys.path.append(_vp_root)
+    sys.path.insert(0, _vp_root)
+elif sys.path[0] != _vp_root:
+    try:
+        sys.path.remove(_vp_root)
+    except ValueError:
+        pass
+    sys.path.insert(0, _vp_root)
 
 from utils.frame_manager import FrameManager
 from utils.logger import get_logger  # type: ignore  # noqa: E402
 from utils.utilites import load_metadata  # type: ignore  # noqa: E402
 from utils.meta_builder import apply_models_meta, model_used  # type: ignore  # noqa: E402
+from utils.embedding_service_errors import EmbeddingServiceUnavailableError  # type: ignore  # noqa: E402
 
-from embedding_service_client import EmbeddingServiceClient
+# Import Embedding Service client (try utils directory first, then fallback)
+try:
+    from utils.embedding_service_client import EmbeddingServiceClient
+except ImportError:
+    try:
+        from embedding_service_client import EmbeddingServiceClient
+    except ImportError:
+        import importlib.util
+        _current_dir = Path(__file__).parent
+        _utils_path = _current_dir / "utils" / "embedding_service_client.py"
+        if _utils_path.exists():
+            spec = importlib.util.spec_from_file_location("embedding_service_client", str(_utils_path))
+            if spec and spec.loader:
+                _mod = importlib.util.module_from_spec(spec)
+                spec.loader.exec_module(_mod)
+                EmbeddingServiceClient = _mod.EmbeddingServiceClient
+            else:
+                raise RuntimeError("face_identity | Failed to load EmbeddingServiceClient from utils")
+        else:
+            raise ImportError(
+                "face_identity | embedding_service_client not found. "
+                f"Expected at: {_utils_path}"
+            )
 
 NAME = "core_face_identity"
-VERSION = "0.1"
-SCHEMA_VERSION = "core_face_identity_npz_v1"
+VERSION = "0.2"
+SCHEMA_VERSION = "core_face_identity_npz_v2"
 ARTIFACT_FILENAME = "face_identity.npz"
 LOGGER = get_logger(NAME)
 
 # Face category for Embedding Service
 FACE_CATEGORY = "face"
-TOP_K = 5  # Top-5 face identifications per frame
+TOP_K = 5  # Contract: fixed K=5 for semantic-head v1
+
+
+def _sha256_hex(s: str) -> str:
+    return hashlib.sha256(s.encode("utf-8")).hexdigest()
+
+
+def _atomic_save_npz(out_path: str, **kwargs: Any) -> None:
+    """Atomic NPZ save (avoid partially-written artifacts)."""
+    out_dir = os.path.dirname(os.path.abspath(out_path)) or "."
+    os.makedirs(out_dir, exist_ok=True)
+    fd, tmp_path = tempfile.mkstemp(
+        prefix=os.path.basename(out_path) + ".",
+        suffix=".npz",
+        dir=out_dir,
+    )
+    os.close(fd)
+    try:
+        np.savez_compressed(tmp_path, **kwargs)
+        os.replace(tmp_path, out_path)
+    except Exception:
+        try:
+            if os.path.exists(tmp_path):
+                os.remove(tmp_path)
+        except Exception:
+            pass
+        raise
 
 
 def _append_state_event_if_possible(*, rs_path: str, event: Dict[str, Any]) -> None:
@@ -315,6 +373,12 @@ Examples:
         default=0.0,
         help="Minimum similarity threshold for results (default: 0.0, range: 0.0-1.0)"
     )
+    ap.add_argument(
+        "--http-timeout",
+        type=float,
+        default=120.0,
+        help="HTTP timeout (seconds) for Embedding Service /search and related calls (default: 120)",
+    )
     args = ap.parse_args()
 
     # Initialize timing dictionary
@@ -372,6 +436,44 @@ Examples:
                 f"{NAME} | frames metadata missing required run identity keys: {missing}"
             )
         
+        # Initialize Embedding Service client for db_digest (fail-fast → EmbeddingServiceUnavailableError)
+        embedding_client = EmbeddingServiceClient(
+            base_url=args.embedding_service_url, timeout=args.http_timeout
+        )
+        embedding_client._ensure_url()
+        
+        labels = embedding_client.get_labels(category=FACE_CATEGORY)
+        if not labels:
+            raise RuntimeError(
+                f"{NAME} | Embedding Service category '{FACE_CATEGORY}' has 0 labels (fail-fast)"
+            )
+        
+        def _canon_label_row(r: Dict[str, Any]) -> Dict[str, Any]:
+            return {
+                "id": str(r.get("id") or ""),
+                "name": str(r.get("name") or ""),
+                "embedding_model": str(r.get("embedding_model") or ""),
+                "embedding_dim": int(r.get("embedding_dim") or 0),
+                "updated_at": str(r.get("updated_at") or ""),
+            }
+        labels_canon = [_canon_label_row(r) for r in labels]
+        labels_canon = [r for r in labels_canon if r["id"]]
+        if not labels_canon:
+            raise RuntimeError(
+                f"{NAME} | Embedding Service returned invalid labels for '{FACE_CATEGORY}' (no ids)"
+            )
+        labels_canon.sort(key=lambda r: r["id"])
+        db_digest = _sha256_hex(
+            json.dumps(labels_canon, ensure_ascii=False, sort_keys=True, separators=(",", ":"))
+        )
+        semantic_object_ids = np.asarray([r["id"] for r in labels_canon], dtype="U")
+        semantic_label_names = np.asarray(
+            [f"{i}:{labels_canon[i]['name']}" for i in range(len(labels_canon))],
+            dtype="U",
+        )
+        embedding_models = sorted({r["embedding_model"] for r in labels_canon if r["embedding_model"]})
+        embedding_model = embedding_models[0] if len(embedding_models) == 1 else ""
+        
         meta_out: Dict[str, Any] = {
             "producer": NAME,
             "producer_version": VERSION,
@@ -383,6 +485,17 @@ Examples:
         for k in required_run_keys:
             meta_out[k] = meta.get(k)
         meta_out["dataprocessor_version"] = str(meta.get("dataprocessor_version") or "unknown")
+        meta_out["embedding_service_url"] = embedding_client.base_url
+        meta_out["category"] = FACE_CATEGORY
+        meta_out["top_k"] = args.topk
+        meta_out["similarity_threshold"] = args.similarity_threshold
+        meta_out["n_frames"] = 0
+        meta_out["total_faces_processed"] = 0
+        meta_out["db_name"] = "embedding_service"
+        meta_out["db_version"] = "v1"
+        meta_out["db_digest"] = db_digest
+        if embedding_model:
+            meta_out["embedding_model"] = embedding_model
         meta_out = apply_models_meta(meta_out, models_used=[])
         
         out_dir = os.path.join(str(args.rs_path), NAME)
@@ -408,16 +521,30 @@ Examples:
             stage_timings_ms[key] = float(value) * 1000.0
         meta_out["stage_timings_ms"] = stage_timings_ms
         
-        np.savez_compressed(
-            out_path,
-            frame_indices=np.array([], dtype=np.int32),
-            times_s=np.array([], dtype=np.float32),
-            face_ids=np.array([], dtype=np.int32).reshape(0, args.topk),
-            face_names=np.array([], dtype="U256").reshape(0, args.topk),
-            face_similarities=np.array([], dtype=np.float32).reshape(0, args.topk),
-            meta=np.asarray(meta_out, dtype=object),
-        )
+        def _build_npz_payload_empty(meta_dict: Dict[str, Any]) -> Dict[str, Any]:
+            return {
+                "frame_indices": np.array([], dtype=np.int32),
+                "times_s": np.array([], dtype=np.float32),
+                "semantic_label_names": semantic_label_names,
+                "semantic_object_ids": semantic_object_ids,
+                "face_ids": np.array([], dtype=np.int32).reshape(0, args.topk),
+                "face_names": np.array([], dtype="U256").reshape(0, args.topk),
+                "face_similarities": np.array([], dtype=np.float32).reshape(0, args.topk),
+                "face_bbox_xyxy": np.array([], dtype=np.float32).reshape(0, 4),
+                "meta": np.asarray(meta_dict, dtype=object),
+                "meta_json": np.asarray(
+                    json.dumps(meta_dict, ensure_ascii=False, sort_keys=True),
+                    dtype="U",
+                ),
+            }
+        
+        _atomic_save_npz(out_path, **_build_npz_payload_empty(meta_out))
         timings["saving"] = time.perf_counter() - t_save
+        timings["total"] = time.perf_counter() - t0
+        meta_out["stage_timings_ms"] = {
+            k: float(v) * 1000.0 for k, v in timings.items()
+        }
+        _atomic_save_npz(out_path, **_build_npz_payload_empty(meta_out))
         
         # Baseline contract: emit done stage
         _emit_stage(
@@ -492,15 +619,50 @@ Examples:
     t_process_start = time.perf_counter()
 
     # Initialize Embedding Service client
-    embedding_client = EmbeddingServiceClient(base_url=args.embedding_service_url)
+    embedding_client = EmbeddingServiceClient(
+        base_url=args.embedding_service_url, timeout=args.http_timeout
+    )
     
     # Fail-fast: проверка доступности Embedding Service
-    try:
-        embedding_client._ensure_url()
-    except Exception as e:
+    embedding_client._ensure_url()
+
+    # Load label-space (db provenance + deterministic UUID->int32 mapping)
+    labels = embedding_client.get_labels(category=FACE_CATEGORY)
+    if not labels:
         raise RuntimeError(
-            f"{NAME} | Embedding Service unavailable at {embedding_client.base_url}: {e}"
+            f"{NAME} | Embedding Service category '{FACE_CATEGORY}' has 0 labels (fail-fast)"
         )
+
+    def _canon_label_row(r: Dict[str, Any]) -> Dict[str, Any]:
+        return {
+            "id": str(r.get("id") or ""),
+            "name": str(r.get("name") or ""),
+            "embedding_model": str(r.get("embedding_model") or ""),
+            "embedding_dim": int(r.get("embedding_dim") or 0),
+            "updated_at": str(r.get("updated_at") or ""),
+        }
+
+    labels_canon = [_canon_label_row(r) for r in labels]
+    labels_canon = [r for r in labels_canon if r["id"]]
+    if not labels_canon:
+        raise RuntimeError(
+            f"{NAME} | Embedding Service returned invalid labels for '{FACE_CATEGORY}' (no ids)"
+        )
+    labels_canon.sort(key=lambda r: r["id"])
+
+    db_digest = _sha256_hex(
+        json.dumps(labels_canon, ensure_ascii=False, sort_keys=True, separators=(",", ":"))
+    )
+
+    uuid_to_int: Dict[str, int] = {r["id"]: i for i, r in enumerate(labels_canon)}
+    semantic_object_ids = np.asarray([r["id"] for r in labels_canon], dtype="U")
+    semantic_label_names = np.asarray(
+        [f"{i}:{labels_canon[i]['name']}" for i in range(len(labels_canon))],
+        dtype="U",
+    )
+
+    embedding_models = sorted({r["embedding_model"] for r in labels_canon if r["embedding_model"]})
+    embedding_model = embedding_models[0] if len(embedding_models) == 1 else ""
 
     # Create FrameManager
     frame_manager = FrameManager(
@@ -514,6 +676,8 @@ Examples:
     face_ids = np.full((n_frames, args.topk), -1, dtype=np.int32)
     face_names = np.full((n_frames, args.topk), "", dtype="U256")
     face_similarities = np.full((n_frames, args.topk), 0.0, dtype=np.float32)
+    # Bbox for top-1 face per frame (for render assets)
+    face_bbox_xyxy = np.full((n_frames, 4), np.nan, dtype=np.float32)
 
     # Early validation: проверка доступности Embedding Service и тестовый запрос
     embedding_service_available = True
@@ -592,7 +756,8 @@ Examples:
                 continue
             
             # Process all faces in this frame
-            frame_results: List[Tuple[float, int, str]] = []  # (similarity, id, name)
+            frame_results: List[Tuple[float, int, str, Optional[np.ndarray]]] = []  # (similarity, id, name, bbox)
+            best_bbox: Optional[np.ndarray] = None
             
             for face_idx in range(max_faces):
                 if face_idx >= face_present.shape[1] or not face_present[frame_idx, face_idx]:
@@ -621,11 +786,21 @@ Examples:
                     )
                     
                     for result in search_results:
-                        face_id = int(result.get("id", -1))
+                        face_uuid = str(result.get("id", ""))
                         face_name = str(result.get("name", ""))
                         similarity = float(result.get("similarity", 0.0))
                         
-                        frame_results.append((similarity, face_id, face_name))
+                        # Map UUID to int32 index (deterministic label-space)
+                        face_id_int = uuid_to_int.get(face_uuid, -1)
+                        if face_id_int < 0:
+                            # UUID not in label-space - это ошибка консистентности базы
+                            raise RuntimeError(
+                                f"{NAME} | Face UUID {face_uuid} not found in label-space. "
+                                f"This indicates database inconsistency: label-space was loaded with {len(labels_canon)} labels, "
+                                f"but search returned UUID not in that set. Database may have changed between label-space load and search."
+                            )
+                        
+                        frame_results.append((similarity, face_id_int, face_name, bbox.copy()))
                         total_faces_processed += 1
                         
                 except Exception as e:
@@ -639,19 +814,23 @@ Examples:
             frame_results.sort(key=lambda x: x[0], reverse=True)
             
             # Deduplicate by name (keep best similarity for each name)
-            seen_names: Dict[str, Tuple[float, int, str]] = {}
-            for similarity, face_id, face_name in frame_results:
+            seen_names: Dict[str, Tuple[float, int, str, Optional[np.ndarray]]] = {}
+            for similarity, face_id, face_name, bbox in frame_results:
                 if face_name and face_name not in seen_names:
-                    seen_names[face_name] = (similarity, face_id, face_name)
+                    seen_names[face_name] = (similarity, face_id, face_name, bbox)
                 elif face_name and similarity > seen_names[face_name][0]:
-                    seen_names[face_name] = (similarity, face_id, face_name)
+                    seen_names[face_name] = (similarity, face_id, face_name, bbox)
             
-            # Fill output arrays
+            # Fill output arrays (NaN-policy: -1 for ids, 0.0 for scores where no result)
             deduplicated_results = sorted(seen_names.values(), key=lambda x: x[0], reverse=True)
-            for k, (similarity, face_id, face_name) in enumerate(deduplicated_results[: args.topk]):
-                face_ids[frame_idx, k] = face_id
+            for k, (similarity, face_id_int, face_name, bbox) in enumerate(deduplicated_results[: args.topk]):
+                face_ids[frame_idx, k] = face_id_int
                 face_names[frame_idx, k] = face_name
                 face_similarities[frame_idx, k] = similarity
+                # Save bbox for top-1 (for render assets)
+                if k == 0 and bbox is not None:
+                    face_bbox_xyxy[frame_idx, :] = bbox
+                    best_bbox = bbox
             
             # Baseline contract: granular progress (>=10 updates)
             processed = frame_idx + 1
@@ -705,11 +884,18 @@ Examples:
     
     # Component-specific metadata
     meta_out["embedding_service_url"] = embedding_client.base_url
-    meta_out["face_category"] = FACE_CATEGORY
-    meta_out["topk"] = args.topk
+    meta_out["category"] = FACE_CATEGORY
+    meta_out["top_k"] = args.topk
     meta_out["similarity_threshold"] = args.similarity_threshold
     meta_out["total_faces_processed"] = total_faces_processed
     meta_out["n_frames"] = n_frames
+    
+    # DB provenance (reproducibility)
+    meta_out["db_name"] = "embedding_service"
+    meta_out["db_version"] = "v1"
+    meta_out["db_digest"] = db_digest
+    if embedding_model:
+        meta_out["embedding_model"] = embedding_model
 
     # Add models_used (contract: required if models are used)
     models_used_list = [
@@ -743,23 +929,36 @@ Examples:
     timings["saving"] = 0.0  # Will be updated after save
     timings["total"] = time.perf_counter() - t0
     
-    # Baseline contract: stage_timings_ms in meta
-    stage_timings_ms: Dict[str, float] = {}
-    for key, value in timings.items():
-        stage_timings_ms[key] = float(value) * 1000.0
-    meta_out["stage_timings_ms"] = stage_timings_ms
+    def _build_npz_payload(meta_dict: Dict[str, Any]) -> Dict[str, Any]:
+        return {
+            "frame_indices": fi_np,
+            "times_s": times_s,
+            # Label space (deterministic, derived from Embedding Service)
+            "semantic_label_names": semantic_label_names,
+            "semantic_object_ids": semantic_object_ids,
+            # Per-frame top-K results
+            "face_ids": face_ids,  # (N, K) int32, -1 where no result
+            "face_names": face_names,  # (N, K) str, "" where no result
+            "face_similarities": face_similarities,  # (N, K) float32, 0.0 where no result
+            # Bbox for top-1 face per frame (for render assets)
+            "face_bbox_xyxy": face_bbox_xyxy,  # (N, 4) float32, NaN where no face
+            # Meta
+            "meta": np.asarray(meta_dict, dtype=object),
+            "meta_json": np.asarray(
+                json.dumps(meta_dict, ensure_ascii=False, sort_keys=True),
+                dtype="U",
+            ),
+        }
 
-    np.savez_compressed(
-        out_path,
-        frame_indices=fi_np,
-        times_s=times_s,
-        face_ids=face_ids,
-        face_names=face_names,
-        face_similarities=face_similarities,
-        meta=np.asarray(meta_out, dtype=object),
-    )
-    
+    # Two-pass write: measure saving time and persist final meta.stage_timings_ms
+    t_save_start = time.perf_counter()
+    _atomic_save_npz(out_path, **_build_npz_payload(meta_out))
     timings["saving"] = time.perf_counter() - t_save_start
+    timings["total"] = time.perf_counter() - t0
+    meta_out["stage_timings_ms"] = {
+        k: float(v) * 1000.0 for k, v in timings.items()
+    }
+    _atomic_save_npz(out_path, **_build_npz_payload(meta_out))
 
     # Baseline contract: emit done stage
     _emit_stage(
@@ -779,4 +978,8 @@ Examples:
 
 
 if __name__ == "__main__":
-    sys.exit(main())
+    try:
+        raise SystemExit(main())
+    except EmbeddingServiceUnavailableError as ex:
+        print(f"{NAME}: {ex}", file=sys.stderr)
+        raise SystemExit(1) from None

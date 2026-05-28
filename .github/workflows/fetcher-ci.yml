@@ -1,0 +1,146 @@
+# CI для Fetcher: тесты, линтеры, миграции Alembic
+name: Fetcher CI
+
+on:
+  push:
+    branches: [main, master]
+    paths:
+      - 'Fetcher/**'
+  pull_request:
+    branches: [main, master]
+    paths:
+      - 'Fetcher/**'
+
+defaults:
+  run:
+    working-directory: Fetcher
+
+jobs:
+  lint:
+    name: Lint
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+
+      - name: Install deps
+        run: |
+          python -m pip install --upgrade pip
+          pip install ruff
+          pip install -r requirements.txt -r requirements-test.txt
+
+      - name: Ruff
+        run: ruff check fetcher tests --output-format=github || true
+
+  alembic:
+    name: Alembic check
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+
+      - name: Install deps
+        run: |
+          python -m pip install --upgrade pip
+          pip install -r requirements.txt
+          pip install -r requirements-test.txt
+
+      - name: Alembic check
+        run: alembic check
+
+  unit-tests:
+    name: Unit tests
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+
+      - name: Install deps
+        run: |
+          python -m pip install --upgrade pip
+          pip install -r requirements.txt
+          pip install -r requirements-test.txt
+
+      - name: Unit tests
+        env:
+          FETCHER_POSTGRES_DSN: postgresql+psycopg2://u:p@localhost/db
+          FETCHER_REDIS_URL: redis://localhost:6379/0
+          FETCHER_S3_ENDPOINT_URL: http://localhost:9000
+          FETCHER_S3_ACCESS_KEY: minioadmin
+          FETCHER_S3_SECRET_KEY: minioadmin123
+          FETCHER_BUCKET_RAW: test-bucket
+        run: |
+          pytest tests/unit/ -v --cov=fetcher --cov-report=term-missing --cov-fail-under=0
+
+  integration-tests:
+    name: Integration tests
+    runs-on: ubuntu-latest
+    # Раньше continue-on-error: true; после стабилизации всех 9 тестов — пайплайн падает при падении integration
+    services:
+      postgres:
+        image: postgres:15-alpine
+        env:
+          POSTGRES_USER: fetcher
+          POSTGRES_PASSWORD: fetcher
+          POSTGRES_DB: fetcher_test
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd pg_isready
+          --health-interval 10s
+          --health-timeout 5s
+          --health-retries 5
+      redis:
+        image: redis:7-alpine
+        ports:
+          - 6379:6379
+        options: >-
+          --health-cmd "redis-cli ping"
+          --health-interval 10s
+          --health-timeout 5s
+          --health-retries 5
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+
+      - name: Install deps
+        run: |
+          python -m pip install --upgrade pip
+          pip install -r requirements.txt
+          pip install -r requirements-test.txt
+
+      - name: Create DB
+        run: |
+          PGPASSWORD=fetcher psql -h localhost -U fetcher -d postgres -c "CREATE DATABASE fetcher_test;" 2>/dev/null || true
+
+      - name: Alembic upgrade
+        env:
+          FETCHER_POSTGRES_DSN: postgresql+psycopg2://fetcher:fetcher@localhost:5432/fetcher_test
+          FETCHER_REDIS_URL: redis://localhost:6379/0
+        run: alembic upgrade head
+
+      - name: Integration tests
+        env:
+          FETCHER_POSTGRES_DSN: postgresql+psycopg2://fetcher:fetcher@localhost:5432/fetcher_test
+          FETCHER_REDIS_URL: redis://localhost:6379/0
+          FETCHER_S3_ENDPOINT_URL: http://localhost:9000
+          FETCHER_S3_ACCESS_KEY: minioadmin
+          FETCHER_S3_SECRET_KEY: minioadmin123
+        run: |
+          pytest tests/integration/ -v -m integration --timeout=120 --cov=fetcher --cov-report=term-missing --cov-fail-under=0

@@ -22,9 +22,9 @@ VisualProcessor / per-run storage:
 - `emotion_face/emotion_face.npz` (**required**): emotion timeline (mapped to the union time axis by time interpolation).
 
 External processors (also in per-run storage under the same `rs_path`):
-- `text_processor/text_features.npz` (**required by default**; privacy-safe).
-- `loudness_extractor/*.npz` (**required by default**).
-- `tempo_extractor/*.npz` (**required by default**).
+- `text_processor/text_features.npz` (**optional by default**, privacy-safe; enabled via config/CLI).
+- `loudness_extractor/*.npz` (**optional by default**).
+- `tempo_extractor/*.npz` (**optional by default**).
 - `clap_extractor/*.npz` (optional by default).
 
 Important: this module requires **aligned sampling**:
@@ -37,7 +37,9 @@ Fixed filename (per-run unique by path):
 - `result_store/<platform_id>/<video_id>/<run_id>/high_level_semantic/high_level_semantic.npz`
 
 Schema:
-- `schema_version="high_level_semantic_npz_v1"` (registered in `docs/contracts/ARTIFACTS_AND_SCHEMAS.md`)
+- `schema_version="high_level_semantic_npz_v2"` (registered in `docs/contracts/ARTIFACTS_AND_SCHEMAS.md`)
+- **Audit v3**: `producer_version=2.0.2`, strict schema JSON + `SCHEMA.md`, offline render (без CDN), `meta.stage_timings_ms` + config highlights.
+- **Feature catalog (wide CSV / melt / QA):** `docs/FEATURE_DESCRIPTION.md`
 
 High-signal NPZ keys:
 - **Time axis**: `frame_indices (N,) int32`, `times_s (N,) float32`
@@ -50,6 +52,7 @@ High-signal NPZ keys:
 - **Dense per-frame vector**:
   - `frame_feature_names (F,) object[str]`
   - `frame_features (N, F) float32` (NaN for missing optional signals)
+  - `frame_feature_present_ratio (F,) float32` (доля finite по каждой колонке; помогает моделям интерпретировать NaN)
 - **Sparse events stream**:
   - `event_times_s (E,) float32`
   - `event_type_id (E,) int16`
@@ -97,6 +100,7 @@ Internal parallelism:
 
 External parallelism:
 - safe across runs due to per-run storage by `run_id`.
+- **Batch processing**: Модуль поддерживает batch processing (`supports_batch = True`) и может обрабатывать несколько видео последовательно. Использует дефолтную реализацию `BaseModule.process_batch()` (цикл по видео).
 
 ## Progress reporting
 
@@ -113,13 +117,14 @@ All parameters are passed from the website profile via `DataProcessor/configs/*.
 |---|---:|---:|---|
 | `feature_groups` | str | `"core,scenes,events,audio,emotion,text"` | Output feature groups (CSV) |
 | `require_cut_detection_model_facing` | bool | `false` | If true, requires cut_detection model-facing NPZ |
-| `require_text_processor` | bool | `true` | If true, requires `text_processor/text_features.npz` |
-| `require_audio_loudness` | bool | `true` | If true, requires `loudness_extractor` |
-| `require_audio_tempo` | bool | `true` | If true, requires `tempo_extractor` |
-| `require_audio_clap` | bool | `false` | If true, requires `clap_extractor` |
+| `require_text_processor` | bool | `true` (CLI) / `false` (API) | If true, requires `text_processor/text_features.npz` (otherwise текстовые фичи best-effort). **Note**: CLI defaults to `true`, but can be disabled with `--no-require-text-processor`. API (HighLevelSemanticModule) defaults to `false`. |
+| `require_audio_loudness` | bool | `true` (CLI) / `false` (API) | If true, requires `loudness_extractor` (иначе аудио‑громкость best-effort). **Note**: CLI defaults to `true`, but can be disabled with `--no-require-audio-loudness`. API defaults to `false`. |
+| `require_audio_tempo` | bool | `true` (CLI) / `false` (API) | If true, requires `tempo_extractor` (иначе аудио‑темп best-effort). **Note**: CLI defaults to `true`, but can be disabled with `--no-require-audio-tempo`. API defaults to `false`. |
+| `require_audio_clap` | bool | `false` | If true, requires `clap_extractor` (иначе clap‑фичи best-effort) |
 | `progress_every_frames` | int | `50` | Progress granularity (unit=frame) |
 | `semantic_jump_topk_events` | int | `256` | Max semantic-jump events |
 | `semantic_jump_min_strength` | float | `0.25` | Min jump strength for event candidates (1-cosine) |
+| `semantic_jump_min_distance_frames` | int | `6` | Min distance (frames) between semantic-jump peaks |
 
 ## Алгоритмы
 

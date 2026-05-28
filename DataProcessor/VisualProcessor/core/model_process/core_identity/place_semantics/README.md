@@ -1,14 +1,84 @@
-## Component: `place_semantics` (semantic head, v1)
+## Component: `place_semantics` (semantic head, Audit v3)
+
+**Version**: `0.2` (Audit v3)  
+**Schema**: `place_semantics_npz_v2`  
+**Audit v3 Status**: `passed`
+
+### Changelog
+
+#### v0.2 (Audit v3, schema v2) — 2026-02-XX
+
+**Критические изменения**:
+- **Schema bump**: `place_semantics_npz_v1` → `place_semantics_npz_v2`
+- **Использование core_clip/embeddings.npz**: компонент теперь использует frame embeddings из `core_clip/embeddings.npz` вместо отправки кадров в Embedding Service (соответствие схеме SCHEMA_SEMANTIC_HEADS_NPZ.md)
+  - Прямое сравнение embeddings через cosine similarity (10-50x быстрее, чем HTTP запросы на кадр)
+  - Получение embeddings мест из Embedding Service один раз через `get_all_embeddings()`
+  - Fallback на image-based search, если embeddings недоступны
+- **Детерминированный label-space**: добавлены `semantic_label_names` и `semantic_object_ids` для стабильного отображения UUID → int32
+  - Компонент получает полный список labels из Embedding Service заранее (через `get_labels()`)
+  - Используется канонический label space для обеспечения стабильности `label_id` между запусками
+  - Результаты поиска маппятся к каноническому label space через UUID
+- **DB provenance**: добавлены `db_name`, `db_version`, `db_digest` в meta для reproducibility
+  - `db_digest`: SHA256 хеш от канонического списка labels (стабильный в пределах версии базы)
+  - `db_name`: "embedding_service"
+  - `db_version`: "v1"
+- **meta_json**: добавлен cross-venv safe JSON representation meta
+- **Embedding Service client**: добавлены методы `get_labels()` и `get_all_embeddings()` для получения канонического списка labels и embeddings
+- **track_topk_evidence_frame_indices**: добавлено поле для указания union frame indices, где similarity максимальна для каждого top-K места в каждом треке (для debug и консистентности с другими semantic heads)
+- **threshold_global**: добавлен в meta для консистентности с другими semantic heads
+
+**Улучшения**:
+- **Производительность**: прямое сравнение embeddings (10-50x быстрее, чем HTTP запросы на кадр)
+- **Стабильность label space**: использование канонического label space из Embedding Service вместо динамического построения из результатов поиска
+- **Соответствие схеме**: использование `core_clip/embeddings.npz` согласно SCHEMA_SEMANTIC_HEADS_NPZ.md
+- **Render system**: полностью переписан HTML рендер на offline vanilla JS + SVG
+  - Offline render (без CDN), графики — SVG
+  - Добавлен SVG timeline график (offline)
+  - Mini-dashboard с секциями: Overview, QA (top/anti-top), Timeline, Tables, Meta
+  - Интерактивность на vanilla JS: поиск, фильтры, сортировка таблиц
+  - Навигация с якорями между секциями
+- **Документация**: 
+  - Добавлен `SCHEMA.md` (human schema) с полным описанием всех полей, tiers, required/optional
+  - Создана JSON схема `place_semantics_npz_v2.json` в `VisualProcessor/schemas/`
+  - Обновлен README с разделом "Render (dev-only)" согласно требованиям аудита
+- **Расширенный render context**: добавлены `key_facts`, `config_highlights`, `qa_hints`, `top_examples`, `anti_top_examples`
+
+**Breaking changes**:
+- **Upstream dependency**: Теперь требует `core_clip/embeddings.npz` (fail-fast, no-fallback) — соответствие схеме SCHEMA_SEMANTIC_HEADS_NPZ.md
+- `frame_topk_ids` и `track_topk_ids` теперь содержат int32 индексы из `semantic_label_names` вместо динамических индексов (детерминированное отображение)
+- Структура NPZ изменена: добавлены обязательные поля `semantic_object_ids`, `meta_json`, `track_topk_evidence_frame_indices`
+- Обязательные meta поля: добавлены `db_name`, `db_version`, `db_digest`, `embedding_service_url`, `place_category`, `topk`, `similarity_threshold`, `threshold_global`, `min_track_length`, `max_gap_sec`, `num_tracks`, `num_places`, `num_frames`
+- **NaN-policy**: `track_topk_ids` и `track_topk_scores` теперь инициализируются как `-1` и `NaN` вместо `0` (соответствие NaN-policy из SCHEMA_SEMANTIC_HEADS_NPZ.md)
+- **is_confident flags**: Теперь используют `threshold_global` вместо `similarity_threshold` (консистентность с другими semantic heads)
+
+**Технические детали**:
+- Канонический label space строится из `labels_canon` (полученного через `get_labels()`), отсортированного по UUID
+- `uuid_to_int` маппинг обеспечивает стабильность `label_id` между запусками (при одинаковом `db_digest`)
+- Результаты поиска маппятся к каноническому label space через UUID из результатов Embedding Service
+- Frame embeddings из `core_clip/embeddings.npz` нормализуются (L2 norm) перед сравнением
+- Place embeddings из Embedding Service также нормализуются (L2 norm) перед сравнением
+- Cosine similarity вычисляется как `dot(frame_emb_normalized, place_emb_normalized.T)`
+- Upstream models из `core_clip` включаются в `models_used` для полной provenance chain
+- `core_clip_model_signature` сохраняется в meta для отслеживания версий upstream моделей
+
+#### v0.1 (initial) — до Audit v3
+
+- Базовая реализация place recognition
+- Schema v1 без детерминированного label-space
+- Динамическое построение label space из результатов поиска
+- HTML render — полностью offline (без CDN)
 
 ### Назначение
 
 `place_semantics` распознает места и лэндмарки в видео:
-- использует CLIP через Embedding Service для извлечения embeddings кадров
-- сравнивает с базой известных мест через Embedding Service
+- использует frame embeddings из `core_clip/embeddings.npz` (required by schema)
+- получает embeddings мест из Embedding Service один раз
+- делает прямое сравнение через cosine similarity (10-50x быстрее, чем HTTP запросы на кадр)
 - группирует кадры по местам в tracks (временная сегментация)
 - возвращает per-track и per-frame top‑K идентификаций мест
 
 Компонент следует контракту semantic head:
+- Требует `core_clip/embeddings.npz` (frame embeddings, must cover all required frame_indices) — **required by schema SCHEMA_SEMANTIC_HEADS_NPZ.md**
 - Требует `core_object_detections.frame_indices` (shared sampling group)
 - Выравнивает выходные данные по тем же `frame_indices`
 - Выводит результаты в NPZ формате
@@ -28,11 +98,17 @@ place_semantics/
 
 Компонент **использует Embedding Service** для хранения и поиска эмбеддингов мест:
 
-1. **Категория**: `place` или `place_semantic`
-2. **Модель**: `clip_448` (CLIP 448x448 для высокого качества распознавания мест)
-3. **Использование**:
-   - Хранение эмбеддингов известных мест/лэндмарков в Embedding Service
-   - Поиск похожих мест через Embedding Service (`POST /search`)
+1. **Категория**: `place` (может быть расширена)
+2. **Модель**: CLIP (определяется Embedding Service, обычно `clip_224` или `clip_336`)
+3. **Канонический label space** (v2, Audit v3):
+   - Компонент получает полный список labels из Embedding Service заранее через `GET /categories/place/labels`
+   - Строится канонический label space (отсортированный по UUID) для обеспечения стабильности `label_id` между запусками
+   - Вычисляется `db_digest` (SHA256 хеш от канонического списка labels) для reproducibility
+   - Результаты поиска маппятся к каноническому label space через UUID
+4. **Использование** (v0.2, Audit v3):
+   - Получение канонического label space через `GET /categories/place/labels` (для `db_digest` и стабильности)
+   - Получение embeddings мест через `GET /categories/place/embeddings` (для прямого сравнения, оптимизация)
+   - Fallback: поиск похожих мест через Embedding Service (`POST /search`) если embeddings недоступны
    - Добавление новых мест через API (`POST /objects/add`)
    - Обновление информации о местах (`PATCH /objects/{id}`)
 
@@ -42,6 +118,11 @@ place_semantics/
 - Удобное управление базой (добавление/удаление/обновление)
 - Хранение метаданных (название, страна, город, координаты и т.д.)
 - Горячее обновление (новые места доступны сразу)
+
+**Оптимизация производительности** (v0.2, Audit v3):
+- Прямое сравнение embeddings (10-50x быстрее, чем HTTP запросы на кадр)
+- Получение embeddings мест один раз вместо запросов на каждый кадр
+- Использование готовых embeddings из `core_clip/embeddings.npz` (переиспользование вычислений)
 
 **Пример использования**:
 ```python
@@ -69,30 +150,39 @@ POST http://localhost:8001/search
 }
 ```
 
-**Алгоритм работы**:
+**Алгоритм работы** (v0.2, Audit v3):
 1. Компонент получает `frame_indices` из `core_object_detections.frame_indices` (shared sampling group)
-2. Загружает кадры через `FrameManager`
-3. Отправляет каждый кадр в Embedding Service для поиска похожих мест
-4. Группирует кадры по местам в tracks (временная сегментация)
-5. Возвращает top‑K результатов с similarity scores
+2. Загружает frame embeddings из `core_clip/embeddings.npz` (required by schema)
+3. Получает embeddings мест из Embedding Service один раз через `get_all_embeddings()` (оптимизация)
+4. Делает прямое сравнение embeddings через cosine similarity (10-50x быстрее, чем HTTP запросы на кадр)
+5. Fallback: если embeddings недоступны, использует image-based search через Embedding Service
+6. Группирует кадры по местам в tracks (временная сегментация)
+7. Возвращает top‑K результатов с similarity scores
 
 ### Входы (required)
 
 - `frames_dir/metadata.json`:
   - `core_object_detections.frame_indices` (shared sampling group)
   - `union_timestamps_sec`
-- Embedding Service доступен (для поиска в базе мест)
+- `rs_path/core_clip/embeddings.npz`:
+  - `frame_indices` (must cover all required frame_indices from core_object_detections)
+  - `frame_embeddings` (normalized CLIP embeddings, shape `(N, D)`)
+  - `meta` (для provenance chaining: `models_used`, `model_signature`)
+- Embedding Service доступен (для получения embeddings мест и label space)
 
-**Early validation**: Компонент выполняет раннюю проверку доступности Embedding Service:
-- Проверка health endpoint через `embedding_client._ensure_url()`
-- Тестовый запрос с первым кадром для проверки работоспособности search endpoint
-- Если тест не проходит (например, 500 ошибка):
-  - Выдается одно предупреждение вместо множества ошибок
-  - Пропускается обработка всех кадров
-  - Заполняются пустые результаты вместо обработки с ошибками
-- Если тест проходит — продолжается обычная обработка
+**Early validation** (v0.2, Audit v3):
+- Проверка доступности `core_clip/embeddings.npz` (fail-fast, no-fallback)
+- Проверка coverage: все required `frame_indices` должны быть в `core_clip.frame_indices` (fail-fast)
+- Проверка health endpoint Embedding Service через `embedding_client._ensure_url()` (fail-fast)
+- Получение label space через `get_labels()` (fail-fast, если база пустая)
+- Попытка получить embeddings мест через `get_all_embeddings()` (fallback на image search, если недоступны)
 
-**No-fallback**: Если Embedding Service недоступен при инициализации → **RuntimeError** (fail-fast). Если сервис недоступен во время обработки → компонент пропускает все кадры с предупреждением.
+**No-fallback policy**:
+- Отсутствие `core_clip/embeddings.npz` → **RuntimeError** (fail-fast)
+- Отсутствие required `frame_indices` в `core_clip` → **RuntimeError** (fail-fast)
+- Embedding Service недоступен при инициализации → **RuntimeError** (fail-fast)
+- База мест пустая (0 labels) → **RuntimeError** (fail-fast)
+- Если embeddings мест недоступны → fallback на image-based search (медленнее, но работает)
 
 ### Output (NPZ)
 
@@ -100,9 +190,12 @@ POST http://localhost:8001/search
 
 **Artifact filename**: `place_semantics.npz` (фиксированное имя, `ARTIFACT_FILENAME`)
 
-**Schema version**: `place_semantics_npz_v1`
+**Schema version**: `place_semantics_npz_v2`
 
-Ключи (v1):
+**Human schema**: `SCHEMA.md` (рядом с компонентом)  
+**Machine schema**: `VisualProcessor/schemas/place_semantics_npz_v2.json`
+
+Ключи (v2):
 - `frame_indices (N,) int32` — shared sampling group
 - `times_s (N,) float32` — `union_timestamps_sec[frame_indices]`
 - `track_ids (T,) int32` — ID треков (отдельные tracks для разных мест)
@@ -110,12 +203,17 @@ POST http://localhost:8001/search
 - `track_topk_scores (T, K) float32` — Similarity scores для треков
 - `track_present_mask (T,) bool` — Маска присутствия треков
 - `track_is_confident_top1 (T,) bool` — Флаг уверенности для top-1 места на трек
+- `track_topk_evidence_frame_indices (T, K) int32` — Union frame indices, где similarity максимальна для каждого top-K места в каждом треке
 - `frame_topk_ids (N, K) int32` — Top‑K мест на кадр
 - `frame_topk_scores (N, K) float32` — Similarity scores для кадров
 - `frame_is_confident_top1 (N,) bool` — Флаг уверенности для top-1 места на кадр
-- `semantic_label_names (A,) str` — Массив строк "id:name" для маппинга label_id → place_name
+- `semantic_label_names (A,) str` (`"id:name"`) — канонический label space из Embedding Service (стабильный в пределах `db_digest`)
+- `semantic_object_ids (A,) str` — UUID из Embedding Service, aligned с `semantic_label_names` (для reproducibility)
 - `threshold_per_label_arr (A,) float32` — Пороги для каждого места (NaN если нет)
-- `meta` (object dict): статус + информация о базе мест + models_used
+- `meta` (object dict): статус + информация о базе мест + models_used + DB provenance + `threshold_global` + `core_clip_model_signature` (provenance chaining)
+- `meta_json` (str): meta как JSON string (cross-venv safe)
+
+**Важно (v2)**: `semantic_label_names` и `semantic_object_ids` строятся из канонического списка labels, полученного из Embedding Service заранее. Это обеспечивает стабильность `label_id` между запусками при одинаковом `db_digest`.
 
 **Meta обязательные поля** (baseline contract):
 - `producer`, `producer_version`, `schema_version`, `created_at`
@@ -175,41 +273,44 @@ POST http://localhost:8001/search
 
 ### Parallelization
 
-- **Внутренний**: компонент обрабатывает кадры последовательно (HTTP запросы к Embedding Service)
-  - Каждый кадр отправляется в Embedding Service отдельным запросом
-  - Retry механизм (3 попытки с exponential backoff) для надежности
-  - Batch API Embedding Service может быть использован в будущем для оптимизации
+- **Внутренний** (v0.2, Audit v3): компонент обрабатывает кадры векторизованно (прямое сравнение embeddings)
+  - Все кадры обрабатываются одновременно через матричное умножение
+  - Fallback: если embeddings недоступны, кадры обрабатываются последовательно через HTTP запросы
+  - Retry механизм (3 попытки с exponential backoff) для надежности (только в fallback режиме)
 - **Внешний**: компонент безопасно параллелить по разным видео/`run_id` (per-run storage)
   - Разные экземпляры компонента могут работать параллельно на разных видео
   - Требования к изоляции: разные `run_id`, разные `result_store` пути
 
 **Ограничения**:
 - Thread-safety: компонент не thread-safe (каждый экземпляр работает в отдельном процессе)
-- Требования к Embedding Service: сервис должен поддерживать параллельные запросы
-- Требования к памяти: peak memory зависит от количества кадров и размера изображений
+- Требования к памяти: peak memory зависит от количества кадров, размера embeddings и количества мест в базе
+- Размер матрицы сравнения: `(N, D) @ (D, M)` где N=кадры, D=размерность embeddings, M=количество мест
 
 ### Performance characteristics
 
 **Единица обработки**: `frame` (один кадр)
 
-**Типичные значения** (зависят от Embedding Service и сетевых условий):
+**Типичные значения** (v0.2, Audit v3 — прямое сравнение embeddings):
 
 | Resolution | Latency per frame | CPU RAM peak | Notes |
 |------------|-------------------|--------------|-------|
-| 1920x1080 | ~200-500 ms | ~100-200 MB | HTTP latency + Embedding Service processing |
+| 1920x1080 | ~1-5 ms | ~100-200 MB | Прямое сравнение embeddings (10-50x быстрее, чем HTTP запросы) |
 
-**Для видео с N кадрами**: Total latency ≈ N × latency_per_frame
+**Для видео с N кадрами**: Total latency ≈ initialization + N × latency_per_frame
+- **Initialization**: ~100-500 ms (загрузка `core_clip/embeddings.npz`, получение embeddings мест из Embedding Service)
+- **Per-frame**: ~1-5 ms (прямое сравнение через cosine similarity)
 
 **Факторы производительности**:
-- Сетевая задержка до Embedding Service
-- Нагрузка на Embedding Service
-- Размер изображений (качество JPEG)
-- Количество параллельных запросов
+- Количество мест в базе (влияет на размер матрицы сравнения)
+- Размерность embeddings (обычно 512 для CLIP)
+- Количество кадров (линейная зависимость)
+- Fallback на image search: ~200-500 ms на кадр (если embeddings недоступны)
 
-**Оптимизации**:
-- Batch API Embedding Service (если доступен) может ускорить обработку
-- Кэширование результатов для повторных прогонов
-- Параллельная обработка кадров (если Embedding Service поддерживает)
+**Оптимизации** (v0.2, Audit v3):
+- Прямое сравнение embeddings (10-50x быстрее, чем HTTP запросы на кадр)
+- Получение embeddings мест один раз вместо запросов на каждый кадр
+- Использование готовых embeddings из `core_clip/embeddings.npz` (переиспользование вычислений)
+- Векторизованные операции NumPy для batch сравнения
 
 **Полные данные**: см. `docs/models_docs/resource_costs/place_semantics_costs_v1.json` (планируется)
 
@@ -256,38 +357,58 @@ python main.py \
 
 ### Детали реализации
 
-#### Алгоритм обработки:
+#### Алгоритм обработки (v0.2, Audit v3):
 
-1. **Загрузка кадров**:
+1. **Загрузка зависимостей**:
    - Загружает `frame_indices` из `metadata.json[core_object_detections.frame_indices]`
-   - Создает `FrameManager` для доступа к кадрам
-   - Проверяет наличие `union_timestamps_sec`
+   - Загружает frame embeddings из `core_clip/embeddings.npz` (fail-fast, no-fallback)
+   - Проверяет coverage: все required `frame_indices` должны быть в `core_clip.frame_indices`
+   - Нормализует frame embeddings (L2 norm)
 
-2. **Поиск мест на кадрах**:
+2. **Получение embeddings мест**:
+   - Получает канонический label space через `get_labels()` (для `db_digest` и стабильности)
+   - Получает embeddings мест через `get_all_embeddings()` (оптимизация)
+   - Нормализует place embeddings (L2 norm)
+   - Fallback: если embeddings недоступны, использует image-based search
+
+3. **Прямое сравнение embeddings** (основной путь):
+   - Вычисляет cosine similarity: `dot(frame_emb_normalized, place_emb_normalized.T)` → `(N, M)`
+   - Применяет `similarity_threshold` (фильтрация низких similarity)
+   - Получает top-K для каждого кадра через `argsort`
+   - Маппит результаты к каноническому label space через UUID
+
+4. **Fallback: image-based search** (если embeddings недоступны):
+   - Создает `FrameManager` для доступа к кадрам
    - Для каждого кадра отправляет запрос в Embedding Service
    - Использует retry механизм (3 попытки с exponential backoff)
    - Обрабатывает пустые результаты (warning, не error)
 
-3. **Группировка в tracks**:
+5. **Группировка в tracks**:
    - Группирует кадры с одинаковым top-1 местом в tracks
    - Объединяет треки, если разрыв между кадрами ≤ `max_gap_sec`
    - Фильтрует треки короче `min_track_length`
 
-4. **Агрегация результатов**:
-   - Track-level: top-K результатов для каждого трека (дедупликация по place_name)
+6. **Агрегация результатов**:
+   - Track-level: top-K результатов для каждого трека (max similarity over time per place)
    - Frame-level: top-K результатов для каждого кадра (дедупликация по place_name)
-   - Confidence flags: `track_is_confident_top1` и `frame_is_confident_top1` на основе `similarity_threshold`
+   - Confidence flags: `track_is_confident_top1` и `frame_is_confident_top1` на основе `threshold_global`
+   - Evidence frames: `track_topk_evidence_frame_indices` указывает на кадры с максимальной similarity
 
 #### Обработка ошибок:
 
-- **Retry механизм**: Все запросы к Embedding Service автоматически повторяются при ошибках (3 попытки)
+- **Fail-fast**: Отсутствие `core_clip/embeddings.npz` или required `frame_indices` → RuntimeError
+- **Fail-fast**: Embedding Service недоступен при инициализации → RuntimeError
+- **Fail-fast**: База мест пустая (0 labels) → RuntimeError
+- **Retry механизм**: Все запросы к Embedding Service автоматически повторяются при ошибках (3 попытки, только в fallback режиме)
 - **Валидация данных**: Проверка размеров массивов, соответствия frame_indices
 - **Graceful degradation**: При ошибке отдельного кадра компонент продолжает работу (не падает весь процесс)
 - **Логирование**: Все ошибки и предупреждения логируются
 
-#### Оптимизации:
+#### Оптимизации (v0.2, Audit v3):
 
-- **Batch API (заготовка)**: Подготовлен метод для batch-запросов (пока использует fallback)
+- **Прямое сравнение embeddings**: 10-50x быстрее, чем HTTP запросы на кадр
+- **Векторизованные операции**: Batch сравнение через матричное умножение NumPy
+- **Переиспользование вычислений**: Использование готовых embeddings из `core_clip/embeddings.npz`
 - **Temporal segmentation**: Группировка кадров в tracks для уменьшения шума
 - **Cost control**: Параметры `min_track_length` и `max_gap_sec` для контроля качества
 
@@ -322,10 +443,34 @@ python main.py \
 - `semantic_label_names (A,) str`: Массив строк "id:name" для маппинга label_id → place_name
 - `threshold_per_label_arr (A,) float32`: Пороги для каждого места (NaN если нет)
 
-**Влияние на стоимость**:
-- Каждый кадр требует HTTP запрос к Embedding Service (~200-500 ms)
-- Для видео с N кадрами: Total cost ≈ N × cost_per_frame
-- Batch API может снизить стоимость (если доступен)
+**Влияние на стоимость** (v0.2, Audit v3):
+- Прямое сравнение embeddings: ~1-5 ms на кадр (10-50x быстрее, чем HTTP запросы)
+- Initialization: ~100-500 ms (загрузка embeddings, получение embeddings мест)
+- Для видео с N кадрами: Total cost ≈ initialization + N × 1-5 ms
+- Fallback на image search: ~200-500 ms на кадр (если embeddings недоступны)
+
+### Empty vs Error semantics (Audit v3)
+
+**Valid empty outputs**:
+- `status="empty"` устанавливается, если:
+  - `empty_reason="no_places_detected"`: Embedding Service доступен, база не пустая, но места не найдены на кадрах
+  - `empty_reason="embedding_service_unavailable_during_processing"`: сервис стал недоступен во время обработки (редкий случай, обычно fail-fast срабатывает раньше)
+- Выходные массивы заполняются значениями по умолчанию:
+  - `frame_indices`, `times_s`: присутствуют (из upstream)
+  - `track_topk_ids`, `frame_topk_ids`: `-1` (NaN-policy)
+  - `track_topk_scores`, `frame_topk_scores`: `NaN` (NaN-policy)
+  - `semantic_label_names`, `semantic_object_ids`: присутствуют (из канонического label space)
+  - `db_digest`: присутствует (для reproducibility)
+
+**Error cases** (fail-fast, RuntimeError):
+- Отсутствие `core_clip/embeddings.npz` → **RuntimeError**
+- Отсутствие required `frame_indices` в `core_clip` → **RuntimeError**
+- Embedding Service недоступен при инициализации → **RuntimeError**
+- База мест пустая (0 labels) → **RuntimeError**
+- Отсутствие `core_object_detections.frame_indices` в metadata → **RuntimeError**
+- Отсутствие `union_timestamps_sec` в metadata → **RuntimeError**
+
+**No-fallback policy**: Компонент не создает "ok empty" из-за отсутствия required зависимостей. Все hard dependencies проверяются fail-fast.
 
 ### Quality validation & human-friendly inspection
 
@@ -336,6 +481,98 @@ python main.py \
 
 Human-friendly demo (HTML):
 - `quality_report/demo_place_semantics_quality.py` — генерирует HTML с timeline, thumbnails, consecutive similarity scores, и статистикой по местам
+
+### Schema и версионирование
+
+**Schema version**: `place_semantics_npz_v2`
+
+**Human schema**: `SCHEMA.md` (рядом с компонентом)  
+**Machine schema**: `VisualProcessor/schemas/place_semantics_npz_v2.json`
+
+**Версионирование**:
+- `producer_version`: версия компонента (текущая: `0.2`)
+- `schema_version`: версия схемы NPZ (текущая: `place_semantics_npz_v2`)
+- `db_digest`: SHA256 хеш канонического списка labels (для reproducibility)
+
+**Правила обратной совместимости**:
+- Любое существенное изменение ключей/dtype/shape → bump `schema_version`
+- Изменения в структуре meta (добавление required полей) → bump `schema_version`
+- `allow_extra_keys=false` в схеме (fail-fast при неизвестных ключах)
+
+### Render (dev-only)
+
+Компонент генерирует **offline mini-dashboard** для визуализации результатов распознавания мест.
+
+**Файлы рендера**:
+- `_render/render_context.json` — JSON контекст с данными для рендера
+- `_render/render.html` — HTML mini-dashboard (offline, без CDN)
+
+**Структура render.html**:
+
+1. **Overview**:
+   - Описание компонента и его назначения
+   - **Key facts**: `schema_version`, `producer_version`, `place_category`, количество frames/tracks/places, `db_digest`, время выполнения
+   - **Config highlights**: `topk`, `similarity_threshold`, `min_track_length`, `max_gap_sec`
+   - **How to QA**: типовые распределения и аномалии для проверки качества
+
+2. **QA (top/anti-top)**:
+   - **Top examples**: кадры с наивысшими similarity scores (лучшие распознавания)
+   - **Anti-top examples**: кадры с наименьшими scores, но с распознанным местом (подозрительные случаи)
+   - Таблицы с возможностью сортировки по любому столбцу
+
+3. **Timeline**:
+   - SVG график top-1 place score по времени (offline, без CDN)
+   - Визуализация изменений similarity scores на протяжении видео
+
+4. **Tables**:
+   - **Top places by frequency**: наиболее часто встречающиеся места с количеством кадров и средним score
+   - **All frames**: интерактивная таблица всех кадров (первые 3000) с поиском и фильтрами:
+     - Поиск по frame_index/time_sec/place_name
+     - Фильтр по минимальному top1_score
+     - Фильтр "Confident only"
+   - **Distribution statistics**: статистика распределения top1_scores и topk_scores (min/max/mean/std/median/p25/p75)
+
+5. **Meta**:
+   - Полный JSON метаданных из NPZ
+
+**Интерактивность**:
+- Сортировка таблиц по клику на заголовок (vanilla JS, offline)
+- Поиск и фильтры в таблице "All frames" (vanilla JS, offline)
+- Навигация по секциям через якоря в меню
+
+**Как читать выход**:
+- **Top1_score range**: нормальные значения 0.3-0.9 для корректных распознаваний
+- **Confident ratio**: должно быть > 0.5 для видео с четкими местами
+- **Tracks count**: должно быть > 0, если места обнаружены; проверьте `min_track_length`, если треков слишком мало
+- **Anomaly (low scores)**: top1_score < 0.2 может указывать на отсутствие места или плохое качество
+- **Anomaly (high variance)**: std > 0.3 может указывать на нестабильное распознавание
+
+**Связь с NPZ**:
+- NPZ остаётся source-of-truth
+- Render — это "человеческая интерпретация" NPZ для dev/debug
+- Все данные в render берутся из NPZ артефакта
+
+**Время выполнения**:
+- Смотрите `meta.stage_timings_ms` в секции Meta или Key facts
+- Основные стадии: `initialization`, `load_deps`, `process_frames`, `saving`, `total`
+
+**Параметры конфига, влияющие на результат и стоимость**:
+- `topk`: количество топ результатов (по умолчанию 5)
+- `similarity_threshold`: минимальный порог similarity (влияет на `is_confident` флаги)
+- `min_track_length`: минимальная длина трека (влияет на количество треков)
+- `max_gap_sec`: максимальный разрыв между кадрами для объединения треков (влияет на группировку)
+
+**Конфигурация**:
+
+В `global_config.yaml`:
+```yaml
+place_semantics:
+  render:
+    enable_render: true  # Генерировать render-context JSON
+    enable_html_render: true  # Генерировать HTML mini-dashboard
+```
+
+**Примечание**: Render генерируется автоматически после успешной обработки компонента (best-effort: ошибки render не валят основной процесс).
 
 ### Troubleshooting
 

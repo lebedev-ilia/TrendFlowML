@@ -6,14 +6,18 @@ Baseline-версия: story/energy/coherence по `core_clip` embeddings (бе�
 
 from __future__ import annotations
 
+import sys
+from pathlib import Path
+_vp = Path(__file__).resolve().parent  # story_structure/
+for _ in range(2):
+    _vp = _vp.parent  # -> modules -> VisualProcessor
+sys.path.insert(0, str(_vp))
+
 import argparse
 import os
-import sys
 from typing import Optional, List, Dict, Any
 
-sys.path.append(os.path.dirname(os.path.dirname(os.path.dirname(__file__))))
-
-from modules.story_structure.story_structure import StoryStructureBaselineModule
+from modules.story_structure.utils.story_structure import StoryStructureBaselineModule
 from utils.logger import get_logger
 
 MODULE_NAME = "story_structure"

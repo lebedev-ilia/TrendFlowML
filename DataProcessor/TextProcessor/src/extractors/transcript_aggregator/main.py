@@ -9,7 +9,19 @@ import torch
 from src.core.base_extractor import BaseExtractor
 from src.core.metrics import system_snapshot, process_memory_bytes
 from src.schemas.models import VideoDocument
-from src.core.text_utils import normalize_whitespace
+
+# Stable order: 10 core + 9 extra (extra → NaN when emit_extra_metrics=False; std slots NaN when compute_std=False).
+_TRAGG_EXTRA_KEYS: Tuple[str, ...] = (
+    "tp_tragg_whisper_n_chunks",
+    "tp_tragg_youtube_auto_n_chunks",
+    "tp_tragg_combined_n_chunks",
+    "tp_tragg_whisper_mean_std",
+    "tp_tragg_whisper_max_std",
+    "tp_tragg_youtube_auto_mean_std",
+    "tp_tragg_youtube_auto_max_std",
+    "tp_tragg_combined_mean_std",
+    "tp_tragg_combined_max_std",
+)
 
 
 class TranscriptAggregatorExtractor(BaseExtractor):
@@ -21,13 +33,13 @@ class TranscriptAggregatorExtractor(BaseExtractor):
     - Valid empty semantics: no fake vectors; missing optional inputs -> NaNs + *_present flags
     """
 
-    VERSION = "1.2.0"
+    VERSION = "1.3.0"
 
     def __init__(
         self,
         artifacts_dir: Optional[str] = None,
-        # model_name kept for legacy compatibility/metadata only (aggregator does not run the model)
-        model_name: str = "sentence-transformers/all-MiniLM-L6-v2",
+        # Metadata only: must match chunk embedder model (dp_models resolve, no forward pass).
+        model_name: str = "intfloat/multilingual-e5-large",
         device: Optional[str] = "cpu",
         decay_rate: float = 0.01,
         compute_std: bool = False,
@@ -58,7 +70,82 @@ class TranscriptAggregatorExtractor(BaseExtractor):
             raise RuntimeError("TranscriptAggregatorExtractor: sources list must be non-empty")
         if not self.compute_mean and not self.compute_max:
             raise RuntimeError("TranscriptAggregatorExtractor: at least one of compute_mean/compute_max must be True")
-        # no heavy model; pure tensor ops
+
+        init_sys_before = system_snapshot()
+        init_mem_before = process_memory_bytes()
+        try:
+            from dp_models import get_global_model_manager  # type: ignore
+
+            mm = get_global_model_manager()
+            spec = mm.get_spec(model_name=str(self.model_name))
+            _d, _p, _rt, _eng, weights_digest, _arts = mm.resolve(spec)
+            self.weights_digest = str(weights_digest or "unknown")
+            self.model_version = str(getattr(spec, "model_version", "unknown") or "unknown")
+        except Exception as e:
+            raise RuntimeError(
+                f"TranscriptAggregatorExtractor: dp_models resolve failed for model_name={self.model_name!r}: {e}"
+            ) from e
+        init_sys_after = system_snapshot()
+        init_mem_after = process_memory_bytes()
+        self._init_metrics: Dict[str, Any] = {
+            "pre_init": init_sys_before,
+            "post_init": init_sys_after,
+            "ram_peak_bytes": max(init_mem_before, init_mem_after),
+        }
+
+    def _gpu_peak_mb(self, sys_after: Any) -> int:
+        def _g(snap: Any) -> int:
+            try:
+                g = (snap or {}).get("gpu") or {}
+                arr = g.get("gpus") or []
+                return max([int(x.get("memory_used_mb", 0)) for x in arr] or [0])
+            except Exception:
+                return 0
+
+        return max(
+            _g(self._init_metrics.get("pre_init")),
+            _g(self._init_metrics.get("post_init")),
+            _g(sys_after),
+        )
+
+    def _build_features_flat(self, results: Dict[str, Any]) -> Dict[str, float]:
+        d: Dict[str, float] = {
+            "tp_tragg_present": 1.0 if bool(results) else 0.0,
+            "tp_tragg_present_whisper": 1.0 if ("whisper" in results) else 0.0,
+            "tp_tragg_present_youtube": 1.0 if ("youtube_auto" in results) else 0.0,
+            "tp_tragg_present_combined": 1.0 if ("combined" in results) else 0.0,
+            "tp_tragg_decay_rate": float(self.decay_rate),
+            "tp_tragg_compute_std": 1.0 if self.compute_std else 0.0,
+            "tp_tragg_compute_mean": 1.0 if self.compute_mean else 0.0,
+            "tp_tragg_compute_max": 1.0 if self.compute_max else 0.0,
+            "tp_tragg_compute_combined": 1.0 if self.compute_combined else 0.0,
+            "tp_tragg_write_artifacts": 1.0 if self.write_artifacts else 0.0,
+        }
+        if not self.emit_extra_metrics:
+            for k in _TRAGG_EXTRA_KEYS:
+                d[k] = float("nan")
+            return d
+
+        for src in ("whisper", "youtube_auto", "combined"):
+            nk = f"tp_tragg_{src}_n_chunks"
+            n = float("nan")
+            if isinstance(results.get(src), dict):
+                n = float(int(results[src].get("n_chunks", 0) or 0))
+            d[nk] = float(n)
+
+        if self.compute_std:
+            for src in ("whisper", "youtube_auto", "combined"):
+                ms = (results.get(src) or {}).get("mean") if isinstance(results.get(src), dict) else None
+                xs = (results.get(src) or {}).get("max") if isinstance(results.get(src), dict) else None
+                mstd = float(ms.get("std")) if isinstance(ms, dict) and ms.get("present") else float("nan")
+                xstd = float(xs.get("std")) if isinstance(xs, dict) and xs.get("present") else float("nan")
+                d[f"tp_tragg_{src}_mean_std"] = float(mstd)
+                d[f"tp_tragg_{src}_max_std"] = float(xstd)
+        else:
+            for src in ("whisper", "youtube_auto", "combined"):
+                d[f"tp_tragg_{src}_mean_std"] = float("nan")
+                d[f"tp_tragg_{src}_max_std"] = float("nan")
+        return d
 
     @staticmethod
     def _normalize(vec: torch.Tensor) -> torch.Tensor:
@@ -174,13 +261,14 @@ class TranscriptAggregatorExtractor(BaseExtractor):
         import time
 
         t0 = time.perf_counter()
-        sys_before = system_snapshot()
         mem_before = process_memory_bytes()
 
         # Dependency: requires transcript chunk embeddings created earlier in this run.
         tp_art = getattr(doc, "tp_artifacts", None)
         if not isinstance(tp_art, dict):
-            raise RuntimeError("TranscriptAggregatorExtractor requires TranscriptChunkEmbedder outputs (doc.tp_artifacts missing)")
+            raise RuntimeError(
+                "TranscriptAggregatorExtractor requires TranscriptChunkEmbedder outputs (doc.tp_artifacts missing)"
+            )
 
         load_s = 0.0
         agg_s = 0.0
@@ -208,8 +296,16 @@ class TranscriptAggregatorExtractor(BaseExtractor):
             if emb is None:
                 continue
             conf = self._read_chunk_confidence(tp_art, source)
-            mean_res = self._aggregate_mean_streaming(emb, confidence=conf, decay_rate=self.decay_rate) if self.compute_mean else {"embedding": None, "count": int(getattr(emb, "shape", [0])[0] or 0), "std": float("nan")}
-            max_res = self._aggregate_maxpool_streaming(emb) if self.compute_max else {"embedding": None, "count": int(getattr(emb, "shape", [0])[0] or 0), "std": float("nan")}
+            mean_res = (
+                self._aggregate_mean_streaming(emb, confidence=conf, decay_rate=self.decay_rate)
+                if self.compute_mean
+                else {"embedding": None, "count": int(getattr(emb, "shape", [0])[0] or 0), "std": float("nan")}
+            )
+            max_res = (
+                self._aggregate_maxpool_streaming(emb)
+                if self.compute_max
+                else {"embedding": None, "count": int(getattr(emb, "shape", [0])[0] or 0), "std": float("nan")}
+            )
 
             # Write artifacts (fixed per-run names)
             mean_rel = None
@@ -245,8 +341,16 @@ class TranscriptAggregatorExtractor(BaseExtractor):
                     parts.append(np.asarray(emb_by_source[s], dtype=np.float32))
             if parts:
                 combined = np.vstack(parts)
-                mean_res = self._aggregate_mean_streaming(combined, confidence=None, decay_rate=self.decay_rate) if self.compute_mean else {"embedding": None, "count": int(combined.shape[0]), "std": float("nan")}
-                max_res = self._aggregate_maxpool_streaming(combined) if self.compute_max else {"embedding": None, "count": int(combined.shape[0]), "std": float("nan")}
+                mean_res = (
+                    self._aggregate_mean_streaming(combined, confidence=None, decay_rate=self.decay_rate)
+                    if self.compute_mean
+                    else {"embedding": None, "count": int(combined.shape[0]), "std": float("nan")}
+                )
+                max_res = (
+                    self._aggregate_maxpool_streaming(combined)
+                    if self.compute_max
+                    else {"embedding": None, "count": int(combined.shape[0]), "std": float("nan")}
+                )
 
                 mean_rel = None
                 max_rel = None
@@ -296,48 +400,25 @@ class TranscriptAggregatorExtractor(BaseExtractor):
                 tp_art["transcripts"].setdefault(k, {})
                 tp_art["transcripts"][k]["agg_max_relpath"] = max_rel
 
-        features_flat: Dict[str, float] = {
-            "tp_tragg_present": 1.0 if bool(results) else 0.0,
-            "tp_tragg_present_whisper": 1.0 if ("whisper" in results) else 0.0,
-            "tp_tragg_present_youtube": 1.0 if ("youtube_auto" in results) else 0.0,
-            "tp_tragg_present_combined": 1.0 if ("combined" in results) else 0.0,
-            "tp_tragg_decay_rate": float(self.decay_rate),
-            "tp_tragg_compute_std": 1.0 if self.compute_std else 0.0,
-            "tp_tragg_compute_mean": 1.0 if self.compute_mean else 0.0,
-            "tp_tragg_compute_max": 1.0 if self.compute_max else 0.0,
-            "tp_tragg_compute_combined": 1.0 if self.compute_combined else 0.0,
-            "tp_tragg_write_artifacts": 1.0 if self.write_artifacts else 0.0,
-        }
-        if self.emit_extra_metrics:
-            # counts per source
-            for src in ("whisper", "youtube_auto", "combined"):
-                n = float("nan")
-                if isinstance(results.get(src), dict):
-                    n = float(int(results[src].get("n_chunks", 0) or 0))
-                features_flat[f"tp_tragg_{src}_n_chunks"] = float(n)
-                if self.compute_std:
-                    ms = (results.get(src) or {}).get("mean") if isinstance(results.get(src), dict) else None
-                    xs = (results.get(src) or {}).get("max") if isinstance(results.get(src), dict) else None
-                    mstd = float(ms.get("std")) if isinstance(ms, dict) and ms.get("present") else float("nan")
-                    xstd = float(xs.get("std")) if isinstance(xs, dict) and xs.get("present") else float("nan")
-                    features_flat[f"tp_tragg_{src}_mean_std"] = float(mstd)
-                    features_flat[f"tp_tragg_{src}_max_std"] = float(xstd)
+        features_flat = self._build_features_flat(results)
+        gpu_peak_mb = self._gpu_peak_mb(sys_after)
 
         return {
             "device": self.device,
             "version": self.VERSION,
+            "model_name": self.model_name,
+            "model_version": str(self.model_version),
+            "weights_digest": self.weights_digest,
             "system": {
-                "pre_init": sys_before,
-                "post_init": sys_before,  # aggregator has no heavy init
+                "pre_init": self._init_metrics.get("pre_init"),
+                "post_init": self._init_metrics.get("post_init"),
                 "post_process": sys_after,
                 "peaks": {
-                    "ram_peak_mb": int(max(mem_before, mem_after) / 1024 / 1024),
-                    "gpu_peak_mb": 0,
+                    "ram_peak_mb": int(max(self._init_metrics.get("ram_peak_bytes", 0), mem_before, mem_after) / 1024 / 1024),
+                    "gpu_peak_mb": int(gpu_peak_mb),
                 },
             },
             "timings_s": {"load": round(load_s, 3), "aggregate": round(agg_s, 3), "total": round(total_s, 3)},
             "result": {"features_flat": features_flat},
             "error": None,
         }
-
-

@@ -1,0 +1,159 @@
+{
+  "schema_system_version": "vp_schema_v1",
+  "schema_version": "hashtag_embedder_output_v1",
+  "producer": "hashtag_embedder",
+  "artifact_kind": "extractor_features_flat",
+  "allow_extra_keys": false,
+  "description": "Logical contract for HashtagEmbedder.result.features_flat merged into text_features.npz (text_npz_v1). Dense vector is stored in hashtag_embedding.npy, not in features_flat.",
+  "meta": {
+    "required_keys": [],
+    "optional_keys": []
+  },
+  "fields": {
+    "tp_hashemb_present": {
+      "required": true,
+      "tier": "model_facing",
+      "dtype": "float32",
+      "shape": [],
+      "description": "1.0 if aggregated embedding was computed"
+    },
+    "tp_hashemb_dim": {
+      "required": true,
+      "tier": "model_facing",
+      "dtype": "float32",
+      "shape": []
+    },
+    "tp_hashemb_tag_count": {
+      "required": true,
+      "tier": "model_facing",
+      "dtype": "float32",
+      "shape": [],
+      "description": "Unique tag count after canonicalization (when applicable)"
+    },
+    "tp_hashemb_l2_norm": {
+      "required": true,
+      "tier": "model_facing",
+      "dtype": "float32",
+      "shape": [],
+      "description": "L2 norm of returned vector (expected ~1 when present)"
+    },
+    "tp_hashemb_require_hashtags_enabled": {
+      "required": true,
+      "tier": "analytics",
+      "dtype": "float32",
+      "shape": []
+    },
+    "tp_hashemb_disabled_by_policy_hint": {
+      "required": true,
+      "tier": "analytics",
+      "dtype": "float32",
+      "shape": [],
+      "description": "Hint from TagsExtractor tp_artifacts.tags.hashtags_disabled_by_policy"
+    },
+    "tp_hashemb_n_input_tags": {
+      "required": true,
+      "tier": "model_facing",
+      "dtype": "float32",
+      "shape": []
+    },
+    "tp_hashemb_n_unique_tags": {
+      "required": true,
+      "tier": "model_facing",
+      "dtype": "float32",
+      "shape": []
+    },
+    "tp_hashemb_n_tags_truncated": {
+      "required": true,
+      "tier": "analytics",
+      "dtype": "float32",
+      "shape": [],
+      "description": "Tags dropped due to max_tags limit"
+    },
+    "tp_hashemb_compute_enabled": {
+      "required": true,
+      "tier": "analytics",
+      "dtype": "float32",
+      "shape": []
+    },
+    "tp_hashemb_write_artifact_enabled": {
+      "required": true,
+      "tier": "analytics",
+      "dtype": "float32",
+      "shape": []
+    },
+    "tp_hashemb_artifact_written": {
+      "required": true,
+      "tier": "analytics",
+      "dtype": "float32",
+      "shape": []
+    },
+    "tp_hashemb_cache_enabled": {
+      "required": true,
+      "tier": "analytics",
+      "dtype": "float32",
+      "shape": []
+    },
+    "tp_hashemb_cache_hit": {
+      "required": true,
+      "tier": "analytics",
+      "dtype": "float32",
+      "shape": [],
+      "description": "0 in extract_batch path; 0/1 in single-doc path when cache on"
+    },
+    "tp_hashemb_model_digest_u24": {
+      "required": true,
+      "tier": "model_facing",
+      "dtype": "float32",
+      "shape": []
+    },
+    "tp_hashemb_fp16": {
+      "required": true,
+      "tier": "analytics",
+      "dtype": "float32",
+      "shape": []
+    },
+    "tp_hashemb_device_cuda": {
+      "required": true,
+      "tier": "analytics",
+      "dtype": "float32",
+      "shape": []
+    },
+    "tp_hashemb_encode_ms": {
+      "required": true,
+      "tier": "analytics",
+      "dtype": "float32",
+      "shape": [],
+      "description": "Encode time ms; in extract_batch amortized share t_enc*1000/n_docs"
+    },
+    "tp_hashemb_agg_ms": {
+      "required": true,
+      "tier": "analytics",
+      "dtype": "float32",
+      "shape": []
+    },
+    "tp_hashemb_use_frequencies": {
+      "required": true,
+      "tier": "analytics",
+      "dtype": "float32",
+      "shape": []
+    },
+    "tp_hashemb_agg_mean": {
+      "required": true,
+      "tier": "analytics",
+      "dtype": "float32",
+      "shape": []
+    },
+    "tp_hashemb_agg_max": {
+      "required": true,
+      "tier": "analytics",
+      "dtype": "float32",
+      "shape": []
+    },
+    "tp_hashemb_agg_logsumexp": {
+      "required": true,
+      "tier": "analytics",
+      "dtype": "float32",
+      "shape": []
+    }
+  }
+}

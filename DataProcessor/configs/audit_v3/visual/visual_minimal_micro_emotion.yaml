@@ -1,0 +1,97 @@
+# Minimal visual pipeline: core_object_detections -> core_face_landmarks -> micro_emotion
+# (face_landmarks baseline требует person-mask из YOLO — см. core_face_landmarks README.)
+# From DataProcessor/:
+#   VisualProcessor/.vp_venv/bin/python VisualProcessor/main.py \
+#     --cfg-path configs/audit_v3/visual/visual_minimal_micro_emotion.yaml
+#
+# Нужны: GPU, Docker с образом OpenFace (см. micro_emotion `docker_image`).
+
+global:
+  triton_http_url: "http://localhost:8000"
+  frames_dir: "../storage/frames_dir/-Q6fnPIybEI/video"
+  rs_path: "../storage/result_store_me_minimal"
+  platform_id: "youtube"
+  run_id: "me_minimal_cli_001"
+  sampling_policy_version: "v1"
+  dataprocessor_version: "unknown"
+
+core_providers:
+  core_clip: false
+  core_depth_midas: false
+  core_optical_flow: false
+  core_object_detections: true
+  ocr_extractor: false
+  core_face_landmarks: true
+  content_domain: false
+  franchise_recognition: false
+  brand_semantics: false
+  car_semantics: false
+  face_identity: false
+  place_semantics: false
+
+modules:
+  cut_detection: false
+  scene_classification: false
+  video_pacing: false
+  uniqueness: false
+  shot_quality: false
+  story_structure: false
+  detalize_face: false
+  emotion_face: false
+  behavioral: false
+  optical_flow: false
+  action_recognition: false
+  color_light: false
+  frames_composition: false
+  high_level_semantic: false
+  micro_emotion: true
+  similarity_metrics: false
+  text_scoring: false
+
+core_object_detections:
+  runtime: "ultralytics"
+  model: "visual/yolo/yolo11x_41_best.pt"
+  batch_size: 16
+  device: "cuda"
+  box_threshold: 0.6
+  iou_threshold: 0.3
+  triton_model_spec: ""
+  triton_http_url: ""
+  triton_model_name: ""
+  triton_model_version: ""
+  triton_input_name: "images"
+  triton_output_name: "output0"
+  triton_preprocess_preset: "yolo11x_640"
+  render:
+    enable_render: true
+    enable_html_render: true
+
+core_face_landmarks:
+  use_pose: true
+  use_hands: true
+  use_face_mesh: true
+  use_person_mask: true
+  person_window_radius: 0
+  face_detection_target_frames: 50
+  face_detection_min_frames: 20
+  render:
+    enable_render: true
+    enable_html_render: true
+
+micro_emotion:
+  fps: 30
+  microexpr_smoothing_sigma: 0.05
+  microexpr_delta_threshold: 0.4
+  microexpr_max_duration_frames: 15
+  microexpr_min_peak_distance_frames: 6
+  gaze_centered_threshold: 10.0
+  pca_components: 3
+  au_confidence_threshold: 0.5
+  feature_groups: "default"
+  openface_batch_size: 64
+  docker_image: "openface/openface:latest"
+  device: "cuda"
+  progress_every_frames: 50
+  render:
+    enable_render: true
+    enable_html_render: true

@@ -1,0 +1,73 @@
+{
+  "schema_system_version": "vp_schema_v1",
+  "schema_version": "rhythmic_extractor_npz_v2",
+  "producer": "rhythmic_extractor",
+  "artifact_kind": "npz",
+  "allow_extra_keys": false,
+  "meta": {
+    "required_keys": [
+      "producer",
+      "producer_version",
+      "schema_version",
+      "created_at",
+      "platform_id",
+      "video_id",
+      "run_id",
+      "config_hash",
+      "sampling_policy_version",
+      "dataprocessor_version",
+      "status",
+      "empty_reason",
+      "models_used",
+      "model_signature",
+      "stage_timings_ms"
+    ],
+    "optional_keys": [
+      "device_used",
+      "scheduler_knobs",
+      "resource_metrics",
+      "error",
+      "backend",
+      "hop_length",
+      "features_enabled",
+      "rhythmic_contract_version",
+      "sampling_family_used",
+      "beat_times_sec_npy",
+      "beat_segment_index_npy"
+    ]
+  },
+  "fields": {
+    "feature_names": { "required": true, "tier": "model_facing", "dtype": "object", "shape": ["F"] },
+    "feature_values": { "required": true, "tier": "model_facing", "dtype": "float32", "shape": ["F"] },
+
+    "segment_start_sec": { "required": false, "tier": "analytics", "dtype": "float32", "shape": ["N"] },
+    "segment_end_sec": { "required": false, "tier": "analytics", "dtype": "float32", "shape": ["N"] },
+    "segment_center_sec": { "required": false, "tier": "analytics", "dtype": "float32", "shape": ["N"] },
+    "segment_mask": { "required": false, "tier": "analytics", "dtype": "bool", "shape": ["N"] },
+
+    "beat_times_sec": { "required": false, "tier": "analytics", "dtype": "float32", "shape": ["M"] },
+    "beat_segment_index": { "required": false, "tier": "analytics", "dtype": "int32", "shape": ["M"] },
+
+    "rhythm_avg_period_sec": { "required": false, "tier": "analytics", "dtype": "float32", "shape": [] },
+    "rhythm_period_std_sec": { "required": false, "tier": "analytics", "dtype": "float32", "shape": [] },
+    "rhythm_median_period_sec": { "required": false, "tier": "analytics", "dtype": "float32", "shape": [] },
+    "rhythm_min_period_sec": { "required": false, "tier": "analytics", "dtype": "float32", "shape": [] },
+    "rhythm_max_period_sec": { "required": false, "tier": "analytics", "dtype": "float32", "shape": [] },
+
+    "rhythm_median_bpm": { "required": false, "tier": "analytics", "dtype": "float32", "shape": [] },
+    "rhythm_ibi_tempo_bpm": { "required": false, "tier": "analytics", "dtype": "float32", "shape": [] },
+    "rhythm_tempo_mean": { "required": false, "tier": "analytics", "dtype": "float32", "shape": [] },
+    "rhythm_tempo_std": { "required": false, "tier": "analytics", "dtype": "float32", "shape": [] },
+    "rhythm_tempo_min": { "required": false, "tier": "analytics", "dtype": "float32", "shape": [] },
+    "rhythm_tempo_max": { "required": false, "tier": "analytics", "dtype": "float32", "shape": [] },
+
+    "rhythm_syncopation_score": { "required": false, "tier": "analytics", "dtype": "float32", "shape": [] },
+    "rhythm_polyrhythm_score": { "required": false, "tier": "analytics", "dtype": "float32", "shape": [] },
+    "rhythm_beat_strength_mean": { "required": false, "tier": "analytics", "dtype": "float32", "shape": [] },
+    "rhythm_beat_strength_std": { "required": false, "tier": "analytics", "dtype": "float32", "shape": [] },
+    "rhythm_metrical_stability": { "required": false, "tier": "analytics", "dtype": "float32", "shape": [] },
+
+    "meta": { "required": true, "tier": "debug", "dtype": "object", "shape": [] }
+  }
+}
+

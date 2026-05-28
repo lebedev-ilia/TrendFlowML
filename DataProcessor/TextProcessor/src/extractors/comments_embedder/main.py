@@ -18,6 +18,20 @@ import numpy as np
 import torch
 
 from src.core.base_extractor import BaseExtractor
+
+# Stable order: 8 core + 10 extra (extra → NaN when emit_extra_metrics=False).
+_COMMENTSEMB_EXTRA_KEYS: Tuple[str, ...] = (
+    "tp_commentsemb_cache_enabled",
+    "tp_commentsemb_cache_hit",
+    "tp_commentsemb_fp16",
+    "tp_commentsemb_device_cuda",
+    "tp_commentsemb_model_digest_u24",
+    "tp_commentsemb_compute_enabled",
+    "tp_commentsemb_write_artifact_enabled",
+    "tp_commentsemb_artifact_written",
+    "tp_commentsemb_select_ms",
+    "tp_commentsemb_encode_ms",
+)
 from src.core.metrics import system_snapshot, process_memory_bytes
 from src.core.model_registry import get_model_with_meta
 from src.core.path_utils import default_artifacts_dir
@@ -26,11 +40,11 @@ from src.schemas.models import VideoDocument
 
 
 class CommentsEmbedder(BaseExtractor):
-    VERSION = "1.2.0"
+    VERSION = "1.3.0"
 
     def __init__(
         self,
-        model_name: str = "sentence-transformers/all-MiniLM-L6-v2",
+        model_name: str = "intfloat/multilingual-e5-large",
         cache_dir: Optional[str] = None,
         cache_enabled: bool = False,
         cache_ttl_days: Optional[float] = 7.0,
@@ -107,6 +121,52 @@ class CommentsEmbedder(BaseExtractor):
             "pre_init": init_sys_before,
             "post_init": init_sys_after,
             "ram_peak_bytes": max(init_mem_before, init_mem_after),
+        }
+
+    def _gpu_peak_mb(self, sys_after: Any) -> int:
+        def _g(snap: Any) -> int:
+            try:
+                g = (snap or {}).get("gpu") or {}
+                arr = g.get("gpus") or []
+                return max([int(x.get("memory_used_mb", 0)) for x in arr] or [0])
+            except Exception:
+                return 0
+
+        return max(
+            _g(self._init_metrics.get("pre_init")),
+            _g(self._init_metrics.get("post_init")),
+            _g(sys_after),
+        )
+
+    def _finalize_commentsemb_features_flat(self, d: Dict[str, float], *, batch_encode: bool = False) -> None:
+        """Gate diagnostics/timings; batch encode path never uses per-doc cache (cache_hit NaN if extras on)."""
+        if not self.emit_extra_metrics:
+            for k in _COMMENTSEMB_EXTRA_KEYS:
+                d[k] = float("nan")
+            return
+        if batch_encode:
+            d["tp_commentsemb_cache_hit"] = float("nan")
+
+    def _commentsemb_features_template(self, n_before_dedup: int, n_after_dedup: int) -> Dict[str, float]:
+        return {
+            "tp_commentsemb_present": 0.0,
+            "tp_commentsemb_count": float("nan"),
+            "tp_commentsemb_dim": float("nan"),
+            "tp_commentsemb_n_input": float(n_before_dedup),
+            "tp_commentsemb_n_deduped": float(n_after_dedup),
+            "tp_commentsemb_n_selected": float("nan"),
+            "tp_commentsemb_total_chars_used": float("nan"),
+            "tp_commentsemb_truncated_by_total_chars_flag": 0.0,
+            "tp_commentsemb_cache_enabled": float(bool(self.cache_enabled)),
+            "tp_commentsemb_cache_hit": float("nan"),
+            "tp_commentsemb_fp16": float(bool(self.fp16)),
+            "tp_commentsemb_device_cuda": float("cuda" in str(self.device).lower()),
+            "tp_commentsemb_model_digest_u24": float(int(self._model_digest_u24)),
+            "tp_commentsemb_compute_enabled": float(bool(self.compute_embeddings)),
+            "tp_commentsemb_write_artifact_enabled": float(bool(self.write_artifact)),
+            "tp_commentsemb_artifact_written": 0.0,
+            "tp_commentsemb_select_ms": float("nan"),
+            "tp_commentsemb_encode_ms": float("nan"),
         }
 
     @staticmethod
@@ -280,37 +340,17 @@ class CommentsEmbedder(BaseExtractor):
             texts_src_idx = uniq_idx
         n_after_dedup = len(texts_norm)
 
-        def _stable_features_template() -> Dict[str, float]:
-            return {
-                "tp_commentsemb_present": 0.0,  # embeddings computed (not "artifact exists")
-                "tp_commentsemb_count": float("nan"),
-                "tp_commentsemb_dim": float("nan"),
-                "tp_commentsemb_n_input": float(n_before_dedup),
-                "tp_commentsemb_n_deduped": float(n_after_dedup),
-                "tp_commentsemb_n_selected": float("nan"),
-                "tp_commentsemb_total_chars_used": float("nan"),
-                "tp_commentsemb_truncated_by_total_chars_flag": 0.0,
-                "tp_commentsemb_cache_enabled": float(bool(self.cache_enabled)),
-                "tp_commentsemb_cache_hit": float("nan"),
-                "tp_commentsemb_fp16": float(bool(self.fp16)),
-                "tp_commentsemb_device_cuda": float("cuda" in str(self.device).lower()),
-                "tp_commentsemb_model_digest_u24": float(int(self._model_digest_u24)),
-                "tp_commentsemb_compute_enabled": float(bool(self.compute_embeddings)),
-                "tp_commentsemb_write_artifact_enabled": float(bool(self.write_artifact)),
-                "tp_commentsemb_artifact_written": 0.0,
-                "tp_commentsemb_select_ms": float("nan"),
-                "tp_commentsemb_encode_ms": float("nan"),
-            }
-
         if not texts_norm:
             # valid empty (comments may be missing)
             sys_after = system_snapshot()
             mem_after = process_memory_bytes()
             total_s = time.perf_counter() - t0
-            features_flat = _stable_features_template()
+            features_flat = self._commentsemb_features_template(n_before_dedup, n_after_dedup)
             features_flat["tp_commentsemb_count"] = 0.0
             features_flat["tp_commentsemb_cache_hit"] = 0.0
             features_flat["tp_commentsemb_n_selected"] = 0.0
+            self._finalize_commentsemb_features_flat(features_flat, batch_encode=False)
+            gpu_peak_mb = self._gpu_peak_mb(sys_after)
             return {
                 "device": self.device,
                 "version": self.VERSION,
@@ -323,7 +363,7 @@ class CommentsEmbedder(BaseExtractor):
                     "post_process": sys_after,
                     "peaks": {
                         "ram_peak_mb": int(max(self._init_metrics.get("ram_peak_bytes", 0), mem_before, mem_after) / 1024 / 1024),
-                        "gpu_peak_mb": 0,
+                        "gpu_peak_mb": int(gpu_peak_mb),
                     },
                 },
                 "timings_s": {"total": round(total_s, 3)},
@@ -355,12 +395,14 @@ class CommentsEmbedder(BaseExtractor):
             sys_after = system_snapshot()
             mem_after = process_memory_bytes()
             total_s = time.perf_counter() - t0
-            features_flat = _stable_features_template()
+            features_flat = self._commentsemb_features_template(n_before_dedup, n_after_dedup)
             features_flat["tp_commentsemb_cache_hit"] = 0.0
             features_flat["tp_commentsemb_n_selected"] = float(sel_stats.get("n_selected", float("nan")))
             features_flat["tp_commentsemb_total_chars_used"] = float(sel_stats.get("total_chars_used", float("nan")))
             features_flat["tp_commentsemb_truncated_by_total_chars_flag"] = float(sel_stats.get("truncated_by_total_chars_flag", 0.0))
             features_flat["tp_commentsemb_select_ms"] = float(round(sel_s * 1000.0, 3))
+            self._finalize_commentsemb_features_flat(features_flat, batch_encode=False)
+            gpu_peak_mb = self._gpu_peak_mb(sys_after)
             return {
                 "device": self.device,
                 "version": self.VERSION,
@@ -373,7 +415,7 @@ class CommentsEmbedder(BaseExtractor):
                     "post_process": sys_after,
                     "peaks": {
                         "ram_peak_mb": int(max(self._init_metrics.get("ram_peak_bytes", 0), mem_before, mem_after) / 1024 / 1024),
-                        "gpu_peak_mb": 0,
+                        "gpu_peak_mb": int(gpu_peak_mb),
                     },
                 },
                 "timings_s": {"select": round(sel_s, 3), "total": round(total_s, 3)},
@@ -467,7 +509,7 @@ class CommentsEmbedder(BaseExtractor):
         mem_after = process_memory_bytes()
         total_s = time.perf_counter() - t0
 
-        features_flat = _stable_features_template()
+        features_flat = self._commentsemb_features_template(n_before_dedup, n_after_dedup)
         features_flat.update(
             {
                 "tp_commentsemb_present": 1.0,
@@ -482,8 +524,9 @@ class CommentsEmbedder(BaseExtractor):
                 "tp_commentsemb_artifact_written": float(bool(artifact_written)),
             }
         )
-
-        result: Dict[str, Any] = {
+        self._finalize_commentsemb_features_flat(features_flat, batch_encode=False)
+        gpu_peak_mb = self._gpu_peak_mb(sys_after)
+        return {
             "device": self.device,
             "version": self.VERSION,
             "model_name": self.model_name,
@@ -495,7 +538,7 @@ class CommentsEmbedder(BaseExtractor):
                 "post_process": sys_after,
                 "peaks": {
                     "ram_peak_mb": int(max(self._init_metrics.get("ram_peak_bytes", 0), mem_before, mem_after) / 1024 / 1024),
-                    "gpu_peak_mb": 0,
+                    "gpu_peak_mb": int(gpu_peak_mb),
                 },
             },
             "timings_s": {"select": round(sel_s, 3), "encode": round(float(encode_s), 3) if encode_s == encode_s else float("nan"), "total": round(total_s, 3)},
@@ -514,7 +557,6 @@ class CommentsEmbedder(BaseExtractor):
         encode in batches, then distribute back per-document.
         """
         import time
-        from collections import defaultdict
 
         started = time.perf_counter()
         sys_before = system_snapshot()
@@ -528,11 +570,8 @@ class CommentsEmbedder(BaseExtractor):
         # Structure: doc_idx -> (selected_texts, selected_src_indices, stats, n_before_dedup, n_after_dedup)
         doc_comments_data: Dict[int, Tuple[List[str], List[int], Dict[str, float], int, int]] = {}
         all_selected_comments_flat: List[str] = []
-        comment_to_doc: List[int] = []  # (doc_idx)
 
         for doc_idx, doc in enumerate(docs):
-            doc_t0 = time.perf_counter()
-            
             # Gather and normalize comments (same logic as extract())
             raw_comments = (doc.comments or []) if hasattr(doc, "comments") else []
             texts_norm: List[str] = []
@@ -594,7 +633,6 @@ class CommentsEmbedder(BaseExtractor):
             doc_comments_data[doc_idx] = (selected, selected_src_indices, sel_stats, n_before_dedup, n_after_dedup)
             for comment in selected:
                 all_selected_comments_flat.append(comment)
-                comment_to_doc.append(doc_idx)
 
         # Step 2: Batch encode all selected comments
         t_enc0 = time.perf_counter()
@@ -603,6 +641,7 @@ class CommentsEmbedder(BaseExtractor):
         else:
             all_embeddings = np.zeros((0, 0), dtype=np.float32)
         t_enc_s = time.perf_counter() - t_enc0
+        n_encode_total = len(all_selected_comments_flat)
 
         # Step 3: Process each document: distribute embeddings, save artifacts, build results
         results: List[Dict[str, Any]] = []
@@ -610,32 +649,9 @@ class CommentsEmbedder(BaseExtractor):
 
         for doc_idx, doc in enumerate(docs):
             doc_t0 = time.perf_counter()
-            doc_sys_before = system_snapshot()
             doc_mem_before = process_memory_bytes()
 
             selected, selected_src_indices, sel_stats, n_before_dedup, n_after_dedup = doc_comments_data.get(doc_idx, ([], [], {}, 0, 0))
-
-            def _stable_features_template() -> Dict[str, float]:
-                return {
-                    "tp_commentsemb_present": 0.0,
-                    "tp_commentsemb_count": float("nan"),
-                    "tp_commentsemb_dim": float("nan"),
-                    "tp_commentsemb_n_input": float(n_before_dedup),
-                    "tp_commentsemb_n_deduped": float(n_after_dedup),
-                    "tp_commentsemb_n_selected": float("nan"),
-                    "tp_commentsemb_total_chars_used": float("nan"),
-                    "tp_commentsemb_truncated_by_total_chars_flag": 0.0,
-                    "tp_commentsemb_cache_enabled": float(bool(self.cache_enabled)),
-                    "tp_commentsemb_cache_hit": float("nan"),
-                    "tp_commentsemb_fp16": float(bool(self.fp16)),
-                    "tp_commentsemb_device_cuda": float("cuda" in str(self.device).lower()),
-                    "tp_commentsemb_model_digest_u24": float(int(self._model_digest_u24)),
-                    "tp_commentsemb_compute_enabled": float(bool(self.compute_embeddings)),
-                    "tp_commentsemb_write_artifact_enabled": float(bool(self.write_artifact)),
-                    "tp_commentsemb_artifact_written": 0.0,
-                    "tp_commentsemb_select_ms": float("nan"),
-                    "tp_commentsemb_encode_ms": float("nan"),
-                }
 
             error: Optional[str] = None
 
@@ -644,10 +660,12 @@ class CommentsEmbedder(BaseExtractor):
                 sys_after = system_snapshot()
                 mem_after = process_memory_bytes()
                 total_s = time.perf_counter() - doc_t0
-                features_flat = _stable_features_template()
+                features_flat = self._commentsemb_features_template(n_before_dedup, n_after_dedup)
                 features_flat["tp_commentsemb_count"] = 0.0
                 features_flat["tp_commentsemb_cache_hit"] = 0.0
                 features_flat["tp_commentsemb_n_selected"] = 0.0
+                self._finalize_commentsemb_features_flat(features_flat, batch_encode=False)
+                gpu_peak_mb = self._gpu_peak_mb(sys_after)
                 results.append({
                     "device": self.device,
                     "version": self.VERSION,
@@ -660,7 +678,7 @@ class CommentsEmbedder(BaseExtractor):
                         "post_process": sys_after,
                         "peaks": {
                             "ram_peak_mb": int(max(self._init_metrics.get("ram_peak_bytes", 0), doc_mem_before, mem_after) / 1024 / 1024),
-                            "gpu_peak_mb": 0,
+                            "gpu_peak_mb": int(gpu_peak_mb),
                         },
                     },
                     "timings_s": {"total": round(total_s, 3)},
@@ -674,12 +692,14 @@ class CommentsEmbedder(BaseExtractor):
                 sys_after = system_snapshot()
                 mem_after = process_memory_bytes()
                 total_s = time.perf_counter() - doc_t0
-                features_flat = _stable_features_template()
+                features_flat = self._commentsemb_features_template(n_before_dedup, n_after_dedup)
                 features_flat["tp_commentsemb_cache_hit"] = 0.0
                 features_flat["tp_commentsemb_n_selected"] = float(sel_stats.get("n_selected", float("nan")))
                 features_flat["tp_commentsemb_total_chars_used"] = float(sel_stats.get("total_chars_used", float("nan")))
                 features_flat["tp_commentsemb_truncated_by_total_chars_flag"] = float(sel_stats.get("truncated_by_total_chars_flag", 0.0))
                 features_flat["tp_commentsemb_select_ms"] = float(round(sel_stats.get("select_ms", 0.0) * 1000.0, 3))
+                self._finalize_commentsemb_features_flat(features_flat, batch_encode=False)
+                gpu_peak_mb = self._gpu_peak_mb(sys_after)
                 results.append({
                     "device": self.device,
                     "version": self.VERSION,
@@ -692,7 +712,7 @@ class CommentsEmbedder(BaseExtractor):
                         "post_process": sys_after,
                         "peaks": {
                             "ram_peak_mb": int(max(self._init_metrics.get("ram_peak_bytes", 0), doc_mem_before, mem_after) / 1024 / 1024),
-                            "gpu_peak_mb": 0,
+                            "gpu_peak_mb": int(gpu_peak_mb),
                         },
                     },
                     "timings_s": {"select": round(sel_stats.get("select_ms", 0.0), 3), "total": round(total_s, 3)},
@@ -761,19 +781,32 @@ class CommentsEmbedder(BaseExtractor):
             mem_after = process_memory_bytes()
             total_s = time.perf_counter() - doc_t0
 
-            features_flat = _stable_features_template()
+            sel_ms = float(sel_stats.get("select_ms", 0.0))
+            enc_frac = (float(n_selected) / float(n_encode_total)) if n_encode_total > 0 else 0.0
+            encode_ms_feat = (
+                float(round(t_enc_s * 1000.0 * enc_frac, 3))
+                if t_enc_s == t_enc_s and n_encode_total > 0
+                else float("nan")
+            )
+            encode_s_share = (
+                round(float(t_enc_s) * enc_frac, 3) if t_enc_s == t_enc_s and n_encode_total > 0 else float("nan")
+            )
+
+            features_flat = self._commentsemb_features_template(n_before_dedup, n_after_dedup)
             features_flat.update({
                 "tp_commentsemb_present": 1.0,
                 "tp_commentsemb_count": float(int(doc_embeddings.shape[0])),
                 "tp_commentsemb_dim": float(int(doc_embeddings.shape[1]) if doc_embeddings.ndim == 2 else 0),
-                "tp_commentsemb_cache_hit": 0.0,  # Cache not used in batch mode (could be added later)
+                "tp_commentsemb_cache_hit": 0.0,
                 "tp_commentsemb_n_selected": float(sel_stats.get("n_selected", float("nan"))),
                 "tp_commentsemb_total_chars_used": float(sel_stats.get("total_chars_used", float("nan"))),
                 "tp_commentsemb_truncated_by_total_chars_flag": float(sel_stats.get("truncated_by_total_chars_flag", 0.0)),
-                "tp_commentsemb_select_ms": float(round(sel_s * 1000.0, 3)),
-                "tp_commentsemb_encode_ms": float(round(t_enc_s * 1000.0 / n_docs, 3)) if t_enc_s == t_enc_s else float("nan"),  # Per-doc share
+                "tp_commentsemb_select_ms": float(round(sel_ms * 1000.0, 3)),
+                "tp_commentsemb_encode_ms": encode_ms_feat,
                 "tp_commentsemb_artifact_written": float(bool(artifact_written)),
             })
+            self._finalize_commentsemb_features_flat(features_flat, batch_encode=True)
+            gpu_peak_mb = self._gpu_peak_mb(sys_after)
 
             results.append({
                 "device": self.device,
@@ -787,12 +820,12 @@ class CommentsEmbedder(BaseExtractor):
                     "post_process": sys_after,
                     "peaks": {
                         "ram_peak_mb": int(max(self._init_metrics.get("ram_peak_bytes", 0), doc_mem_before, mem_after) / 1024 / 1024),
-                        "gpu_peak_mb": 0,
+                        "gpu_peak_mb": int(gpu_peak_mb),
                     },
                 },
                 "timings_s": {
-                    "select": round(sel_s, 3),
-                    "encode": round(t_enc_s / n_docs, 3),  # Per-doc share
+                    "select": round(sel_ms, 3),
+                    "encode": encode_s_share,
                     "total": round(total_s, 3),
                 },
                 "result": {"features_flat": features_flat},
@@ -800,7 +833,5 @@ class CommentsEmbedder(BaseExtractor):
             })
 
         return results
-
-        return result
 
 

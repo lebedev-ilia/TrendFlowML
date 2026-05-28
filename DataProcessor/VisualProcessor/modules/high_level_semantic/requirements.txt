@@ -1,0 +1,2 @@
+# Dependencies for high_level_semantic module
+# Add module-specific dependencies here

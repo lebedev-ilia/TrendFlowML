@@ -1,480 +1,307 @@
 """
-Renderer для ocr_extractor: генерация render-context JSON и HTML debug страницы.
+Renderer for ocr_extractor: render-context JSON + fully-offline HTML (no CDN).
+
+Audit v3:
+- HTML must work offline.
+- OCR is privacy-sensitive: render should avoid dumping raw text by default; show counts and small samples.
 """
 
-import os
-import json
+from __future__ import annotations
+
 import logging
-from typing import Dict, Any, List
+from typing import Any, Dict, Optional, List, Tuple
 
 import numpy as np
 
 logger = logging.getLogger(__name__)
 
 
-def render_ocr_extractor(npz_data: Dict[str, Any], meta: Dict[str, Any]) -> Dict[str, Any]:
-    """Генерировать render-context для ocr_extractor."""
-    render = {
-        "component": "ocr_extractor",
-        "summary": {},
-        "timeline": [],
-        "distributions": {},
+def _esc(s: Any) -> str:
+    return (
+        str(s)
+        .replace("&", "&amp;")
+        .replace("<", "&lt;")
+        .replace(">", "&gt;")
+        .replace('"', "&quot;")
+        .replace("'", "&#39;")
+    )
+
+
+def _unbox_object(x: Any) -> Any:
+    if isinstance(x, np.ndarray) and x.dtype == object and x.shape == ():
+        try:
+            return x.item()
+        except Exception:
+            return x
+    return x
+
+
+def _as_array(x: Any, dtype=None) -> Optional[np.ndarray]:
+    if x is None:
+        return None
+    if isinstance(x, list):
+        return np.asarray(x, dtype=dtype)
+    if isinstance(x, np.ndarray):
+        return np.asarray(x, dtype=dtype) if dtype is not None else x
+    return None
+
+
+def _stats(arr: np.ndarray) -> Dict[str, Any]:
+    a = np.asarray(arr, dtype=np.float32).reshape(-1)
+    a = a[np.isfinite(a)]
+    if a.size == 0:
+        return {}
+    return {
+        "min": float(np.min(a)),
+        "max": float(np.max(a)),
+        "mean": float(np.mean(a)),
+        "std": float(np.std(a)),
+        "median": float(np.median(a)),
+        "p05": float(np.percentile(a, 5)),
+        "p95": float(np.percentile(a, 95)),
     }
-    
-    # Extract OCR data
-    ocr_raw = npz_data.get("ocr_raw")
-    times_s = npz_data.get("times_s")
-    frame_indices = npz_data.get("frame_indices")
-    
-    # Convert to list if needed
-    if ocr_raw is not None:
-        if isinstance(ocr_raw, np.ndarray):
-            if ocr_raw.dtype == object:
-                ocr_raw = ocr_raw.tolist()
-            else:
-                ocr_raw = ocr_raw.tolist()
-        elif not isinstance(ocr_raw, list):
-            ocr_raw = []
-    else:
-        ocr_raw = []
-    
-    if times_s is not None:
-        if isinstance(times_s, list):
-            times_s = np.array(times_s, dtype=np.float32)
-        elif isinstance(times_s, np.ndarray):
-            times_s = np.asarray(times_s, dtype=np.float32)
-        else:
-            times_s = None
-    
-    if frame_indices is not None:
-        if isinstance(frame_indices, list):
-            frame_indices = np.array(frame_indices, dtype=np.int32)
-        elif isinstance(frame_indices, np.ndarray):
-            frame_indices = np.asarray(frame_indices, dtype=np.int32)
-        else:
-            frame_indices = None
-    
-    # Summary statistics
-    if ocr_raw and len(ocr_raw) > 0:
-        # Extract statistics from OCR results
-        text_lengths = []
-        det_confidences = []
-        frames_with_text = set()
-        
-        for ocr_item in ocr_raw:
-            if isinstance(ocr_item, dict):
-                text_raw = ocr_item.get("text_raw", "")
-                text_norm = ocr_item.get("text_norm", "")
-                det_conf = ocr_item.get("det_confidence", 0.0)
-                frame_idx = ocr_item.get("frame", -1)
-                
-                if text_norm:
-                    text_lengths.append(len(text_norm))
-                    frames_with_text.add(frame_idx)
-                if det_conf > 0:
-                    det_confidences.append(float(det_conf))
-        
-        text_lengths_arr = np.array(text_lengths) if text_lengths else np.array([])
-        det_confidences_arr = np.array(det_confidences) if det_confidences else np.array([])
-        
-        render["summary"] = {
-            "frames_count": int(len(frame_indices)) if frame_indices is not None else 0,
-            "total_ocr_results": len(ocr_raw),
-            "frames_with_text": len(frames_with_text),
-            "frames_with_text_ratio": float(len(frames_with_text) / len(frame_indices)) if frame_indices is not None and len(frame_indices) > 0 else 0.0,
-            "text_length_mean": float(np.mean(text_lengths_arr)) if text_lengths_arr.size > 0 else 0.0,
-            "text_length_std": float(np.std(text_lengths_arr)) if text_lengths_arr.size > 0 else 0.0,
-            "text_length_min": int(np.min(text_lengths_arr)) if text_lengths_arr.size > 0 else 0,
-            "text_length_max": int(np.max(text_lengths_arr)) if text_lengths_arr.size > 0 else 0,
-            "text_length_median": float(np.median(text_lengths_arr)) if text_lengths_arr.size > 0 else 0.0,
-            "det_confidence_mean": float(np.mean(det_confidences_arr)) if det_confidences_arr.size > 0 else 0.0,
-            "det_confidence_std": float(np.std(det_confidences_arr)) if det_confidences_arr.size > 0 else 0.0,
-            "det_confidence_min": float(np.min(det_confidences_arr)) if det_confidences_arr.size > 0 else 0.0,
-            "det_confidence_max": float(np.max(det_confidences_arr)) if det_confidences_arr.size > 0 else 0.0,
-            "det_confidence_median": float(np.median(det_confidences_arr)) if det_confidences_arr.size > 0 else 0.0,
-        }
-        
-        # Timeline data (per-frame OCR statistics)
-        if times_s is not None and frame_indices is not None:
-            timeline = []
-            frame_to_ocr = {}
-            
-            # Group OCR results by frame
-            for ocr_item in ocr_raw:
-                if isinstance(ocr_item, dict):
-                    frame_idx = ocr_item.get("frame", -1)
-                    if frame_idx not in frame_to_ocr:
-                        frame_to_ocr[frame_idx] = []
-                    frame_to_ocr[frame_idx].append(ocr_item)
-            
-            # Build timeline
-            for i, frame_idx in enumerate(frame_indices):
-                frame_idx_int = int(frame_idx)
-                time_sec = float(times_s[i]) if i < len(times_s) else 0.0
-                ocr_items = frame_to_ocr.get(frame_idx_int, [])
-                
-                ocr_count = len(ocr_items)
-                avg_confidence = 0.0
-                if ocr_items:
-                    confidences = [item.get("det_confidence", 0.0) for item in ocr_items if isinstance(item, dict)]
-                    if confidences:
-                        avg_confidence = float(np.mean(confidences))
-                
-                timeline.append({
-                    "frame_index": frame_idx_int,
-                    "time_sec": time_sec,
-                    "ocr_count": ocr_count,
-                    "average_confidence": avg_confidence if ocr_count > 0 else None,
-                })
-            
-            render["timeline"] = timeline
-        
-        # Distribution statistics
-        distributions = {}
-        
-        if text_lengths_arr.size > 0:
-            distributions["text_length"] = {
-                "min": int(np.min(text_lengths_arr)),
-                "max": int(np.max(text_lengths_arr)),
-                "mean": float(np.mean(text_lengths_arr)),
-                "std": float(np.std(text_lengths_arr)),
-                "median": float(np.median(text_lengths_arr)),
-                "p25": float(np.percentile(text_lengths_arr, 25)),
-                "p75": float(np.percentile(text_lengths_arr, 75)),
-                "p05": float(np.percentile(text_lengths_arr, 5)),
-                "p95": float(np.percentile(text_lengths_arr, 95)),
-            }
-        
-        if det_confidences_arr.size > 0:
-            distributions["det_confidence"] = {
-                "min": float(np.min(det_confidences_arr)),
-                "max": float(np.max(det_confidences_arr)),
-                "mean": float(np.mean(det_confidences_arr)),
-                "std": float(np.std(det_confidences_arr)),
-                "median": float(np.median(det_confidences_arr)),
-                "p25": float(np.percentile(det_confidences_arr, 25)),
-                "p75": float(np.percentile(det_confidences_arr, 75)),
-                "p05": float(np.percentile(det_confidences_arr, 5)),
-                "p95": float(np.percentile(det_confidences_arr, 95)),
-            }
-        
-        render["distributions"] = distributions
-        
-        # Top text samples (for debugging)
-        text_samples = []
-        for ocr_item in ocr_raw[:10]:  # Top 10 samples
-            if isinstance(ocr_item, dict):
-                text_samples.append({
-                    "text_norm": ocr_item.get("text_norm", ""),
-                    "text_raw": ocr_item.get("text_raw", ""),
-                    "det_confidence": ocr_item.get("det_confidence", 0.0),
-                    "frame": ocr_item.get("frame", -1),
-                })
-        render["summary"]["text_samples"] = text_samples
-    else:
-        render["summary"] = {
-            "frames_count": int(len(frame_indices)) if frame_indices is not None else 0,
-            "total_ocr_results": 0,
-            "frames_with_text": 0,
-            "frames_with_text_ratio": 0.0,
-        }
-    
-    return render
+
+
+def _svg_line_chart(
+    *,
+    times_s: np.ndarray,
+    values: np.ndarray,
+    title: str,
+    stroke: str = "#2563eb",
+    width: int = 960,
+    height: int = 220,
+    pad: int = 18,
+) -> str:
+    if times_s.size == 0 or values.size == 0:
+        return ""
+    m = np.isfinite(times_s) & np.isfinite(values)
+    if not np.any(m):
+        return ""
+    x = times_s[m].astype(np.float64, copy=False)
+    y = values[m].astype(np.float64, copy=False)
+    if x.size < 2:
+        return ""
+    xmin, xmax = float(np.min(x)), float(np.max(x))
+    ymin, ymax = float(np.min(y)), float(np.max(y))
+    if xmax <= xmin:
+        xmax = xmin + 1e-6
+    if ymax <= ymin:
+        ymax = ymin + 1e-6
+
+    def sx(v: float) -> float:
+        return pad + (v - xmin) / (xmax - xmin) * (width - 2 * pad)
+
+    def sy(v: float) -> float:
+        return height - pad - (v - ymin) / (ymax - ymin) * (height - 2 * pad)
+
+    pts = " ".join(f"{sx(float(xx)):.2f},{sy(float(yy)):.2f}" for xx, yy in zip(x, y))
+    title_esc = _esc(title)
+    return f"""
+<div class="chart">
+  <div class="chart-title">{title_esc}</div>
+  <svg viewBox="0 0 {width} {height}" width="100%" height="{height}" role="img" aria-label="{title_esc}">
+    <rect x="0" y="0" width="{width}" height="{height}" fill="#ffffff" stroke="#e5e7eb"/>
+    <polyline fill="none" stroke="{stroke}" stroke-width="2" points="{pts}"/>
+    <text x="{pad}" y="{pad}" font-size="12" fill="#6b7280">{_esc(f'[{ymin:.3f} .. {ymax:.3f}]')}</text>
+  </svg>
+</div>
+""".strip()
+
+
+def _extract_text_len(row: Dict[str, Any]) -> int:
+    # Try common keys; if absent, return 0.
+    for k in ("text", "raw_text", "value", "ocr_text"):
+        v = row.get(k)
+        if isinstance(v, str):
+            return len(v.strip())
+    return 0
+
+
+def render_ocr_extractor(npz_data: Dict[str, Any], meta: Dict[str, Any]) -> Dict[str, Any]:
+    frame_indices = _as_array(npz_data.get("frame_indices"), dtype=np.int32)
+    times_s = _as_array(npz_data.get("times_s"), dtype=np.float32)
+    ocr_raw = _unbox_object(npz_data.get("ocr_raw"))
+
+    # Build per-frame counts best-effort.
+    counts = None
+    if isinstance(frame_indices, np.ndarray) and isinstance(ocr_raw, (list, tuple)):
+        mapping = {int(fi): i for i, fi in enumerate(frame_indices.tolist())}
+        c = np.zeros((int(frame_indices.size),), dtype=np.float32)
+        for r in ocr_raw:
+            if not isinstance(r, dict):
+                continue
+            fi = r.get("frame_index")
+            if fi is None:
+                continue
+            j = mapping.get(int(fi), None)
+            if j is None:
+                continue
+            c[int(j)] += 1.0
+        counts = c
+
+    # Privacy-safe “samples”: only lengths and confidences (no raw text).
+    sample_rows: List[Dict[str, Any]] = []
+    if isinstance(ocr_raw, (list, tuple)):
+        for r in ocr_raw[:50]:
+            if not isinstance(r, dict):
+                continue
+            sample_rows.append(
+                {
+                    "frame_index": r.get("frame_index"),
+                    "t_s": r.get("t_s") or r.get("time_s") or r.get("time_sec"),
+                    "text_len": _extract_text_len(r),
+                    "conf": r.get("conf") or r.get("score") or r.get("confidence"),
+                }
+            )
+
+    key_facts: Dict[str, Any] = {
+        "frames_count": int(frame_indices.size) if isinstance(frame_indices, np.ndarray) else 0,
+        "ocr_rows": int(len(ocr_raw)) if isinstance(ocr_raw, (list, tuple)) else 0,
+    }
+    if isinstance(counts, np.ndarray):
+        key_facts.update({f"rows_per_frame_{k}": v for k, v in _stats(counts).items()})
+
+    return {
+        "component": "ocr_extractor",
+        "schema_version": str(meta.get("schema_version") or ""),
+        "producer_version": str(meta.get("producer_version") or ""),
+        "status": str(meta.get("status") or ""),
+        "key_facts": key_facts,
+        "stage_timings_ms": meta.get("stage_timings_ms") if isinstance(meta.get("stage_timings_ms"), dict) else {},
+        "samples": sample_rows,
+        "_arrays": {
+            "times_s": times_s,
+            "rows_per_frame": counts,
+        },
+    }
 
 
 def render_ocr_extractor_html(npz_path: str, output_path: str) -> str:
-    """
-    Генерировать HTML страницу для дебага ocr_extractor результатов.
-    
-    Args:
-        npz_path: Путь к NPZ файлу
-        output_path: Путь для сохранения HTML
-    
-    Returns:
-        Путь к сохранённому HTML файлу
-    """
-    # Import here to avoid circular imports
-    import sys
-    from pathlib import Path
-    vp_root = Path(__file__).resolve().parent.parent.parent.parent
-    if str(vp_root / "core" / "model_process") not in sys.path:
-        sys.path.insert(0, str(vp_root / "core" / "model_process"))
-    
-    # Try to import from utils if renderer exists
     try:
         from utils.renderer import load_npz, extract_meta  # type: ignore
-    except ImportError:
-        # Fallback: direct load
+    except Exception:
         def load_npz(path: str):
             data = np.load(path, allow_pickle=True)
-            result = {}
+            result: Dict[str, Any] = {}
             for key in data.files:
                 arr = data[key]
-                if isinstance(arr, np.ndarray):
-                    if arr.dtype == object:
-                        result[key] = arr.item() if arr.size == 1 else arr.tolist()
-                    else:
-                        result[key] = arr.tolist() if arr.size > 0 else []
+                if isinstance(arr, np.ndarray) and arr.dtype == object:
+                    result[key] = arr.item() if arr.size == 1 else arr.tolist()
                 else:
                     result[key] = arr
             return result
-        
+
         def extract_meta(npz_data: Dict[str, Any]) -> Dict[str, Any]:
-            meta = npz_data.get("meta")
-            if isinstance(meta, np.ndarray) and meta.dtype == object:
-                return meta.item() if meta.size == 1 else meta.tolist()
-            return meta if isinstance(meta, dict) else {}
-    
+            meta2 = npz_data.get("meta")
+            if isinstance(meta2, np.ndarray) and meta2.dtype == object:
+                return meta2.item() if meta2.size == 1 else {}
+            return meta2 if isinstance(meta2, dict) else {}
+
     npz_data = load_npz(npz_path)
     meta = extract_meta(npz_data)
-    render = render_ocr_extractor(npz_data, meta)
-    
-    timeline = render.get("timeline", [])
-    summary = render.get("summary", {})
-    distributions = render.get("distributions", {})
-    text_samples = summary.get("text_samples", [])
-    
-    # Helper function to format distribution values
-    def format_dist_value(dist_key, stat_key):
-        dist = distributions.get(dist_key)
-        if dist and stat_key in dist:
-            return f"{dist[stat_key]:.4f}"
-        return "N/A"
-    
-    # Generate HTML for text samples separately to avoid nested f-string issues
-    text_samples_html = ""
-    if text_samples:
-        text_samples_rows = []
-        for sample in text_samples:
-            frame = sample.get('frame', -1)
-            text_norm = sample.get('text_norm', '').replace('&', '&amp;').replace('<', '&lt;').replace('>', '&gt;')
-            text_raw = sample.get('text_raw', '').replace('&', '&amp;').replace('<', '&lt;').replace('>', '&gt;')
-            confidence = sample.get('det_confidence', 0.0)
-            text_samples_rows.append(f'''
-                    <tr>
-                        <td>{frame}</td>
-                        <td class="text-norm">{text_norm}</td>
-                        <td>{text_raw}</td>
-                        <td>{confidence:.3f}</td>
-                    </tr>''')
-        text_samples_html = f'''
-        <div class="text-samples">
-            <h2>Text Samples (Top 10)</h2>
-            <table>
-                <thead>
-                    <tr>
-                        <th>Frame</th>
-                        <th>Text (Normalized)</th>
-                        <th>Text (Raw)</th>
-                        <th>Confidence</th>
-                    </tr>
-                </thead>
-                <tbody>
-                    {''.join(text_samples_rows)}
-                </tbody>
-            </table>
-        </div>
-        '''
-    
-    # Prepare timeline data for chart
-    timeline_js = ""
-    y1_scale_js = ""
-    if timeline:
-        times = [t.get("time_sec", 0.0) for t in timeline]
-        ocr_counts = [t.get("ocr_count", 0) for t in timeline]
-        avg_confidences = [t.get("average_confidence") for t in timeline if t.get("average_confidence") is not None]
-        
-        # Build datasets array
-        datasets = [{
-            "label": "OCR Count",
-            "data": ocr_counts,
-            "borderColor": "rgb(75, 192, 192)",
-            "backgroundColor": "rgba(75, 192, 192, 0.2)",
-            "tension": 0.1,
-            "yAxisID": "y"
-        }]
-        
-        if avg_confidences:
-            datasets.append({
-                "label": "Average Confidence",
-                "data": avg_confidences,
-                "borderColor": "rgb(255, 99, 132)",
-                "backgroundColor": "rgba(255, 99, 132, 0.2)",
-                "tension": 0.1,
-                "yAxisID": "y1"
-            })
-            y1_scale_js = """,
-                    y1: {
-                        type: 'linear',
-                        display: true,
-                        position: 'right',
-                        title: {
-                            display: true,
-                            text: 'Average Confidence'
-                        },
-                        grid: {
-                            drawOnChartArea: false
-                        }
-                    }"""
-        
-        # Format time labels
-        time_labels = [f"{t:.2f}s" for t in times]
-        timeline_js = f"""
-        const timelineData = {{
-            labels: {json.dumps(time_labels)},
-            datasets: {json.dumps(datasets)}
-        }};
-        """
-    
-    html_content = f"""<!DOCTYPE html>
+    ctx = render_ocr_extractor(npz_data, meta)
+
+    arrays = ctx.get("_arrays") or {}
+    times_s = arrays.get("times_s")
+    if not isinstance(times_s, np.ndarray):
+        times_s = np.asarray([], dtype=np.float32)
+    rows_pf = arrays.get("rows_per_frame")
+
+    charts = ""
+    if isinstance(rows_pf, np.ndarray) and rows_pf.size > 0:
+        charts = _svg_line_chart(times_s=times_s[: rows_pf.size], values=np.asarray(rows_pf, dtype=np.float32).reshape(-1), title="OCR rows per sampled frame", stroke="#2563eb")
+
+    key_facts = ctx.get("key_facts") or {}
+    stage_timings = ctx.get("stage_timings_ms") or {}
+    status = _esc(ctx.get("status") or "")
+    schema_version = _esc(ctx.get("schema_version") or "")
+    producer_version = _esc(ctx.get("producer_version") or "")
+    samples = ctx.get("samples") or []
+
+    rows_html = ""
+    if isinstance(samples, list) and samples:
+        rows = []
+        for r in samples[:50]:
+            if not isinstance(r, dict):
+                continue
+            rows.append(
+                "<tr>"
+                f"<td>{_esc(r.get('frame_index'))}</td>"
+                f"<td>{_esc(r.get('t_s'))}</td>"
+                f"<td>{_esc(r.get('text_len'))}</td>"
+                f"<td>{_esc(r.get('conf'))}</td>"
+                "</tr>"
+            )
+        rows_html = "".join(rows)
+
+    html = f"""<!doctype html>
 <html lang="en">
 <head>
-    <meta charset="UTF-8">
-    <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>OCR Extractor Debug Render</title>
-    <script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
-    <style>
-        body {{ font-family: Arial, sans-serif; margin: 20px; background-color: #f4f4f4; color: #333; }}
-        .container {{ background-color: #fff; padding: 20px; border-radius: 8px; box-shadow: 0 2px 4px rgba(0,0,0,0.1); max-width: 1200px; margin: 0 auto; }}
-        h1, h2 {{ color: #0056b3; }}
-        .summary {{ background-color: #eaf4ff; padding: 15px; border-radius: 5px; margin: 20px 0; border: 1px solid #cce0ff; }}
-        .metric-grid {{ display: grid; grid-template-columns: repeat(auto-fit, minmax(200px, 1fr)); gap: 15px; margin: 15px 0; }}
-        .metric-card {{ background-color: #f8f9fa; padding: 12px; border-radius: 5px; border: 1px solid #dee2e6; }}
-        .metric-card strong {{ color: #0056b3; display: block; margin-bottom: 5px; }}
-        .metric-value {{ font-size: 1.2em; color: #333; }}
-        .chart-container {{ position: relative; height: 400px; width: 100%; margin: 20px 0; }}
-        .distributions {{ background-color: #f8f9fa; padding: 15px; border-radius: 5px; margin: 20px 0; }}
-        .distributions table {{ width: 100%; border-collapse: collapse; }}
-        .distributions th, .distributions td {{ padding: 8px; text-align: left; border-bottom: 1px solid #dee2e6; }}
-        .distributions th {{ background-color: #0056b3; color: white; }}
-        .text-samples {{ background-color: #f8f9fa; padding: 15px; border-radius: 5px; margin: 20px 0; }}
-        .text-samples table {{ width: 100%; border-collapse: collapse; }}
-        .text-samples th, .text-samples td {{ padding: 8px; text-align: left; border-bottom: 1px solid #dee2e6; }}
-        .text-samples th {{ background-color: #0056b3; color: white; }}
-        .text-samples .text-norm {{ font-weight: bold; }}
-    </style>
+  <meta charset="utf-8"/>
+  <meta name="viewport" content="width=device-width, initial-scale=1"/>
+  <title>ocr_extractor — render</title>
+  <style>
+    body {{ font-family: ui-sans-serif, system-ui, -apple-system, Segoe UI, Roboto, Arial; margin: 20px; background: #f8fafc; color: #0f172a; }}
+    .wrap {{ max-width: 1100px; margin: 0 auto; }}
+    .card {{ background: white; border: 1px solid #e2e8f0; border-radius: 12px; padding: 16px; margin: 12px 0; }}
+    .muted {{ color: #64748b; }}
+    .kv {{ display: grid; grid-template-columns: 1fr auto; gap: 8px 12px; }}
+    .kv div {{ padding: 2px 0; border-bottom: 1px dashed #e2e8f0; }}
+    .chart-title {{ font-size: 13px; font-weight: 600; margin: 0 0 6px 0; color: #334155; }}
+    code {{ background: #f1f5f9; padding: 2px 6px; border-radius: 6px; }}
+    table {{ width: 100%; border-collapse: collapse; }}
+    th, td {{ border-bottom: 1px solid #e2e8f0; padding: 8px; text-align: left; }}
+    th {{ color: #334155; font-weight: 700; }}
+    .banner {{ background:#fff7ed; border:1px solid #fed7aa; padding:10px 12px; border-radius:10px; color:#9a3412; }}
+  </style>
 </head>
 <body>
-    <div class="container">
-        <h1>OCR Extractor Debug Render</h1>
-        
-        <div class="summary">
-            <h2>Summary</h2>
-            <div class="metric-grid">
-                <div class="metric-card">
-                    <strong>Frames Count</strong>
-                    <span class="metric-value">{summary.get('frames_count', 0)}</span>
-                </div>
-                <div class="metric-card">
-                    <strong>Total OCR Results</strong>
-                    <span class="metric-value">{summary.get('total_ocr_results', 0)}</span>
-                </div>
-                <div class="metric-card">
-                    <strong>Frames with Text</strong>
-                    <span class="metric-value">{summary.get('frames_with_text', 0)}</span>
-                </div>
-                <div class="metric-card">
-                    <strong>Frames with Text Ratio</strong>
-                    <span class="metric-value">{summary.get('frames_with_text_ratio', 0.0):.2%}</span>
-                </div>
-                <div class="metric-card">
-                    <strong>Text Length Mean</strong>
-                    <span class="metric-value">{summary.get('text_length_mean', 0.0):.1f}</span>
-                </div>
-                <div class="metric-card">
-                    <strong>Det Confidence Mean</strong>
-                    <span class="metric-value">{summary.get('det_confidence_mean', 0.0):.3f}</span>
-                </div>
-            </div>
-        </div>
-        
-        {f'''
-        <div class="chart-container">
-            <h2>Timeline: OCR Count and Confidence Over Time</h2>
-            <canvas id="timelineChart"></canvas>
-        </div>
-        ''' if timeline else '<p>No timeline data available</p>'}
-        
-        {f'''
-        <div class="distributions">
-            <h2>Distribution Statistics</h2>
-            <table>
-                <thead>
-                    <tr>
-                        <th>Statistic</th>
-                        <th>Text Length</th>
-                        <th>Det Confidence</th>
-                    </tr>
-                </thead>
-                <tbody>
-                    <tr>
-                        <td><strong>Min</strong></td>
-                        <td>{format_dist_value('text_length', 'min')}</td>
-                        <td>{format_dist_value('det_confidence', 'min')}</td>
-                    </tr>
-                    <tr>
-                        <td><strong>Max</strong></td>
-                        <td>{format_dist_value('text_length', 'max')}</td>
-                        <td>{format_dist_value('det_confidence', 'max')}</td>
-                    </tr>
-                    <tr>
-                        <td><strong>Mean</strong></td>
-                        <td>{format_dist_value('text_length', 'mean')}</td>
-                        <td>{format_dist_value('det_confidence', 'mean')}</td>
-                    </tr>
-                    <tr>
-                        <td><strong>Std</strong></td>
-                        <td>{format_dist_value('text_length', 'std')}</td>
-                        <td>{format_dist_value('det_confidence', 'std')}</td>
-                    </tr>
-                    <tr>
-                        <td><strong>Median</strong></td>
-                        <td>{format_dist_value('text_length', 'median')}</td>
-                        <td>{format_dist_value('det_confidence', 'median')}</td>
-                    </tr>
-                </tbody>
-            </table>
-        </div>
-        ''' if distributions else ''}
-        
-        {text_samples_html if text_samples else ''}
+  <div class="wrap">
+    <div class="card">
+      <div style="font-size:18px; font-weight:700;">ocr_extractor</div>
+      <div class="muted">schema: <code>{schema_version}</code> · producer_version: <code>{producer_version}</code> · status: <code>{status}</code></div>
     </div>
-    
-    {f'''
-    <script>
-        {timeline_js}
-        const ctx = document.getElementById('timelineChart').getContext('2d');
-        new Chart(ctx, {{
-            type: 'line',
-            data: timelineData,
-            options: {{
-                responsive: true,
-                maintainAspectRatio: false,
-                scales: {{
-                    y: {{
-                        beginAtZero: true,
-                        title: {{
-                            display: true,
-                            text: 'OCR Count'
-                        }}
-                    }}{y1_scale_js}
-                }}
-            }}
-        }});
-    </script>
-    ''' if timeline else ''}
+
+    <div class="card banner">
+      <strong>Privacy note</strong>: this render intentionally avoids showing raw OCR text. Use internal tooling if you need raw inspection.
+    </div>
+
+    <div class="card">
+      <div style="font-weight:700; margin-bottom:10px;">Key facts</div>
+      <div class="kv">
+        {"".join([f"<div>{_esc(k)}</div><div>{_esc(v)}</div>" for k,v in key_facts.items()])}
+      </div>
+    </div>
+
+    <div class="card">
+      <div style="font-weight:700; margin-bottom:10px;">Stage timings (ms)</div>
+      <div class="kv">
+        {"".join([f"<div>{_esc(k)}</div><div>{float(v):.2f}</div>" for k,v in stage_timings.items()])}
+      </div>
+    </div>
+
+    <div class="card">
+      <div style="font-weight:700; margin-bottom:10px;">Curve</div>
+      {charts or "<div class='muted'>No curve data</div>"}
+    </div>
+
+    <div class="card">
+      <div style="font-weight:700; margin-bottom:10px;">Samples (privacy-safe)</div>
+      {("<table><thead><tr><th>frame</th><th>t (s)</th><th>text_len</th><th>conf</th></tr></thead><tbody>"+rows_html+"</tbody></table>") if rows_html else "<div class='muted'>No samples</div>"}
+    </div>
+  </div>
 </body>
-</html>"""
-    
-    os.makedirs(os.path.dirname(output_path), exist_ok=True)
-    with open(output_path, "w", encoding="utf-8") as f:
-        f.write(html_content)
-    
-    # Show relative path for cleaner output
-    rel_output_path = os.path.relpath(output_path, os.getcwd()) if os.path.exists(output_path) else output_path
-    logger.info(f"Saved OCR Extractor HTML render to {rel_output_path}")
-    return output_path
+</html>
+"""
+
+    from pathlib import Path
+
+    out = Path(output_path)
+    out.parent.mkdir(parents=True, exist_ok=True)
+    out.write_text(html, encoding="utf-8")
+    return str(out)
 
 
 __all__ = ["render_ocr_extractor", "render_ocr_extractor_html"]
+
 

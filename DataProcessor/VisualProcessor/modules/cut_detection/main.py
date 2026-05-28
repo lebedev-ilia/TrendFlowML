@@ -12,14 +12,25 @@ import sys
 import argparse
 from typing import Optional, List
 
-sys.path.append(os.path.dirname(os.path.dirname(os.path.dirname(__file__))))
+_vp_root = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+if _vp_root not in sys.path:
+    sys.path.insert(0, _vp_root)
+elif sys.path[0] != _vp_root:
+    try:
+        sys.path.remove(_vp_root)
+    except ValueError:
+        pass
+    sys.path.insert(0, _vp_root)
+_repo_root = os.path.dirname(_vp_root)
+if _repo_root not in sys.path:
+    sys.path.append(_repo_root)
 
 import warnings
 warnings.filterwarnings("ignore", category=UserWarning)
 
 os.environ["TF_CPP_MIN_LOG_LEVEL"] = "3"  # 0=all, 1=INFO, 2=WARNING, 3=ERROR
 
-from modules.cut_detection.cut_detection import CutDetectionPipeline
+from modules.cut_detection.utils.cut_detection import CutDetectionPipeline
 from utils.logger import get_logger
 
 MODULE_NAME = "cut_detection"
@@ -55,6 +66,11 @@ def main(argv: Optional[List[str]] = None) -> int:
         "--use-clip",
         action='store_true',
         help="Использовать CLIP для классификации переходов"
+    )
+    parser.add_argument(
+        "--no-use-clip",
+        action="store_true",
+        help="Отключить CLIP классификацию переходов (baseline по умолчанию включает CLIP через Triton).",
     )
     parser.add_argument(
         "--use-deep-features",
@@ -126,6 +142,11 @@ def main(argv: Optional[List[str]] = None) -> int:
         help="Require writing the model-facing NPZ; if write fails -> error (fail-fast).",
     )
     parser.add_argument(
+        "--no-require-model-facing-npz",
+        action="store_true",
+        help="Disable baseline requirement for model-facing NPZ (debug only).",
+    )
+    parser.add_argument(
         "--no-write-model-facing-npz",
         action="store_true",
         help="Disable writing the model-facing NPZ (default is to write it).",
@@ -135,6 +156,15 @@ def main(argv: Optional[List[str]] = None) -> int:
         type=str,
         default=None,
         help="Путь к аудио файлу для аудио-анализа (опционально)"
+    )
+    parser.add_argument(
+        "--max-sampling-gap-sec",
+        type=float,
+        default=30.0,
+        help=(
+            "Reject run if max gap between consecutive sample timestamps (sec) exceeds this. "
+            "0 disables the check. Default 30s suits typical Segmenter budgets; use 6 for strict QA."
+        ),
     )
     # Baseline GPU-only: cut_detection MUST NOT load local CLIP weights.
     # CLIP is resolved via dp_models spec and served via Triton.
@@ -252,11 +282,26 @@ def main(argv: Optional[List[str]] = None) -> int:
         elif args.use_flow_consistency:
             use_flow_consistency = True
         
+        # Baseline decisions:
+        # - CLIP is enabled by default (Triton + dp_models spec).
+        # - Model-facing NPZ is required by default.
+        clip_zero_shot = True
+        if bool(args.no_use_clip):
+            clip_zero_shot = False
+        # Backward compat: --use-clip keeps working but is redundant now.
+        if bool(args.use_clip):
+            clip_zero_shot = True
+
+        require_model_facing_npz = not bool(args.no_require_model_facing_npz)
+        write_model_facing_npz = (not bool(args.no_write_model_facing_npz)) or bool(args.require_model_facing_npz) or require_model_facing_npz
+        if bool(args.no_write_model_facing_npz) and require_model_facing_npz:
+            raise RuntimeError("cut_detection | invalid flags: --no-write-model-facing-npz conflicts with baseline requirement (use --no-require-model-facing-npz for debug)")
+
         pipeline = CutDetectionPipeline(
             rs_path=args.rs_path,
             fps=30.0,  # actual fps is taken from frame_manager.meta in process()
             device=args.device,
-            clip_zero_shot=args.use_clip,
+            clip_zero_shot=clip_zero_shot,
             use_deep_features=args.use_deep_features,
             use_adaptive_thresholds=use_adaptive_thresholds,
             use_semantic_clustering=bool(args.use_semantic_clustering),
@@ -268,11 +313,12 @@ def main(argv: Optional[List[str]] = None) -> int:
             hard_cuts_cascade=bool(args.hard_cuts_cascade),
             hard_cuts_cascade_keep_top_p=float(args.hard_cuts_cascade_keep_top_p),
             hard_cuts_cascade_hist_margin=float(args.hard_cuts_cascade_hist_margin),
+            max_sampling_gap_sec=float(args.max_sampling_gap_sec),
             # Baseline: always attempt reuse, and require core_optical_flow unless explicitly disabled.
             prefer_core_optical_flow=True,
             require_core_optical_flow=not bool(args.no_require_core_optical_flow),
-            write_model_facing_npz=(not bool(args.no_write_model_facing_npz)) or bool(args.require_model_facing_npz),
-            require_model_facing_npz=bool(args.require_model_facing_npz),
+            write_model_facing_npz=write_model_facing_npz,
+            require_model_facing_npz=(bool(args.require_model_facing_npz) or require_model_facing_npz),
             clip_image_model_spec=args.clip_image_model_spec,
             triton_http_url=args.triton_http_url,
         )

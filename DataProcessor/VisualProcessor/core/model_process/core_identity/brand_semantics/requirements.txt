@@ -1,0 +1,2 @@
+# Dependencies for brand_semantics component
+# Add component-specific dependencies here

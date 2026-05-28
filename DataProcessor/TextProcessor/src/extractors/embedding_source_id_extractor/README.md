@@ -8,18 +8,28 @@
 - `vector_id` **не зависит от абсолютных путей** и считается по значениям float32-вектора.
 - primary embedding выбирается детерминированно из `doc.tp_artifacts`.
 
-**Версия**: 1.2.0  
+**Версия**: 1.3.0  
 **Категория**: metadata  
-**GPU**: не требуется
+**GPU**: не требуется  
+
+**Контракт**: [SCHEMA.md](./SCHEMA.md) · machine: [schemas/embedding_source_id_extractor_output_v1.json](../../../schemas/embedding_source_id_extractor_output_v1.json)  
+**Диапазоны и валидатор среза** (`text_features.npz`): [`docs/FEATURE_DESCRIPTION.md`](docs/FEATURE_DESCRIPTION.md) · [`utils/validate_embedding_source_id_extractor_text_npz.py`](utils/validate_embedding_source_id_extractor_text_npz.py)  
+**Audit v4:** [`../../../../docs/audit_v4/components/text_processor/embedding_source_id_extractor_audit_v4.md`](../../../../docs/audit_v4/components/text_processor/embedding_source_id_extractor_audit_v4.md) · L2 stats: `scripts/audit_v4_npz_stats.py` → `storage/audit_v4/embedding_source_id_extractor_l2/`
 
 ### Входы
 
 Экстрактор читает **детерминированные указатели** на эмбеддинги из in-memory реестра `doc.tp_artifacts`, заполненного ранее в рамках этого же run:
 
-- `doc.tp_artifacts["embeddings"]["title"]["relpath"]` (от `title_embedder`)
-- `doc.tp_artifacts["transcripts"]["combined"]["agg_mean_relpath"]` (от `transcript_aggregator`, canonical)
-- `doc.tp_artifacts["transcript_aggregates"]["combined"]["agg_mean_relpath"]` (legacy alias)
-- `doc.tp_artifacts["embeddings"]["description"]["relpath"]` (от `description_embedder`)
+- **Title**: `doc.tp_artifacts["embeddings"]["title"]["relpath"]` (от `title_embedder`)
+- **Description**: `doc.tp_artifacts["embeddings"]["description"]["relpath"]` (от `description_embedder`)
+- **Transcript** (canonical, приоритет: combined → whisper → youtube_auto):
+  - `doc.tp_artifacts["transcripts"]["combined"]["agg_mean_relpath"]` (от `transcript_aggregator`)
+  - `doc.tp_artifacts["transcripts"]["whisper"]["agg_mean_relpath"]`
+  - `doc.tp_artifacts["transcripts"]["youtube_auto"]["agg_mean_relpath"]`
+- **Transcript** (legacy fallback, приоритет: combined → whisper → youtube_auto):
+  - `doc.tp_artifacts["transcript_aggregates"]["combined"]["agg_mean_relpath"]`
+  - `doc.tp_artifacts["transcript_aggregates"]["whisper"]["agg_mean_relpath"]`
+  - `doc.tp_artifacts["transcript_aggregates"]["youtube_auto"]["agg_mean_relpath"]`
 
 **Важно**:
 - Экстрактор больше не делает `glob+mtime` и не выбирает “самый новый файл”.
@@ -36,41 +46,32 @@
 - `result.features_flat` (только numeric scalars, A-policy)
 - `result.embedding_source_id` (privacy-safe dict со строками/идентификаторами)
 
-##### `features_flat`
+##### `features_flat` (ровно 13 ключей, фиксированный порядок)
 
-- `tp_embid_present` (0/1)
-- one-hot политики:
-  - `tp_embid_policy_transcript_first`
-  - `tp_embid_policy_title_first`
-  - `tp_embid_policy_description_first`
-  - `tp_embid_policy_title_only`
-  - `tp_embid_policy_transcript_only`
-- one-hot выбранного типа источника:
-  - `tp_embid_primary_is_transcript`
-  - `tp_embid_primary_is_title`
-  - `tp_embid_primary_is_description`
+- `tp_embid_present` (1 только если вектор загружен и конечен)
+- `tp_embid_strict_missing_primary_enabled` — зеркало `strict_missing_primary`
+- one-hot политики: `tp_embid_policy_transcript_first` … `tp_embid_policy_transcript_only`
+- one-hot типа источника: `tp_embid_primary_is_transcript` / `title` / `description` (без primary — все 0)
+- `tp_embid_unsafe_relpath_flag`, `tp_embid_primary_embed_missing_flag`, `tp_embid_nan_inf_flag`
 
 ##### `embedding_source_id`
 
-- `vector_id`: 24-символьный hex (sha256 по значениям float32)
-- `vector_store_uri`: идентификатор индекса/хранилища (без endpoint’ов)
-- `model_version`: строка модели (например `sentence-transformers/all-MiniLM-L6-v2`)
-- `weights_digest`: digest модели (если доступен из upstream metadata; иначе `"unknown"`)
-- `embedding_relpath`: relpath внутри `text_processor/_artifacts/`
-- `primary_source`: какой источник был выбран (например `transcript_combined_mean` / `title`)
+- `vector_id`: 24-символьный hex (sha256 по little-endian float32 байтам C-order)
+- `vector_store_uri`, `embedding_relpath`, `primary_source`
+- `model_name`: из upstream (может отсутствовать, напр. transcript mean без per-field meta)
+- `model_version`: из upstream **`model_version`** или fallback конфига (не подмена **`model_name`**)
+- `weights_digest`: из upstream или `"unknown"`
+- при ошибке и **`strict_missing_primary=False`**: только **`error`** с кодом: `no_embedding_found` | `unsafe_relpath` | `embedding_file_missing` | `embedding_load_failed` | `embedding_empty` | `embedding_non_finite`
 
-#### Метаданные
+#### Метаданные (верхний уровень `ExtractorResult`)
 
-- `device`: устройство обработки (`"cpu"`)
-- `version`: версия экстрактора
+- `model_name` / `model_version` / `weights_digest`: **`null`** (канон — вложенный `embedding_source_id`)
+- `device`, `version` экстрактора
 
 #### Системные метрики
 
-- `system.pre_init`: снимок системы до инициализации
-- `system.post_init`: снимок системы после инициализации
-- `system.post_process`: снимок системы после обработки
-- `system.peaks.ram_peak_mb`: пиковое использование RAM (MB)
-- `system.peaks.gpu_peak_mb`: пиковое использование GPU памяти (MB, всегда 0)
+- `_init_metrics` (pre/post init, RAM peak в байтах)
+- `system.post_process`, **`gpu_peak_mb`**
 
 #### Тайминги
 
@@ -78,8 +79,8 @@
 
 #### Ошибки
 
-- `error`: описание ошибки (если произошла) или `None`
-- `result.embedding_source_id.error`: `"no_embedding_found"` если эмбеддинги не найдены
+- `strict_missing_primary=True`: **RuntimeError** при отсутствии primary, unsafe relpath, отсутствии файла, ошибке `np.load`, пустом векторе, NaN/inf
+- `strict_missing_primary=False`: **valid empty**, полный **`features_flat`**, в **`embedding_source_id`** ключ **`error`** (см. список кодов выше)
 
 ### Алгоритм обработки
 
@@ -87,20 +88,25 @@
 
 Источник истины: `doc.tp_artifacts` (embeddings + transcript aggregates).  
 Политика выбора задаётся параметром `primary_source_policy`:
-- `transcript_first` (default): transcript_combined_mean → title → description
-- `title_first`: title → transcript_combined_mean → description
-- `description_first`: description → transcript_combined_mean → title
+- `transcript_first` (default): transcript (combined → whisper → youtube_auto) → title → description
+- `title_first`: title → transcript (combined → whisper → youtube_auto) → description
+- `description_first`: description → transcript (combined → whisper → youtube_auto) → title
 - `title_only`: только title
-- `transcript_only`: только transcript mean
+- `transcript_only`: только transcript (combined → whisper → youtube_auto)
+
+Для transcript внутри источника сначала проверяется canonical путь (`transcripts`), затем legacy (`transcript_aggregates`). Внутри каждого источника приоритет: combined → whisper → youtube_auto.
 
 #### 2. Генерация стабильного ID
 
 `vector_id` считается по значениям float32-вектора (после `np.load()`), без участия пути:
+- Вектор конвертируется в little-endian float32 байты
+- Вычисляется SHA256 хеш от байтов
+- Берутся первые 24 hex-символа (12 байт) из хеша
 - `vector_id = sha256(float32_values)[:24]`
 
-#### 3. Извлечение версии модели
+#### 3. Метаданные модели
 
-Модель берётся из `doc.tp_artifacts["embeddings"][...]["model_name"]` и `weights_digest` (если доступно), иначе используется `model_version` из конфигурации.
+`model_name` / `weights_digest` — из полей upstream рядом с relpath; **`model_version`** — из **`model_version`** в том же dict либо из конфига экстрактора.
 
 ### Конфигурация
 
@@ -109,7 +115,7 @@
     "vector_store_uri": "faiss://semantic_titles_v1",          # URI хранилища векторов
     "model_version": "unknown",                               # Версия модели по умолчанию (если не найдена в метаданных)
     "primary_source_policy": "transcript_first",              # transcript_first | title_first | description_first | title_only | transcript_only
-    "strict_missing_primary": True,                           # если True и primary не найден → RuntimeError
+    "strict_missing_primary": True,                           # True: fail-fast на всех перечисленных в README ветках; False: soft + error
     "artifacts_dir": None                                     # Путь к артефактам (по умолчанию: default_artifacts_dir())
 }
 ```
@@ -117,24 +123,22 @@
 ### Особенности
 
 - **Приоритет источников**: явный приоритет заголовка над транскриптом и описанием
-- **Стабильные ID**: комбинация SHA1 и UUID5 обеспечивает уникальность и детерминированность
-- **Метаданные модели**: автоматическое извлечение версии модели из различных источников
-- **Временные метки**: ISO 8601 формат с UTC (Z)
+- **Стабильные ID**: SHA256 хеш от float32 значений обеспечивает уникальность и детерминированность (не зависит от путей)
+- **Метаданные модели**: автоматическое извлечение версии модели из `doc.tp_artifacts` или конфигурации
 - **Обработка граничных случаев**: корректная обработка отсутствующих файлов и метаданных
 
 ### Архитектура
 
-1. **Поиск эмбеддингов**: поиск по приоритету (title → transcript → description)
-2. **Валидация**: проверка наличия файла
-3. **Генерация ID**: вычисление SHA1 и UUID5
-4. **Извлечение метаданных**: чтение мета-файлов и кеша
-5. **Формирование результата**: сбор всех метаданных
+1. **Поиск эмбеддингов**: детерминированный выбор по политике приоритета из `doc.tp_artifacts` (transcript → title → description или по настройке)
+2. **Валидация**: проверка наличия файла через safe-join
+3. **Генерация ID**: вычисление SHA256 хеша от float32 значений вектора (первые 24 hex символа)
+4. **Извлечение метаданных**: чтение `model_name` и `weights_digest` из `doc.tp_artifacts` или использование значений по умолчанию
+5. **Формирование результата**: сбор всех метаданных в `embedding_source_id` и `features_flat`
 6. **Метрики**: сбор системных метрик и таймингов
 
 ### Обработка ошибок
 
-- Если `strict_missing_primary=true` и primary embedding не найден → **RuntimeError** (fail-fast).
-- Если embedding найден, но файл не читается → **RuntimeError**.
+См. раздел **Ошибки**: один флаг **`strict_missing_primary`** задаёт жёсткий или мягкий режим для всего пост-path цикла.
 
 ### Performance characteristics
 
@@ -144,7 +148,7 @@
 - **Estimated duration**: ~0.001-0.01 секунд
 
 **Параметры производительности**:
-- Размер файла эмбеддинга: влияет на время вычисления SHA1 (обычно незначительно)
+- Размер файла эмбеддинга: влияет на время хеширования SHA256 (обычно незначительно)
 - Количество файлов: линейный поиск по шаблонам
 
 ### Связанные компоненты
@@ -159,22 +163,25 @@
 
 ### Примечания
 
-1. **Зависимости**: требует выполнения хотя бы одного из экстракторов эмбеддингов (title, transcript, description)
-2. **Стабильность ID**: ID детерминирован для одного и того же файла, но меняется при изменении содержимого
+1. **Зависимости**: требует выполнения хотя бы одного из экстракторов эмбеддингов (title, transcript, description) или transcript_aggregator
+2. **Стабильность ID**: ID детерминирован для одного и того же вектора (float32 значения), но меняется при изменении содержимого вектора
 3. **Векторное хранилище**: `vector_store_uri` используется для идентификации хранилища в системе поиска
-4. **Метаданные**: `.meta.json` не используется; используйте `manifest.json.models_used` и `model_version`
+4. **Метаданные**: метаданные модели берутся из `doc.tp_artifacts` (например, `embeddings[title][model_name]`), а не из JSON файлов
+5. **Privacy-safe**: в результате нет абсолютных путей, только `embedding_relpath` относительно `artifacts_dir`
 
 ### Примеры использования
 
-**Успешное извлечение**:
+**Успешное извлечение** (_фрагмент payload_):
 ```json
 {
   "embedding_source_id": {
-    "vector_id": "a1b2c3d4e5f6-550e8400-e29b-41d4-a716-446655440000",
+    "vector_id": "a1b2c3d4e5f6789012345678",
     "vector_store_uri": "faiss://semantic_titles_v1",
+    "model_name": null,
     "model_version": "sentence-transformers/all-MiniLM-L6-v2",
-    "created_at": "2024-01-15T10:30:45.123456Z",
-    "embedding_path": "/path/to/artifacts/title_embedding_abc123.npy"
+    "weights_digest": "unknown",
+    "embedding_relpath": "title_embedding_abc123.npy",
+    "primary_source": "title"
   }
 }
 ```

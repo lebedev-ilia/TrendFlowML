@@ -3,6 +3,7 @@ from __future__ import annotations
 
 import datetime
 import json
+import numbers
 import os
 import uuid
 import tempfile
@@ -31,6 +32,26 @@ class ResultsStore:
     def __init__(self, root_path: str) -> None:
         self.root_path = os.fspath(root_path)
         os.makedirs(self.root_path, exist_ok=True)
+
+    def get_component_path(self, component_name: str, filename: str) -> str:
+        """
+        Resolve a component artifact path inside this ResultsStore.
+
+        Production layout: <root>/<component_name>/<filename>
+        Legacy layout (some older core providers): <root>/<filename>
+
+        Returns the preferred path if it exists; otherwise returns the legacy path
+        if it exists; otherwise returns the preferred path (caller may create it).
+        """
+        component_name = str(component_name)
+        filename = str(filename)
+        preferred = os.path.join(self.root_path, component_name, filename)
+        if os.path.exists(preferred):
+            return preferred
+        legacy = os.path.join(self.root_path, filename)
+        if os.path.exists(legacy):
+            return legacy
+        return preferred
 
     @staticmethod
     def _timestamp_now() -> str:
@@ -83,6 +104,22 @@ class ResultsStore:
             except Exception:
                 pass
             raise
+
+    @staticmethod
+    def _is_flat_metric_scalar(v: Any) -> bool:
+        """
+        True if v can be stored as one entry per track in a 1D numeric metric array.
+        Nested structures and embeddings belong in results_json only.
+        """
+        if v is None or isinstance(v, (str, bytes, list, tuple, dict)):
+            return False
+        if isinstance(v, np.ndarray):
+            return bool(v.ndim == 0 and (np.issubdtype(v.dtype, np.number) or v.dtype == bool))
+        if isinstance(v, (bool, np.bool_)):
+            return True
+        if isinstance(v, numbers.Number):
+            return True
+        return isinstance(v, (np.integer, np.floating))
 
     def _to_json_serializable(self, obj: Any) -> Any:
         """
@@ -226,8 +263,6 @@ class ResultsStore:
         track_ids = sorted(int(k) for k in results.keys())
 
         embeddings_list: List[np.ndarray] = []
-        # метрики — гибкий набор. Собираем те, что найдём.
-        metrics_accumulators: Dict[str, List] = {}
         json_per_track: List[Dict[str, Any]] = []
 
         for tid in track_ids:
@@ -252,24 +287,35 @@ class ResultsStore:
 
             embeddings_list.append(emb_arr)
 
-            # --- собираем все числовые метрики в отдельные массивы ---
-            # проходим по всем ключам, если значение скаляр — добавляем в метрику
-            for k, v in r.items():
-                # пропускаем поле с эмбеддингами — оно отдельно
-                if k == embeddings_key:
-                    continue
-                # принимаем скаляры (int/float/numpy scalars)
-                if isinstance(v, (int, float, np.integer, np.floating)):
-                    metrics_accumulators.setdefault(k, []).append(v)
-                else:
-                    # для других типов аккумулируем None, чтобы длина совпадала
-                    metrics_accumulators.setdefault(k, []).append(None)
-
             # --- JSON-представление per-track (удобно для быстрого просмотра) ---
             try:
                 json_per_track.append(self._to_json_serializable(r))
             except Exception:
                 json_per_track.append({"error": "to_json failed", "track_id": tid})
+
+        # Плоские metric__* только если ключ есть у каждого трека и значение — скаляр.
+        # Иначе данные остаются в results_json (без бессмысленных -1 / NaN).
+        union_keys = set()
+        for tid in track_ids:
+            union_keys.update(results[int(tid)].keys())
+        union_keys.discard(embeddings_key)
+
+        metrics_accumulators: Dict[str, List[Any]] = {}
+        for k in sorted(union_keys):
+            column: List[Any] = []
+            ok = True
+            for tid in track_ids:
+                r = results[int(tid)]
+                if k not in r:
+                    ok = False
+                    break
+                v = r[k]
+                if not self._is_flat_metric_scalar(v):
+                    ok = False
+                    break
+                column.append(v)
+            if ok and len(column) == len(track_ids):
+                metrics_accumulators[k] = column
 
         # --- Собираем метрики в numpy-массивы (float32 / int32 / object) ---
         npz_dict: Dict[str, Any] = {}

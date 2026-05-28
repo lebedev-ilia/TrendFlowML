@@ -1,0 +1,216 @@
+"""
+Offline renderer for voice_quality_extractor (Audit v3).
+
+- No external CDNs (offline-only).
+- Reads flat NPZ keys: feature_names/feature_values, segment_*, jitter/shimmer/hnr_by_segment.
+"""
+
+import os
+import json
+import logging
+from typing import Any, Dict, List
+
+import numpy as np
+
+logger = logging.getLogger(__name__)
+
+
+def _to_list(x: Any) -> List[Any]:
+    if x is None:
+        return []
+    if isinstance(x, np.ndarray):
+        return x.tolist()
+    if isinstance(x, list):
+        return x
+    return [x]
+
+
+def render_voice_quality_extractor(npz_data: Dict[str, Any], meta: Dict[str, Any]) -> Dict[str, Any]:
+    """Render-context from NPZ (Audit v3: flat keys only)."""
+    feature_names = _to_list(npz_data.get("feature_names", []))
+    feature_values = _to_list(npz_data.get("feature_values", []))
+    features: Dict[str, Any] = {}
+    for i, name in enumerate(feature_names):
+        if i < len(feature_values):
+            v = feature_values[i]
+            features[str(name)] = float(v) if v is not None else float("nan")
+
+    segment_center_sec = _to_list(npz_data.get("segment_center_sec"))
+    segment_mask = _to_list(npz_data.get("segment_mask"))
+    jitter_by_segment = _to_list(npz_data.get("jitter_by_segment"))
+    shimmer_by_segment = _to_list(npz_data.get("shimmer_by_segment"))
+    hnr_by_segment = _to_list(npz_data.get("hnr_by_segment"))
+
+    return {
+        "component": "voice_quality_extractor",
+        "meta": {
+            "status": meta.get("status"),
+            "empty_reason": meta.get("empty_reason"),
+            "schema_version": meta.get("schema_version"),
+        },
+        "summary": {
+            **{k: v for k, v in features.items() if k not in ("segment_start_sec", "segment_end_sec", "segment_center_sec", "segment_mask")},
+            "segments_count": len(segment_center_sec),
+        },
+        "axis": {
+            "segment_center_sec": segment_center_sec,
+            "segment_mask": segment_mask,
+        },
+        "per_segment": {
+            "jitter_by_segment": jitter_by_segment,
+            "shimmer_by_segment": shimmer_by_segment,
+            "hnr_by_segment": hnr_by_segment,
+        },
+    }
+
+
+def render_voice_quality_extractor_html(npz_path: str, output_path: str) -> str:
+    """Offline HTML render (vanilla canvas, no CDN)."""
+    from ....core.renderer import load_npz, extract_meta
+
+    npz_data = load_npz(npz_path)
+    meta = extract_meta(npz_data)
+    ctx = render_voice_quality_extractor(npz_data, meta)
+
+    segment_center = ctx.get("axis", {}).get("segment_center_sec", [])
+    segment_mask = ctx.get("axis", {}).get("segment_mask", [])
+    jitter_by = ctx.get("per_segment", {}).get("jitter_by_segment", [])
+    shimmer_by = ctx.get("per_segment", {}).get("shimmer_by_segment", [])
+    hnr_by = ctx.get("per_segment", {}).get("hnr_by_segment", [])
+
+    # Points for jitter plot (masked, finite)
+    pts_jitter = []
+    for i in range(min(len(segment_center), len(jitter_by))):
+        if i < len(segment_mask) and not segment_mask[i]:
+            continue
+        jv = jitter_by[i] if i < len(jitter_by) else None
+        if jv is not None and isinstance(jv, (int, float)) and np.isfinite(jv):
+            pts_jitter.append([float(segment_center[i]), float(jv)])
+
+    summary = ctx.get("summary", {})
+
+    html = f"""<!doctype html>
+<html>
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>voice_quality_extractor — debug</title>
+  <style>
+    :root {{ --bg: #0b0f14; --panel: #101823; --text: #e6edf3; --muted: #8aa2b2; }}
+    body {{ margin: 0; font-family: ui-sans-serif, system-ui, -apple-system, Segoe UI, Roboto, Arial; background: var(--bg); color: var(--text); }}
+    .wrap {{ max-width: 1200px; margin: 0 auto; padding: 24px; }}
+    .card {{ background: var(--panel); border: 1px solid rgba(255,255,255,0.08); border-radius: 14px; padding: 16px; margin-top: 16px; }}
+    h1 {{ margin: 0 0 8px 0; font-size: 18px; }}
+    .meta {{ color: var(--muted); font-size: 12px; }}
+    .grid {{ display: grid; grid-template-columns: repeat(auto-fill, minmax(140px, 1fr)); gap: 10px; margin-top: 12px; }}
+    .kpi {{ background: rgba(255,255,255,0.04); border: 1px solid rgba(255,255,255,0.06); border-radius: 10px; padding: 10px; }}
+    .kpi .k {{ color: var(--muted); font-size: 11px; }}
+    .kpi .v {{ font-size: 14px; margin-top: 4px; }}
+    canvas {{ width: 100%; height: 260px; background: rgba(0,0,0,0.22); border-radius: 10px; border: 1px solid rgba(255,255,255,0.06); }}
+  </style>
+</head>
+<body>
+  <div class="wrap">
+    <div class="card">
+      <h1>voice_quality_extractor</h1>
+      <div class="meta" id="metaLine"></div>
+      <div class="grid" id="kpis"></div>
+    </div>
+
+    <div class="card">
+      <div class="meta">Jitter by segment (segment_center_sec vs jitter_by_segment)</div>
+      <canvas id="plotJitter"></canvas>
+    </div>
+  </div>
+
+  <script>
+    const ctx = {json.dumps(ctx)};
+    const meta = ctx.meta || {{}};
+    document.getElementById('metaLine').textContent =
+      `status=${{meta.status ?? 'unknown'}} schema=${{meta.schema_version ?? 'unknown'}} empty_reason=${{meta.empty_reason ?? '—'}} segments=${{ctx.summary?.segments_count ?? 0}}`;
+
+    const kpiKeys = ['vq_jitter', 'vq_shimmer', 'vq_hnr_like_db', 'vq_voice_quality_score', 'vq_f0_mean', 'vq_f0_stability'];
+    const kpisEl = document.getElementById('kpis');
+    for (const k of kpiKeys) {{
+      const v = ctx.summary?.[k];
+      if (v === undefined) continue;
+      const d = document.createElement('div');
+      d.className = 'kpi';
+      d.innerHTML = `<div class="k">${{k}}</div><div class="v">${{(v ?? '—')}}</div>`;
+      kpisEl.appendChild(d);
+    }}
+
+    function plotJitter() {{
+      const c = document.getElementById('plotJitter');
+      const dpr = window.devicePixelRatio || 1;
+      const w = Math.floor(c.clientWidth * dpr);
+      const h = Math.floor(c.clientHeight * dpr);
+      c.width = w; c.height = h;
+      const g = c.getContext('2d');
+      g.clearRect(0,0,w,h);
+
+      const pts = {json.dumps(pts_jitter)};
+      if (!pts.length) {{
+        g.fillStyle = 'rgba(255,255,255,0.6)';
+        g.font = `${{14*dpr}}px ui-sans-serif`;
+        g.fillText('no valid segments to plot', 14*dpr, 24*dpr);
+        return;
+      }}
+
+      let xmin = pts[0][0], xmax = pts[0][0], ymin = pts[0][1], ymax = pts[0][1];
+      for (const [x,y] of pts) {{
+        xmin = Math.min(xmin, x); xmax = Math.max(xmax, x);
+        ymin = Math.min(ymin, y); ymax = Math.max(ymax, y);
+      }}
+      const pad = 18*dpr;
+      const xspan = (xmax - xmin) || 1.0;
+      const yspan = (ymax - ymin) || 1.0;
+
+      g.strokeStyle = 'rgba(255,255,255,0.10)';
+      g.lineWidth = 1;
+      for (let i=0;i<=10;i++) {{
+        const xx = pad + (i/10) * (w - pad*2);
+        g.beginPath(); g.moveTo(xx, pad); g.lineTo(xx, h-pad); g.stroke();
+      }}
+      for (let i=0;i<=6;i++) {{
+        const yy = pad + (i/6) * (h - pad*2);
+        g.beginPath(); g.moveTo(pad, yy); g.lineTo(w-pad, yy); g.stroke();
+      }}
+
+      function X(x) {{ return pad + ((x - xmin) / xspan) * (w - pad*2); }}
+      function Y(y) {{ return (h - pad) - ((y - ymin) / (yspan || 1)) * (h - pad*2); }}
+
+      g.strokeStyle = '#a78bfa';
+      g.lineWidth = 2*dpr;
+      g.beginPath();
+      for (let i=0;i<pts.length;i++) {{
+        const [x,y] = pts[i];
+        const px = X(x), py = Y(y);
+        if (i===0) g.moveTo(px, py); else g.lineTo(px, py);
+      }}
+      g.stroke();
+
+      g.fillStyle = '#a78bfa';
+      for (const [x,y] of pts) {{
+        const px = X(x), py = Y(y);
+        g.beginPath(); g.arc(px, py, 3*dpr, 0, Math.PI*2); g.fill();
+      }}
+    }}
+
+    plotJitter();
+    window.addEventListener('resize', plotJitter);
+  </script>
+</body>
+</html>"""
+
+    os.makedirs(os.path.dirname(output_path) or ".", exist_ok=True)
+    tmp_path = output_path + ".tmp"
+    with open(tmp_path, "w", encoding="utf-8") as f:
+        f.write(html)
+    os.replace(tmp_path, output_path)
+
+    logger.info("Saved Voice Quality HTML render to %s", output_path)
+    return output_path
+
+
+__all__ = ["render_voice_quality_extractor", "render_voice_quality_extractor_html"]

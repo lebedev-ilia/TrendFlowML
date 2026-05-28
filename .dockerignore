@@ -1,0 +1,8 @@
+# Для сборок с контекстом всего репозитория (если где-то вызывают `docker build .` из корня).
+# Backend-образ собирается через backend/docker-compose.yml с context = backend/ — этот файл ему не мешает.
+.git
+.cursor
+**/.venv
+**/.pytest_cache
+**/__pycache__
+*.pyc

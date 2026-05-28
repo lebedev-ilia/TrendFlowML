@@ -10,6 +10,18 @@ from ...utils.cli_utils import atomic_save_npz
 BAND_ENERGY_CONTRACT_VERSION = "band_energy_contract_v1"
 
 
+def _dominant_band_tabular(v: Any) -> Any:
+    """Float index {0,1,2} for tabular; None → None; non-numeric → NaN (defensive vs stray strings)."""
+    if v is None:
+        return None
+    try:
+        if isinstance(v, str) and v.strip().isdigit():
+            return float(int(v.strip(), 10))
+        return float(int(v))
+    except (TypeError, ValueError):
+        return float("nan")
+
+
 def save_band_energy_npz(
     *,
     out_path: str,
@@ -30,81 +42,39 @@ def save_band_energy_npz(
     """
     Сохраняет NPZ артефакт для band_energy_extractor.
     """
-    # Metadata (always saved)
-    add("sample_rate", payload.get("sample_rate"))
-    add("n_fft", payload.get("n_fft"))
-    add("hop_length", payload.get("hop_length"))
-    add("duration", payload.get("duration"))
-    add("total_energy", payload.get("total_energy"))
-    add("method", payload.get("method"))
-    
-    # Feature-gated arrays
-    features_enabled = payload.get("_features_enabled", [])
-    
-    # Band edges and energies (always saved)
-    band_edges = payload.get("band_edges", [])
-    band_energies_arr = _arr("band_energies", dtype=np.float32)
-    band_shares_arr = _arr("band_energy_shares", dtype=np.float32)
-    
-    # Basic stats (feature-gated)
-    band_energy_mean_arr = _arr("band_energy_mean", dtype=np.float32) if "basic_stats" in features_enabled else np.zeros((len(band_edges) if band_edges else 0,), dtype=np.float32)
-    band_energy_std_arr = _arr("band_energy_std", dtype=np.float32) if "basic_stats" in features_enabled else np.zeros((len(band_edges) if band_edges else 0,), dtype=np.float32)
-    band_energy_median_arr = _arr("band_energy_median", dtype=np.float32) if "basic_stats" in features_enabled else np.zeros((len(band_edges) if band_edges else 0,), dtype=np.float32)
-    
-    # Extended stats (feature-gated)
-    band_energy_min_arr = _arr("band_energy_min", dtype=np.float32) if "extended_stats" in features_enabled else np.zeros((len(band_edges) if band_edges else 0,), dtype=np.float32)
-    band_energy_max_arr = _arr("band_energy_max", dtype=np.float32) if "extended_stats" in features_enabled else np.zeros((len(band_edges) if band_edges else 0,), dtype=np.float32)
-    band_energy_p25_arr = _arr("band_energy_p25", dtype=np.float32) if "extended_stats" in features_enabled else np.zeros((len(band_edges) if band_edges else 0,), dtype=np.float32)
-    band_energy_p75_arr = _arr("band_energy_p75", dtype=np.float32) if "extended_stats" in features_enabled else np.zeros((len(band_edges) if band_edges else 0,), dtype=np.float32)
-    
-    # Time series (feature-gated)
-    band_energy_ts = None
-    if "time_series" in features_enabled:
-        band_energy_ts_data = payload.get("band_energy_ts", [])
-        if band_energy_ts_data:
-            if isinstance(band_energy_ts_data, list):
-                band_energy_ts = np.array(band_energy_ts_data, dtype=np.float32)
-                if band_energy_ts.ndim == 2:
-                    band_energy_ts = band_energy_ts.T  # (num_bands, frames)
-    
-    if band_energy_ts is None:
-        band_energy_ts = np.zeros((len(band_edges) if band_edges else 0, 0), dtype=np.float32)
-    
-    # Per-segment data (for run_segments)
-    segment_centers_sec = _arr("segment_centers_sec", dtype=np.float32) if "time_series" in features_enabled else np.zeros((0,), dtype=np.float32)
-    segment_durations = _arr("segment_durations", dtype=np.float32) if "time_series" in features_enabled else np.zeros((0,), dtype=np.float32)
-    
-    # Balance metrics (feature-gated)
-    band_balance_score = payload.get("band_balance_score", 0.0) if "balance_metrics" in features_enabled else 0.0
-    band_dominance = payload.get("band_dominance", 0) if "balance_metrics" in features_enabled else 0
-    band_contrast = payload.get("band_contrast", 0.0) if "balance_metrics" in features_enabled else 0.0
-    
-    # Dynamics metrics (feature-gated)
-    band_energy_stability = payload.get("band_energy_stability", 0.0) if "dynamics" in features_enabled else 0.0
-    band_transitions = payload.get("band_transitions", []) if "dynamics" in features_enabled else []
-    band_transitions_count = payload.get("band_transitions_count", 0) if "dynamics" in features_enabled else 0
-    band_transitions_rate = payload.get("band_transitions_rate", 0.0) if "dynamics" in features_enabled else 0.0
-    band_distribution = payload.get("band_distribution", {}) if "dynamics" in features_enabled else {}
-    band_diversity = payload.get("band_diversity", 0) if "dynamics" in features_enabled else 0
-    
-    atomic_save_npz(
-        out_path,
-        feature_names=np.asarray(feature_names, dtype=object),
-        feature_values=np.asarray(feature_values, dtype=np.float32),
-        payload=np.asarray(payload, dtype=object),  # Save payload for render.py compatibility
-        band_energies=band_energies_arr,
-        band_energy_shares=band_shares_arr,
-        band_energy_mean=band_energy_mean_arr,
-        band_energy_std=band_energy_std_arr,
-        band_energy_median=band_energy_median_arr,
-        band_energy_min=band_energy_min_arr,
-        band_energy_max=band_energy_max_arr,
-        band_energy_p25=band_energy_p25_arr,
-        band_energy_p75=band_energy_p75_arr,
-        band_energy_ts=band_energy_ts if band_energy_ts.size > 0 else np.zeros((len(band_edges) if band_edges else 0, 0), dtype=np.float32),
-        segment_centers_sec=segment_centers_sec,
-        segment_durations=segment_durations,
-        meta=build_meta(
+    features_enabled = payload.get("_features_enabled") or []
+
+    # Canonical bands (Audit v3): fixed 3 bands.
+    band_edges = payload.get("band_edges") or []
+    band_edges_hz = np.asarray(band_edges, dtype=np.float32).reshape(-1, 2)
+
+    band_shares = payload.get("band_energy_shares") or []
+    band_energy_shares = np.asarray(band_shares, dtype=np.float32).reshape(-1)
+
+    # Tabular features (model_facing subset): shares only.
+    if band_energy_shares.size == 3:
+        add("band_share_low", float(band_energy_shares[0]))
+        add("band_share_mid", float(band_energy_shares[1]))
+        add("band_share_high", float(band_energy_shares[2]))
+    else:
+        # Keep vector length stable via NaNs (do not inject 0 placeholders).
+        add("band_share_low", np.nan)
+        add("band_share_mid", np.nan)
+        add("band_share_high", np.nan)
+
+    # Optional analytics scalars (feature-gated)
+    if "balance_metrics" in features_enabled:
+        add("band_balance_score", payload.get("band_balance_score"))
+        add("band_contrast", payload.get("band_contrast"))
+        # Tabular: float band index; coerce int/bool/str-digit; unknown types → NaN.
+        add("band_dominant_band", _dominant_band_tabular(payload.get("band_dominance")))
+
+    arrays: Dict[str, Any] = {
+        "feature_names": np.asarray(feature_names, dtype=object),
+        "feature_values": np.asarray(feature_values, dtype=np.float32),
+        "band_edges_hz": band_edges_hz.astype(np.float32),
+        "band_energy_shares": band_energy_shares.astype(np.float32),
+        "meta": build_meta(
             producer="band_energy_extractor",
             producer_version=producer_version,
             schema_version=schema_version,
@@ -115,19 +85,40 @@ def save_band_energy_npz(
                 "empty_reason": empty_reason,
                 "band_energy_contract_version": payload.get("band_energy_contract_version", BAND_ENERGY_CONTRACT_VERSION),
                 "features_enabled": features_enabled,
-                "band_edges": band_edges,
+                # Observability (Audit v3+): stage timings are produced by the extractor.
+                "stage_timings_ms": payload.get("stage_timings_ms", {}),
+                # Optional per-extractor profiling (env-gated; best-effort).
+                "band_energy_resource_profile": payload.get("band_energy_resource_profile"),
                 "method": payload.get("method"),
-                "band_balance_score": band_balance_score,
-                "band_dominance": band_dominance,
-                "band_contrast": band_contrast,
-                "band_energy_stability": band_energy_stability,
-                "band_transitions": band_transitions,
-                "band_transitions_count": band_transitions_count,
-                "band_transitions_rate": band_transitions_rate,
-                "band_distribution": band_distribution,
-                "band_diversity": band_diversity,
+                "sample_rate": payload.get("sample_rate"),
+                "n_fft": payload.get("n_fft"),
+                "hop_length": payload.get("hop_length"),
+                "duration": payload.get("duration"),
+                # Balance metrics (debug)
+                **({"band_balance_score": payload.get("band_balance_score")} if "balance_metrics" in features_enabled else {}),
+                **({"band_dominance": payload.get("band_dominance")} if "balance_metrics" in features_enabled else {}),
+                **({"band_contrast": payload.get("band_contrast")} if "balance_metrics" in features_enabled else {}),
             },
         ),
-    )
+    }
+
+    # Optional segment-aligned sequence (Audit v3)
+    if "time_series" in features_enabled:
+        segment_centers_sec = np.asarray(payload.get("segment_centers_sec") or [], dtype=np.float32).reshape(-1)
+        segment_durations_sec = np.asarray(payload.get("segment_durations") or [], dtype=np.float32).reshape(-1)
+        segment_mask = np.asarray(payload.get("segment_mask") or [], dtype=bool).reshape(-1)
+        band_shares_by_segment = np.asarray(payload.get("band_shares_by_segment") or [], dtype=np.float32)
+        if band_shares_by_segment.ndim != 2:
+            band_shares_by_segment = np.zeros((0, 3), dtype=np.float32)
+        arrays.update(
+            {
+                "segment_centers_sec": segment_centers_sec,
+                "segment_durations_sec": segment_durations_sec,
+                "segment_mask": segment_mask,
+                "band_shares_by_segment": band_shares_by_segment.astype(np.float32),
+            }
+        )
+
+    atomic_save_npz(out_path, **arrays)
     return out_path
 

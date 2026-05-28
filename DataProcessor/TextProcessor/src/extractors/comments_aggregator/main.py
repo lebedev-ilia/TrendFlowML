@@ -11,26 +11,69 @@ CommentsAggregationExtractor — агрегирует эмбеддинги ко�
 
 from __future__ import annotations
 
-import hashlib
 from pathlib import Path
-from typing import Any, Dict, List, Optional
+from typing import Any, Dict, Optional, Tuple
 
 import numpy as np
 
 from src.core.base_extractor import BaseExtractor
 from src.core.metrics import system_snapshot, process_memory_bytes
-from src.core.text_utils import normalize_whitespace
 from src.schemas.models import VideoDocument
+
+# Stable key order for features_flat (canonical → legacy rows). Must match comments_aggregator_output_v1.json.
+_FEATURES_FLAT_KEYS: Tuple[str, ...] = (
+    # tp_commentsagg_* (core + gating + weights + safety + extra timings)
+    "tp_commentsagg_present",
+    "tp_commentsagg_count",
+    "tp_commentsagg_dim",
+    "tp_commentsagg_mean_std",
+    "tp_commentsagg_median_std",
+    "tp_commentsagg_compute_mean_enabled",
+    "tp_commentsagg_compute_median_enabled",
+    "tp_commentsagg_compute_std_enabled",
+    "tp_commentsagg_write_artifacts_enabled",
+    "tp_commentsagg_require_comment_embeddings_enabled",
+    "tp_commentsagg_artifact_mean_written",
+    "tp_commentsagg_artifact_median_written",
+    "tp_commentsagg_weights_applied",
+    "tp_commentsagg_weights_mask_likes",
+    "tp_commentsagg_weights_mask_authority",
+    "tp_commentsagg_weights_mask_recency",
+    "tp_commentsagg_weights_align_present",
+    "tp_commentsagg_weights_align_shape_ok",
+    "tp_commentsagg_dim_mismatch_flag",
+    "tp_commentsagg_unsafe_relpath_flag",
+    "tp_commentsagg_agg_mean_ms",
+    "tp_commentsagg_agg_median_ms",
+    # legacy tp_comments_agg_*
+    "tp_comments_agg_present",
+    "tp_comments_agg_count",
+    "tp_comments_agg_dim",
+    "tp_comments_agg_mean_std",
+    "tp_comments_agg_median_std",
+    "tp_comments_agg_weights_applied",
+    "tp_comments_agg_weights_mask_likes",
+    "tp_comments_agg_weights_mask_authority",
+    "tp_comments_agg_weights_mask_recency",
+    "tp_comments_agg_compute_std",
+    "tp_comments_agg_compute_mean",
+    "tp_comments_agg_compute_median",
+    # legacy tp_cagg_*
+    "tp_cagg_present",
+    "tp_cagg_count",
+    "tp_cagg_dim",
+    "tp_cagg_mean_std",
+    "tp_cagg_median_std",
+)
 
 
 class CommentsAggregationExtractor(BaseExtractor):
-    VERSION = "1.2.0"
-    DEFAULT_EMBED_DIM = 384
+    VERSION = "1.3.0"
 
     def __init__(
         self,
         artifacts_dir: str | None = None,
-        model_name: str = "sentence-transformers/all-MiniLM-L6-v2",
+        model_name: str = "intfloat/multilingual-e5-large",
         compute_mean: bool = True,
         compute_median: bool = True,
         compute_std: bool = False,
@@ -42,7 +85,7 @@ class CommentsAggregationExtractor(BaseExtractor):
 
         self.artifacts_dir = Path(artifacts_dir).expanduser().resolve() if artifacts_dir else default_artifacts_dir()
         self.artifacts_dir.mkdir(parents=True, exist_ok=True)
-        self.model_name = model_name
+        self.model_name = str(model_name)
         self.compute_mean = bool(compute_mean)
         self.compute_median = bool(compute_median)
         self.compute_std = bool(compute_std)
@@ -50,21 +93,42 @@ class CommentsAggregationExtractor(BaseExtractor):
         self.require_comment_embeddings = bool(require_comment_embeddings)
         self.emit_extra_metrics = bool(emit_extra_metrics)
 
-        # metrics
+        init_sys_before = system_snapshot()
+        init_mem_before = process_memory_bytes()
+        try:
+            from dp_models import get_global_model_manager  # type: ignore
+
+            mm = get_global_model_manager()
+            spec = mm.get_spec(model_name=self.model_name)
+            _d, _p, _rt, _eng, weights_digest, _arts = mm.resolve(spec)
+            self.weights_digest = str(weights_digest or "unknown")
+            self.model_version = str(getattr(spec, "model_version", "unknown") or "unknown")
+        except Exception as e:
+            raise RuntimeError(
+                f"CommentsAggregationExtractor: dp_models resolve failed for model_name={self.model_name!r}: {e}"
+            ) from e
+        init_sys_after = system_snapshot()
+        init_mem_after = process_memory_bytes()
         self._init_metrics: Dict[str, Any] = {
-            "pre_init": system_snapshot(),
-            "post_init": system_snapshot(),
-            "ram_peak_bytes": process_memory_bytes(),
+            "pre_init": init_sys_before,
+            "post_init": init_sys_after,
+            "ram_peak_bytes": max(init_mem_before, init_mem_after),
         }
 
-    @staticmethod
-    def _hash_list(texts: List[str], model_name: str) -> str:
-        payload = (model_name + "||" + "\n".join(texts)).encode("utf-8")
-        return hashlib.sha256(payload).hexdigest()
+    def _gpu_peak_mb(self, sys_after: Any) -> int:
+        def _g(snap: Any) -> int:
+            try:
+                g = (snap or {}).get("gpu") or {}
+                arr = g.get("gpus") or []
+                return max([int(x.get("memory_used_mb", 0)) for x in arr] or [0])
+            except Exception:
+                return 0
 
-    def _load_comment_embeddings(self, comments: List[str]) -> Optional[np.ndarray]:
-        # Deprecated: do not recompute hashes from raw comments (privacy + determinism).
-        return None
+        return max(
+            _g(self._init_metrics.get("pre_init")),
+            _g(self._init_metrics.get("post_init")),
+            _g(sys_after),
+        )
 
     @staticmethod
     def _safe_join_artifacts_dir(base_dir: Path, relpath: str) -> Path:
@@ -132,40 +196,20 @@ class CommentsAggregationExtractor(BaseExtractor):
         except Exception:
             return None
 
+    def _pack_features_flat(self, values: Dict[str, float]) -> Dict[str, float]:
+        out: Dict[str, float] = {}
+        for k in _FEATURES_FLAT_KEYS:
+            if k not in values:
+                raise KeyError(f"comments_aggregator: missing features_flat key {k!r}")
+            out[k] = float(values[k])
+        return out
+
     def extract(self, doc: VideoDocument) -> Dict[str, Any]:
         import time
 
         t0 = time.perf_counter()
         sys_before = system_snapshot()
         mem_before = process_memory_bytes()
-
-        def _stable_features_template() -> Dict[str, float]:
-            return {
-                # canonical prefix (new)
-                "tp_commentsagg_present": 0.0,  # at least one aggregate computed (not "artifact exists")
-                "tp_commentsagg_count": 0.0,
-                "tp_commentsagg_dim": float("nan"),
-                "tp_commentsagg_mean_std": float("nan"),
-                "tp_commentsagg_median_std": float("nan"),
-                # gating
-                "tp_commentsagg_compute_mean_enabled": float(bool(self.compute_mean)),
-                "tp_commentsagg_compute_median_enabled": float(bool(self.compute_median)),
-                "tp_commentsagg_compute_std_enabled": float(bool(self.compute_std)),
-                "tp_commentsagg_write_artifacts_enabled": float(bool(self.write_artifacts)),
-                "tp_commentsagg_require_comment_embeddings_enabled": float(bool(self.require_comment_embeddings)),
-                "tp_commentsagg_artifact_mean_written": 0.0,
-                "tp_commentsagg_artifact_median_written": 0.0,
-                # weights
-                "tp_commentsagg_weights_applied": 0.0,
-                "tp_commentsagg_weights_mask_likes": 0.0,
-                "tp_commentsagg_weights_mask_authority": 0.0,
-                "tp_commentsagg_weights_mask_recency": 0.0,
-                "tp_commentsagg_weights_align_present": 0.0,
-                "tp_commentsagg_weights_align_shape_ok": 0.0,
-                # safety
-                "tp_commentsagg_dim_mismatch_flag": 0.0,
-                "tp_commentsagg_unsafe_relpath_flag": 0.0,
-            }
 
         # Load embeddings deterministically via in-memory registry filled by CommentsEmbedder
         tp = getattr(doc, "tp_artifacts", None)
@@ -186,40 +230,72 @@ class CommentsAggregationExtractor(BaseExtractor):
                     embs = None
 
         # Validate matrix shape (N, D)
-        if embs is None or (not isinstance(embs, np.ndarray)) or embs.ndim != 2 or int(embs.shape[0]) <= 0 or int(embs.shape[1]) <= 0:
+        invalid = embs is None or (not isinstance(embs, np.ndarray)) or embs.ndim != 2 or int(embs.shape[0]) <= 0 or int(embs.shape[1]) <= 0
+        if invalid:
             if self.require_comment_embeddings:
                 raise RuntimeError("CommentsAggregationExtractor: required comment embeddings missing or invalid shape")
             sys_after = system_snapshot()
             mem_after = process_memory_bytes()
             total_s = time.perf_counter() - t0
-            features_flat = _stable_features_template()
-            features_flat["tp_commentsagg_unsafe_relpath_flag"] = float(unsafe_relpath_flag)
-            features_flat["tp_commentsagg_dim_mismatch_flag"] = 1.0 if isinstance(embs, np.ndarray) else 0.0
-            # legacy aliases
-            features_flat.update(
+            gpu_peak_mb = self._gpu_peak_mb(sys_after)
+            nan = float("nan")
+            dim_mismatch = 1.0 if isinstance(embs, np.ndarray) else 0.0
+            features_flat = self._pack_features_flat(
                 {
+                    "tp_commentsagg_present": 0.0,
+                    "tp_commentsagg_count": 0.0,
+                    "tp_commentsagg_dim": nan,
+                    "tp_commentsagg_mean_std": nan,
+                    "tp_commentsagg_median_std": nan,
+                    "tp_commentsagg_compute_mean_enabled": float(self.compute_mean),
+                    "tp_commentsagg_compute_median_enabled": float(self.compute_median),
+                    "tp_commentsagg_compute_std_enabled": float(self.compute_std),
+                    "tp_commentsagg_write_artifacts_enabled": float(self.write_artifacts),
+                    "tp_commentsagg_require_comment_embeddings_enabled": float(self.require_comment_embeddings),
+                    "tp_commentsagg_artifact_mean_written": 0.0,
+                    "tp_commentsagg_artifact_median_written": 0.0,
+                    "tp_commentsagg_weights_applied": 0.0,
+                    "tp_commentsagg_weights_mask_likes": 0.0,
+                    "tp_commentsagg_weights_mask_authority": 0.0,
+                    "tp_commentsagg_weights_mask_recency": 0.0,
+                    "tp_commentsagg_weights_align_present": 0.0,
+                    "tp_commentsagg_weights_align_shape_ok": 0.0,
+                    "tp_commentsagg_dim_mismatch_flag": float(dim_mismatch),
+                    "tp_commentsagg_unsafe_relpath_flag": float(unsafe_relpath_flag),
+                    "tp_commentsagg_agg_mean_ms": nan,
+                    "tp_commentsagg_agg_median_ms": nan,
                     "tp_comments_agg_present": 0.0,
                     "tp_comments_agg_count": 0.0,
-                    "tp_comments_agg_dim": float("nan"),
-                    "tp_comments_agg_mean_std": float("nan"),
-                    "tp_comments_agg_median_std": float("nan"),
+                    "tp_comments_agg_dim": nan,
+                    "tp_comments_agg_mean_std": nan,
+                    "tp_comments_agg_median_std": nan,
+                    "tp_comments_agg_weights_applied": 0.0,
+                    "tp_comments_agg_weights_mask_likes": 0.0,
+                    "tp_comments_agg_weights_mask_authority": 0.0,
+                    "tp_comments_agg_weights_mask_recency": 0.0,
+                    "tp_comments_agg_compute_std": float(self.compute_std),
+                    "tp_comments_agg_compute_mean": float(self.compute_mean),
+                    "tp_comments_agg_compute_median": float(self.compute_median),
                     "tp_cagg_present": 0.0,
                     "tp_cagg_count": 0.0,
-                    "tp_cagg_dim": float("nan"),
-                    "tp_cagg_mean_std": float("nan"),
-                    "tp_cagg_median_std": float("nan"),
+                    "tp_cagg_dim": nan,
+                    "tp_cagg_mean_std": nan,
+                    "tp_cagg_median_std": nan,
                 }
             )
             return {
                 "device": "cpu",
                 "version": self.VERSION,
+                "model_name": self.model_name,
+                "model_version": str(self.model_version),
+                "weights_digest": self.weights_digest,
                 "system": {
                     "pre_init": self._init_metrics.get("pre_init"),
                     "post_init": self._init_metrics.get("post_init"),
                     "post_process": sys_after,
                     "peaks": {
                         "ram_peak_mb": int(max(self._init_metrics.get("ram_peak_bytes", 0), mem_before, mem_after) / 1024 / 1024),
-                        "gpu_peak_mb": 0,
+                        "gpu_peak_mb": int(gpu_peak_mb),
                     },
                 },
                 "timings_s": {"total": round(total_s, 3)},
@@ -326,14 +402,25 @@ class CommentsAggregationExtractor(BaseExtractor):
                 or (self.compute_median and isinstance(med_res.get("embedding"), np.ndarray))
             )
         )
-        features_flat = _stable_features_template()
-        features_flat.update(
+        nan = float("nan")
+        mean_ms = nan
+        median_ms = nan
+        if self.emit_extra_metrics:
+            mean_ms = float(mean_s * 1000.0) if self.compute_mean and mean_s == mean_s else nan
+            median_ms = float(median_s * 1000.0) if self.compute_median and median_s == median_s else nan
+
+        features_flat = self._pack_features_flat(
             {
                 "tp_commentsagg_present": float(present),
                 "tp_commentsagg_count": float(int(mean_res["count"])),
                 "tp_commentsagg_dim": float(int(dim)),
-                "tp_commentsagg_mean_std": float(mean_res["std"]) if self.compute_mean else float("nan"),
-                "tp_commentsagg_median_std": float(med_res["std"]) if self.compute_median else float("nan"),
+                "tp_commentsagg_mean_std": float(mean_res["std"]) if self.compute_mean else nan,
+                "tp_commentsagg_median_std": float(med_res["std"]) if self.compute_median else nan,
+                "tp_commentsagg_compute_mean_enabled": float(self.compute_mean),
+                "tp_commentsagg_compute_median_enabled": float(self.compute_median),
+                "tp_commentsagg_compute_std_enabled": float(self.compute_std),
+                "tp_commentsagg_write_artifacts_enabled": float(self.write_artifacts),
+                "tp_commentsagg_require_comment_embeddings_enabled": float(self.require_comment_embeddings),
                 "tp_commentsagg_artifact_mean_written": float(bool(mean_written)),
                 "tp_commentsagg_artifact_median_written": float(bool(median_written)),
                 "tp_commentsagg_weights_applied": float(weights_applied),
@@ -342,43 +429,44 @@ class CommentsAggregationExtractor(BaseExtractor):
                 "tp_commentsagg_weights_mask_recency": float(weights_mask_recency),
                 "tp_commentsagg_weights_align_present": float(weights_align_present),
                 "tp_commentsagg_weights_align_shape_ok": float(weights_align_shape_ok),
+                "tp_commentsagg_dim_mismatch_flag": 0.0,
                 "tp_commentsagg_unsafe_relpath_flag": float(unsafe_relpath_flag),
-            }
-        )
-
-        # legacy aliases (keep stable)
-        features_flat.update(
-            {
+                "tp_commentsagg_agg_mean_ms": mean_ms,
+                "tp_commentsagg_agg_median_ms": median_ms,
                 "tp_comments_agg_present": float(present),
                 "tp_comments_agg_count": float(int(mean_res["count"])),
                 "tp_comments_agg_dim": float(int(dim)),
-                "tp_comments_agg_mean_std": float(mean_res["std"]) if self.compute_mean else float("nan"),
-                "tp_comments_agg_median_std": float(med_res["std"]) if self.compute_median else float("nan"),
+                "tp_comments_agg_mean_std": float(mean_res["std"]) if self.compute_mean else nan,
+                "tp_comments_agg_median_std": float(med_res["std"]) if self.compute_median else nan,
                 "tp_comments_agg_weights_applied": float(weights_applied),
                 "tp_comments_agg_weights_mask_likes": float(weights_mask_likes),
                 "tp_comments_agg_weights_mask_authority": float(weights_mask_authority),
                 "tp_comments_agg_weights_mask_recency": float(weights_mask_recency),
-                "tp_comments_agg_compute_std": float(bool(self.compute_std)),
-                "tp_comments_agg_compute_mean": float(bool(self.compute_mean)),
-                "tp_comments_agg_compute_median": float(bool(self.compute_median)),
+                "tp_comments_agg_compute_std": float(self.compute_std),
+                "tp_comments_agg_compute_mean": float(self.compute_mean),
+                "tp_comments_agg_compute_median": float(self.compute_median),
                 "tp_cagg_present": float(present),
                 "tp_cagg_count": float(int(mean_res["count"])),
                 "tp_cagg_dim": float(int(dim)),
-                "tp_cagg_mean_std": float(mean_res["std"]) if self.compute_mean else float("nan"),
-                "tp_cagg_median_std": float(med_res["std"]) if self.compute_median else float("nan"),
+                "tp_cagg_mean_std": float(mean_res["std"]) if self.compute_mean else nan,
+                "tp_cagg_median_std": float(med_res["std"]) if self.compute_median else nan,
             }
         )
 
+        gpu_peak_mb = self._gpu_peak_mb(sys_after)
         return {
             "device": "cpu",
             "version": self.VERSION,
+            "model_name": self.model_name,
+            "model_version": str(self.model_version),
+            "weights_digest": self.weights_digest,
             "system": {
                 "pre_init": self._init_metrics.get("pre_init"),
                 "post_init": self._init_metrics.get("post_init"),
                 "post_process": sys_after,
                 "peaks": {
                     "ram_peak_mb": int(max(self._init_metrics.get("ram_peak_bytes", 0), mem_before, mem_after) / 1024 / 1024),
-                    "gpu_peak_mb": 0,
+                    "gpu_peak_mb": int(gpu_peak_mb),
                 },
             },
             "timings_s": {
@@ -389,5 +477,3 @@ class CommentsAggregationExtractor(BaseExtractor):
             "result": {"features_flat": features_flat},
             "error": None,
         }
-
-

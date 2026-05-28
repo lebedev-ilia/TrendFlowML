@@ -4,9 +4,13 @@
 
 Извлекает **эмбеддинги по чанкам** из транскрипта видео. Разбивает транскрипт на перекрывающиеся чанки (по предложениям) и генерирует векторные представления для каждого чанка с использованием sentence-transformers моделей. Поддерживает обработку нескольких источников транскрипта (whisper, youtube_auto) независимо.
 
-**Версия**: 1.2.0  
+**Версия**: 1.3.0  
 **Категория**: text embeddings  
 **GPU**: optional (зависит от модели и устройства)
+
+**Диапазоны, тайминги и валидатор среза** (`text_features.npz`): [`docs/FEATURE_DESCRIPTION.md`](docs/FEATURE_DESCRIPTION.md) · [`utils/validate_transcript_chunk_embedder_text_npz.py`](utils/validate_transcript_chunk_embedder_text_npz.py) (`--struct`, `--ranges`, `--timings`)
+
+**Контракт `features_flat`**: [SCHEMA.md](SCHEMA.md) · machine: [`../../schemas/transcript_chunk_embedder_output_v1.json`](../../schemas/transcript_chunk_embedder_output_v1.json) · отчёт Audit v3: [`../../docs/audit_v3/components/transcript_chunk_embedder_AUDIT_V3_REPORT.md`](../../docs/audit_v3/components/transcript_chunk_embedder_AUDIT_V3_REPORT.md) · **Audit v4:** [`../../../../docs/audit_v4/components/text_processor/transcript_chunk_embedder_audit_v4.md`](../../../../docs/audit_v4/components/text_processor/transcript_chunk_embedder_audit_v4.md) · **L2 stats:** [`../../../../storage/audit_v4/transcript_chunk_embedder_l2/transcript_chunk_embedder_audit_v4_stats.json`](../../../../storage/audit_v4/transcript_chunk_embedder_l2/transcript_chunk_embedder_audit_v4_stats.json) (tooling: `scripts/audit_v4_npz_stats.py`)
 
 ### Входы
 
@@ -23,7 +27,10 @@ Tokenizer (строго):
 
 #### Основные результаты
 
-- `features_flat`: числовые скаляры `tp_tchunk_*` для dataset/UI
+- `features_flat`: ровно **16** числовых скаляров `tp_tchunk_*` на каждой ветке (**`extract`** и **`extract_batch`**), порядок фиксирован контрактом v1.3.0:
+  - Базовые: `tp_tchunk_present`, `tp_tchunk_sources_count`, `tp_tchunk_whisper_present`, `tp_tchunk_youtube_auto_present`, `tp_tchunk_whisper_chunks`, `tp_tchunk_youtube_chunks`, `tp_tchunk_embedding_dim`
+  - Confidence: `tp_tchunk_conf_present`, `tp_tchunk_conf_mean`, `tp_tchunk_conf_min`, `tp_tchunk_conf_max` — при **`emit_confidence_metrics=False`** значения **0** или **NaN** (ключи остаются)
+  - Доп. настройки: `tp_tchunk_batch_size`, `tp_tchunk_max_chunk_tokens_model`, `tp_tchunk_overlap_ratio`, `tp_tchunk_max_chunks_total`, `tp_tchunk_cache_enabled` — при **`emit_extra_metrics=False`** все пять полей **NaN** (ключи остаются)
 
 Пути к `.npy` артефактам **не возвращаются** в `result` (privacy).  
 Для передачи между extractor’ами в рамках одного run используется:
@@ -33,8 +40,8 @@ Tokenizer (строго):
 #### Метаданные
 
 - `device`: устройство обработки (`"cpu"` или `"cuda"`)
-- `version`: версия экстрактора (`"1.0.0"`)
-- `model_version`: имя используемой модели
+- `version`: версия экстрактора (`"1.3.0"`)
+- `model_name`, `model_version`, `weights_digest`: на верхнем уровне ответа и внутри **`result`** (в т.ч. пустые ветки)
 - `system`: системные метрики (pre_init, post_init, post_process, peaks)
 - `timings_s.total`: общее время обработки (секунды)
 - `error`: ошибка (если есть, иначе `None`)
@@ -54,6 +61,8 @@ Tokenizer (строго):
 - **Overlap**: `overlap_ratio` (по умолчанию 0.15 = 15%)
 - **Метод**: предложения группируются в чанки до достижения лимита токенов, затем начинается новый чанк с перекрытием
 - **Cost cap**: `max_chunks_total` (по умолчанию 256)
+- **Token counting**: точный подсчет через `shared_tokenizer_v1` (dp_models), не приблизительный
+- **ASR segments**: для whisper источника используется chunking по ASR segments с сохранением confidence mapping
 
 ### Конфигурация
 
@@ -63,19 +72,24 @@ Tokenizer (строго):
     "tokenizer_spec_name": "shared_tokenizer_v1",            # dp_models tokenizer (strict)
     "cache_dir": None,                                        # Путь к кешу (по умолчанию: TextProcessor/cache/transcript_embed)
     "cache_enabled": False,                                   # по умолчанию off
+    "cache_ttl_days": 30.0,                                   # TTL кеша в днях (None = без TTL)
+    "cache_max_items": 50000,                                 # Максимальное количество элементов в кеше
+    "cache_max_bytes": 5000000000,                            # Максимальный размер кеша в байтах
+    "cache_cleanup_on_init": True,                            # Очистка кеша при инициализации
+    "cache_cleanup_max_seconds": 0.25,                        # Максимальное время на очистку кеша
     "artifacts_dir": None,                                    # Путь к артефактам (по умолчанию: из env)
     "device": "cpu",                                          # "cpu" | "cuda"
     "fp16": True,                                             # Использовать float16 на GPU
     "batch_size": 64,                                         # Размер батча для обработки чанков
-    "use_asr": True,
-    "use_youtube_auto": False,
-    "require_asr": False,
-    "require_any_source": False,
-    "max_chunk_tokens_model": 256,
-    "overlap_ratio": 0.15,
-    "max_chunks_total": 256,
-    "emit_confidence_metrics": True,
-    "emit_extra_metrics": False
+    "use_asr": True,                                          # Использовать doc.asr.segments (whisper)
+    "use_youtube_auto": False,                                 # Использовать doc.transcripts["youtube_auto"]
+    "require_asr": False,                                     # Если True и нет ASR → ошибка (fail-fast)
+    "require_any_source": False,                             # Если True и нет ни одного источника → ошибка
+    "max_chunk_tokens_model": 256,                            # Максимальное количество токенов в чанке
+    "overlap_ratio": 0.15,                                    # Коэффициент перекрытия между чанками
+    "max_chunks_total": 256,                                  # Максимальное количество чанков (cost cap)
+    "emit_confidence_metrics": True,                           # Включать метрики уверенности ASR
+    "emit_extra_metrics": False                               # Включать дополнительные метрики (batch_size, chunking params, cache_enabled)
 }
 ```
 
@@ -101,25 +115,32 @@ Tokenizer (строго):
 ```json
 {
     "source": "whisper",
-    "hash": "...",
-    "model": "sentence-transformers/all-MiniLM-L6-v2",
+    "model_name": "sentence-transformers/all-MiniLM-L6-v2",
+    "model_version": "unknown",
+    "weights_digest": "...",
     "device": "cpu",
     "n_chunks": 10,
     "embedding_dim": 384,
-    "chunk_word_counts": [15, 12, 18, ...]
+    "conf_present": 1.0,
+    "conf_mean": 0.95,
+    "conf_min": 0.85,
+    "conf_max": 1.0
 }
 ```
 
-**Примечание**: для приватности, сырые тексты чанков **не сохраняются** в метаданных.
+**Примечание**: для приватности, сырые тексты чанков **не сохраняются** в метаданных. Cache key основан на privacy-safe transcript_id (hash от token_ids или текста).
 
 ### Особенности
 
 - **Множественные источники**: независимая обработка whisper и youtube_auto транскриптов
+- **Token-aware chunking**: точный подсчет токенов через shared_tokenizer_v1 (dp_models)
+- **ASR confidence integration**: использование весов уверенности Whisper при chunking (сохранение mapping)
 - **Overlap чанков**: сохранение контекста между соседними чанками
 - **L2-нормализация**: все эмбеддинги нормализованы к единичной длине
-- **Батчевая обработка**: эффективная обработка больших транскриптов
-- **Кеширование**: избежание повторных вычислений для одинаковых текстов
+- **Батчевая обработка**: эффективная обработка больших транскриптов (поддерживается `extract_batch()`)
+- **Кеширование**: избежание повторных вычислений для одинаковых текстов (опционально, по умолчанию off)
 - **Атомарная запись**: безопасное сохранение файлов через временные файлы
+- **Privacy-safe IDs**: transcript_id основан на hash от token_ids или текста (не raw текст)
 - **Метрики производительности**: отслеживание времени выполнения и использования памяти/GPU
 
 ### Обработка ошибок
@@ -166,10 +187,15 @@ Tokenizer (строго):
 
 1. **Модель по умолчанию**: `all-MiniLM-L6-v2` (384-мерные эмбеддинги, быстрая)
 2. **Размерность эмбеддинга**: зависит от модели (для all-MiniLM-L6-v2: 384)
-3. **Overlap**: перекрытие помогает сохранить контекст между чанками, особенно важно для длинных предложений
-4. **Кеширование**: кеш работает на основе хеша текста и модели, поэтому изменение модели требует пересчета
-5. **Множественные источники**: если оба источника присутствуют, обрабатываются оба независимо
-6. **Legacy поддержка**: если найден старый кеш в `cache_dir`, он автоматически мигрирует в `artifacts_dir`
-7. **Нормализация**: L2-нормализация выполняется вручную (модель возвращает ненормализованные векторы)
-8. **Батчевая обработка**: чанки обрабатываются батчами для эффективности, особенно важно для GPU
+3. **Tokenizer**: строго через `dp_models` spec `shared_tokenizer_v1` (no fallback)
+4. **Зависимость от ASR**: для whisper источника требуется `doc.asr.segments` (AudioProcessor)
+5. **Token-aware chunking**: точный подсчет токенов через shared_tokenizer_v1, не приблизительный
+6. **ASR confidence**: для whisper источника confidence сохраняется и может использоваться downstream (transcript_aggregator)
+7. **Chunking strategy**: для whisper используется chunking по ASR segments с сохранением confidence mapping; для других источников — sentence-based chunking
+8. **Overlap**: перекрытие помогает сохранить контекст между чанками, особенно важно для длинных предложений
+9. **Кеширование**: кеш работает на основе privacy-safe transcript_id (hash от token_ids или текста) + weights_digest
+10. **Batch processing**: поддерживается `extract_batch()` для эффективной обработки нескольких документов
+11. **Нормализация**: L2-нормализация выполняется вручную (модель возвращает ненормализованные векторы)
+12. **Cost controls**: `max_chunks_total` ограничивает количество чанков для контроля стоимости
+13. **Cache cleanup**: автоматическая очистка кеша при инициализации (best-effort, с таймаутом)
 

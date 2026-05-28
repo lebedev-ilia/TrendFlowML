@@ -1,5 +1,0 @@
-"""
-Benchmark harness package.
-"""
-
-

@@ -16,6 +16,12 @@ import numpy as np
 from src.core.base_extractor import BaseExtractor, ExtractorResult
 from src.core.audio_utils import AudioUtils
 
+from .utils.resource_profile import (
+    prefix_snapshot,
+    resource_profile_enabled,
+    snapshot_process_resources,
+)
+
 logger = logging.getLogger(__name__)
 
 
@@ -29,7 +35,7 @@ class LoudnessExtractor(BaseExtractor):
     """
 
     name = "loudness"
-    version = "1.1.0"
+    version = "2.1.1"
     description = "Метрики громкости (RMS, peak, dBFS, опционально LUFS)"
     category = "loudness"
     dependencies = ["numpy", "pyloudnorm"]
@@ -128,6 +134,9 @@ class LoudnessExtractor(BaseExtractor):
           - aggregated stats over segment RMS (mean/std/median/p10/p90)
         """
         start_time = time.time()
+        t_total0 = time.perf_counter()
+        stage_timings_ms: Dict[str, float] = {}
+        loudness_resource_profile: Optional[Dict[str, Any]] = None
         try:
             if not self._validate_input(input_uri):
                 return self._create_result(
@@ -141,6 +150,14 @@ class LoudnessExtractor(BaseExtractor):
             self._log_extraction_start(input_uri)
             
             total_segments = len(segments)
+
+            if resource_profile_enabled():
+                try:
+                    loudness_resource_profile = {
+                        **prefix_snapshot("at_start", snapshot_process_resources()),
+                    }
+                except Exception:
+                    loudness_resource_profile = None
             
             # Начальное сообщение о начале обработки
             if self.progress_callback and total_segments > 0:
@@ -150,11 +167,35 @@ class LoudnessExtractor(BaseExtractor):
             inflight = int(max_inflight) if max_inflight is not None else seg_p
             inflight = max(1, int(inflight))
 
-            def _one(i: int, seg: dict):
+            # Strict alignment (Audit v3): pre-allocate arrays, no skipping
+            n = int(len(segments))
+            segment_start_sec = np.zeros(n, dtype=np.float32)
+            segment_end_sec = np.zeros(n, dtype=np.float32)
+            segment_center_sec = np.zeros(n, dtype=np.float32)
+            segment_mask = np.zeros(n, dtype=bool)
+
+            seg_rms_arr = np.full(n, np.nan, dtype=np.float32)
+            seg_peak_arr = np.full(n, np.nan, dtype=np.float32)
+            seg_dbfs_arr = np.full(n, np.nan, dtype=np.float32)
+            seg_lufs_arr = np.full(n, np.nan, dtype=np.float32)
+            last_reported_pct = -1
+
+            def _process_one(i: int, seg: dict) -> None:
+                # Always populate time axis.
+                st = float(seg.get("start_sec", 0.0))
+                en = float(seg.get("end_sec", 0.0))
+                c = float(seg.get("center_sec", (st + en) * 0.5))
+                segment_start_sec[i] = st
+                segment_end_sec[i] = en
+                segment_center_sec[i] = c
+
+                # Basic validation: keep masked if invalid or empty window.
+                if not np.isfinite(st) or not np.isfinite(en) or en <= st:
+                    return
+
                 try:
-                    ss = int(seg.get("start_sample"))
-                    es = int(seg.get("end_sample"))
-                    c = float(seg.get("center_sec"))
+                    ss = int(seg.get("start_sample", 0))
+                    es = int(seg.get("end_sample", 0))
                     waveform_t, sr = self.audio_utils.load_audio_segment(
                         input_uri,
                         start_sample=ss,
@@ -166,36 +207,21 @@ class LoudnessExtractor(BaseExtractor):
                     if x.ndim == 2:
                         x = np.mean(x, axis=0) if self.mix_to_mono else x[0]
                     m = self._compute_from_np(x, int(sr))
-                    rms = float(m["rms"])
-                    peak = float(m["peak"])
-                    dbfs = float(m["dbfs"])
-                    lufs = m["lufs"]
-                    return i, float(c), rms, peak, dbfs, (None if lufs is None else float(lufs))
+                    seg_rms_arr[i] = float(m["rms"])
+                    seg_peak_arr[i] = float(m["peak"])
+                    seg_dbfs_arr[i] = float(m["dbfs"])
+                    if m.get("lufs") is not None and np.isfinite(float(m["lufs"])):
+                        seg_lufs_arr[i] = float(m["lufs"])
+                    segment_mask[i] = True
                 except Exception as e:
-                    logger.error(f"Error processing loudness segment {i}: {e}")
-                    raise
-
-            n = int(len(segments))
-            seg_rms: list[float] = [0.0] * n
-            seg_peak: list[float] = [0.0] * n
-            seg_dbfs: list[float] = [0.0] * n
-            seg_lufs: list[float] = [float("nan")] * n
-            centers: list[float] = [0.0] * n
-            lufs_present = True
-            last_reported_pct = -1
+                    # No-fallback on segments: keep strict alignment, mark as failed.
+                    logger.warning(f"loudness | Segment {i} failed: {e}")
+                    return
 
             if seg_p <= 1:
+                t_seg0 = time.perf_counter()
                 for i, seg in enumerate(segments):
-                    i2, c, rms, peak, dbfs, lufs = _one(i, seg)
-                    centers[i2] = c
-                    seg_rms[i2] = rms
-                    seg_peak[i2] = peak
-                    seg_dbfs[i2] = dbfs
-                    if lufs is None:
-                        lufs_present = False
-                        seg_lufs[i2] = float("nan")
-                    else:
-                        seg_lufs[i2] = float(lufs)
+                    _process_one(i, seg)
                     
                     # Progress reporting: каждые 10% сегментов или на первом/последнем
                     if self.progress_callback and total_segments > 0:
@@ -204,23 +230,16 @@ class LoudnessExtractor(BaseExtractor):
                         if current == 1 or current == total_segments or (pct % 10 == 0 and pct != last_reported_pct):
                             self.progress_callback("loudness", current, total_segments, f"Processing segments: {current}/{total_segments} ({pct}%)")
                             last_reported_pct = pct
+                stage_timings_ms["process_segments_ms"] = (time.perf_counter() - t_seg0) * 1000.0
             else:
                 workers = max(1, min(int(seg_p), int(inflight)))
                 completed_count = 0
+                t_seg0 = time.perf_counter()
                 with ThreadPoolExecutor(max_workers=workers) as ex:
-                    futs = [ex.submit(_one, i, seg) for i, seg in enumerate(segments)]
+                    futs = [ex.submit(_process_one, i, seg) for i, seg in enumerate(segments)]
                     for fut in as_completed(futs):
                         try:
-                            i2, c, rms, peak, dbfs, lufs = fut.result()
-                            centers[int(i2)] = float(c)
-                            seg_rms[int(i2)] = float(rms)
-                            seg_peak[int(i2)] = float(peak)
-                            seg_dbfs[int(i2)] = float(dbfs)
-                            if lufs is None:
-                                lufs_present = False
-                                seg_lufs[int(i2)] = float("nan")
-                            else:
-                                seg_lufs[int(i2)] = float(lufs)
+                            fut.result()
                             
                             completed_count += 1
                             
@@ -233,36 +252,63 @@ class LoudnessExtractor(BaseExtractor):
                         except Exception as e:
                             logger.error(f"Error processing loudness segment in parallel: {e}")
                             raise
+                stage_timings_ms["process_segments_ms"] = (time.perf_counter() - t_seg0) * 1000.0
 
-            seg_rms_arr = np.asarray(seg_rms, dtype=np.float32)
-            # Aggregate segment RMS stats (robust across long videos)
+            t_agg0 = time.perf_counter()
+            valid = segment_mask & np.isfinite(seg_rms_arr)
+            valid_rms = seg_rms_arr[valid]
+            # Aggregate segment RMS stats over valid segments only
             agg = {
-                "segment_rms_mean": float(np.mean(seg_rms_arr)) if seg_rms_arr.size else float("nan"),
-                "segment_rms_std": float(np.std(seg_rms_arr)) if seg_rms_arr.size else float("nan"),
-                "segment_rms_median": float(np.median(seg_rms_arr)) if seg_rms_arr.size else float("nan"),
-                "segment_rms_p10": float(np.percentile(seg_rms_arr, 10)) if seg_rms_arr.size else float("nan"),
-                "segment_rms_p90": float(np.percentile(seg_rms_arr, 90)) if seg_rms_arr.size else float("nan"),
+                "segment_rms_mean": float(np.mean(valid_rms)) if valid_rms.size else float("nan"),
+                "segment_rms_std": float(np.std(valid_rms)) if valid_rms.size else float("nan"),
+                "segment_rms_median": float(np.median(valid_rms)) if valid_rms.size else float("nan"),
+                "segment_rms_p10": float(np.percentile(valid_rms, 10)) if valid_rms.size else float("nan"),
+                "segment_rms_p90": float(np.percentile(valid_rms, 90)) if valid_rms.size else float("nan"),
             }
+            stage_timings_ms["aggregate_segments_ms"] = (time.perf_counter() - t_agg0) * 1000.0
 
             # Keep backward-compatible globals by also computing full-track metrics.
+            t_full0 = time.perf_counter()
             wav_full_t, sr_full = self.audio_utils.load_audio(input_uri, self.sample_rate)
             x_full = self.audio_utils.to_numpy(wav_full_t)
             if x_full.ndim == 2:
                 x_full = np.mean(x_full, axis=0) if self.mix_to_mono else x_full[0]
             full = self._compute_from_np(x_full, int(sr_full))
+            stage_timings_ms["compute_full_track_ms"] = (time.perf_counter() - t_full0) * 1000.0
+            full_lufs = full.get("lufs")
+            lufs_present = bool(
+                (full_lufs is not None and np.isfinite(float(full_lufs)))
+                or bool(np.any(np.isfinite(seg_lufs_arr)))
+            )
 
             payload: Dict[str, Any] = {
                 **full,
                 **agg,
                 "segments_count": int(len(segments)),
-                "segment_centers_sec": np.asarray(centers, dtype=np.float32),
-                "segment_rms": seg_rms_arr,
-                "segment_peak": np.asarray(seg_peak, dtype=np.float32),
-                "segment_dbfs": np.asarray(seg_dbfs, dtype=np.float32),
-                "segment_lufs": np.asarray(seg_lufs, dtype=np.float32),
                 "lufs_present": bool(lufs_present),
+                "stage_timings_ms": stage_timings_ms,
+                "loudness_resource_profile": loudness_resource_profile,
+                "segment_start_sec": segment_start_sec,
+                "segment_end_sec": segment_end_sec,
+                "segment_center_sec": segment_center_sec,
+                "segment_mask": segment_mask,
+                "segment_rms": seg_rms_arr,
+                "segment_peak": seg_peak_arr,
+                "segment_dbfs": seg_dbfs_arr,
+                "segment_lufs": seg_lufs_arr,
                 "device_used": self.device,
             }
+
+            stage_timings_ms["total_ms"] = (time.perf_counter() - t_total0) * 1000.0
+
+            if loudness_resource_profile is not None:
+                try:
+                    payload["loudness_resource_profile"] = {
+                        **(loudness_resource_profile or {}),
+                        **prefix_snapshot("at_end", snapshot_process_resources()),
+                    }
+                except Exception:
+                    pass
             processing_time = time.time() - start_time
             self._log_extraction_success(input_uri, processing_time)
             return self._create_result(True, payload=payload, processing_time=processing_time)

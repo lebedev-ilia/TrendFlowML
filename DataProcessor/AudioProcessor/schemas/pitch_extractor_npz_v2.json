@@ -1,0 +1,67 @@
+{
+  "schema_system_version": "vp_schema_v1",
+  "schema_version": "pitch_extractor_npz_v2",
+  "producer": "pitch_extractor",
+  "artifact_kind": "npz",
+  "allow_extra_keys": false,
+  "meta": {
+    "required_keys": [
+      "producer",
+      "producer_version",
+      "schema_version",
+      "created_at",
+      "platform_id",
+      "video_id",
+      "run_id",
+      "config_hash",
+      "sampling_policy_version",
+      "dataprocessor_version",
+      "status",
+      "empty_reason",
+      "models_used",
+      "model_signature",
+      "stage_timings_ms"
+    ],
+    "optional_keys": [
+      "device_used",
+      "scheduler_knobs",
+      "resource_metrics",
+      "error",
+      "pitch_contract_version",
+      "features_enabled",
+      "f0_series_npy",
+      "backend",
+      "f0_method"
+    ]
+  },
+  "fields": {
+    "feature_names": { "required": true, "tier": "model_facing", "dtype": "object", "shape": ["F"] },
+    "feature_values": { "required": true, "tier": "model_facing", "dtype": "float32", "shape": ["F"] },
+
+    "segment_start_sec": { "required": true, "tier": "analytics", "dtype": "float32", "shape": ["N"] },
+    "segment_end_sec": { "required": true, "tier": "analytics", "dtype": "float32", "shape": ["N"] },
+    "segment_center_sec": { "required": true, "tier": "analytics", "dtype": "float32", "shape": ["N"] },
+    "segment_mask": { "required": true, "tier": "analytics", "dtype": "bool", "shape": ["N"] },
+
+    "f0_mean": { "required": false, "tier": "model_facing", "dtype": "float32", "shape": [] },
+    "f0_std": { "required": false, "tier": "model_facing", "dtype": "float32", "shape": [] },
+    "f0_min": { "required": false, "tier": "model_facing", "dtype": "float32", "shape": [] },
+    "f0_max": { "required": false, "tier": "model_facing", "dtype": "float32", "shape": [] },
+    "f0_median": { "required": false, "tier": "model_facing", "dtype": "float32", "shape": [] },
+    "pitch_stability": { "required": false, "tier": "model_facing", "dtype": "float32", "shape": [] },
+    "pitch_range": { "required": false, "tier": "model_facing", "dtype": "float32", "shape": [] },
+    "f0_method": { "required": false, "tier": "model_facing", "dtype": "object", "shape": [] },
+
+    "pitch_variation": { "required": false, "tier": "analytics", "dtype": "float32", "shape": [] },
+    "f0_delta_mean": { "required": false, "tier": "analytics", "dtype": "float32", "shape": [] },
+    "f0_delta_std": { "required": false, "tier": "analytics", "dtype": "float32", "shape": [] },
+    "f0_delta_abs_mean": { "required": false, "tier": "analytics", "dtype": "float32", "shape": [] },
+    "pitch_contour_smoothness": { "required": false, "tier": "analytics", "dtype": "float32", "shape": [] },
+    "pitch_jump_count": { "required": false, "tier": "analytics", "dtype": "float32", "shape": [] },
+    "pitch_skewness": { "required": false, "tier": "analytics", "dtype": "float32", "shape": [] },
+    "pitch_kurtosis": { "required": false, "tier": "analytics", "dtype": "float32", "shape": [] },
+    "pitch_octave_distribution": { "required": false, "tier": "analytics", "dtype": "object", "shape": [] },
+
+    "meta": { "required": true, "tier": "debug", "dtype": "object", "shape": [] }
+  }
+}

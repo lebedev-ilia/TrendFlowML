@@ -40,16 +40,23 @@ logger = get_logger("VisualProcessor.face_identity_batch")
 
 # Import from face_identity
 try:
-    from core.model_process.core_identity.face_identity.embedding_service_client import EmbeddingServiceClient
+    from core.model_process.core_identity.face_identity.utils.embedding_service_client import EmbeddingServiceClient
     from core.model_process.core_identity.face_identity.main import (
         _extract_face_bbox_from_landmarks,
         _crop_face,
     )
 except ImportError:
-    # Fallback: direct import
-    sys.path.insert(0, str(_face_identity_path))
-    from embedding_service_client import EmbeddingServiceClient
-    from main import _extract_face_bbox_from_landmarks, _crop_face
+    # Fallback: try utils directory, then direct import
+    try:
+        sys.path.insert(0, str(_face_identity_path / "utils"))
+        from embedding_service_client import EmbeddingServiceClient
+        sys.path.insert(0, str(_face_identity_path))
+        from main import _extract_face_bbox_from_landmarks, _crop_face
+    except ImportError:
+        # Last fallback: direct import from root
+        sys.path.insert(0, str(_face_identity_path))
+        from embedding_service_client import EmbeddingServiceClient
+        from main import _extract_face_bbox_from_landmarks, _crop_face
 
 NAME = "core_face_identity"
 VERSION = "0.1"

@@ -2,11 +2,15 @@
 
 ### Назначение
 
-Вычисляет статистические метрики по эмбеддингам чанков транскрипта: дисперсию эмбеддингов между чанками и энтропию topic distribution (если доступно). Используется для анализа вариативности представления текста и смешения тем.
+Вычисляет статистические метрики **только по матрице эмбеддингов чанков транскрипта** (дисперсия между чанками, top component variances) и **опционально** энтропию по `topic_probs`, уже посчитанным upstream (`semantics_topics_keyphrases`). Title/description/comments здесь **не** используются.
 
-**Версия**: 1.1.0  
+**Версия**: 1.2.0  
 **Категория**: embedding statistics  
 **GPU**: не требуется (CPU-only)
+
+**Контракт Audit v3**: [SCHEMA.md](./SCHEMA.md) · machine: [`schemas/embedding_stats_extractor_output_v1.json`](../../schemas/embedding_stats_extractor_output_v1.json)  
+**Диапазоны и валидатор среза** (`text_features.npz`): [`docs/FEATURE_DESCRIPTION.md`](docs/FEATURE_DESCRIPTION.md) · [`utils/validate_embedding_stats_extractor_text_npz.py`](utils/validate_embedding_stats_extractor_text_npz.py)  
+**Audit v4:** [`../../../../docs/audit_v4/components/text_processor/embedding_stats_extractor_audit_v4.md`](../../../../docs/audit_v4/components/text_processor/embedding_stats_extractor_audit_v4.md) · L2 stats: `scripts/audit_v4_npz_stats.py` → `storage/audit_v4/embedding_stats_extractor_l2/`
 
 ### Входы
 
@@ -30,34 +34,35 @@
 
 - `tp_embstats_present` (0/1): 1 только если найдено `n_chunks >= min_chunks_required`.
 - `tp_embstats_l2_variance` (float): \(||var||_2\) по компонентам (NaN если empty).
-- `tp_embstats_topvar_1..tp_embstats_topvar_<top_k_slots>` (float): fixed slots для top component variances (NaN если slot пуст).
+- `tp_embstats_topvar_1` … `tp_embstats_topvar_8` (float): **ровно 8** слотов; экспорт заполняется до эффективного `top_k_slots` (после клампа ≤ 8), остальные **NaN**. Порядок убывания: `topvar_1` = наибольшая component variance, и т.д.
 - `tp_embstats_topic_entropy` (float): entropy по topic probs (NaN если topic probs отсутствуют/невалидны или выключено).
 - `tp_embstats_topic_entropy_norm` (float): нормированная энтропия \(H/\log(K)\) (NaN если не применимо).
 - `tp_embstats_topic_perplexity` (float): \(e^{H}\) (NaN если не применимо).
 - `tp_embstats_topic_entropy_present` (0/1).
 - `tp_embstats_topic_probs_present` (0/1) и `tp_embstats_topic_probs_invalid_flag` (0/1).
-- `tp_embstats_source_used_<source>` (0/1): какой transcript source был использован (из `transcript_source_priority`).
+- `tp_embstats_source_used_whisper`, `tp_embstats_source_used_youtube_auto` (0/1): фиксированные флаги; ровно один 1.0 при успешном выборе источника из приоритета (неизвестные ключи в конфиге отбрасываются).
 - safety flags: `tp_embstats_unsafe_relpath_flag`, `tp_embstats_dim_mismatch_flag`, `tp_embstats_nan_inf_flag`.
 
-Также всегда присутствуют (стабильная схема):
+Также всегда присутствуют (стабильная схема, **39** ключей — см. JSON):
+- `tp_embstats_emit_extra_metrics_enabled`
 - `tp_embstats_enabled`, `tp_embstats_disabled_by_policy`
-- `tp_embstats_require_chunks_enabled`
-- `tp_embstats_compute_topic_entropy_enabled`, `tp_embstats_require_topic_distribution_enabled`
+- `tp_embstats_schema_topvar_slots_max`, `tp_embstats_top_k_slots_requested`, `tp_embstats_top_k_slots`, `tp_embstats_top_k_slots_clamped`
+- `tp_embstats_require_chunks_enabled`, `tp_embstats_compute_topic_entropy_enabled`, `tp_embstats_require_topic_distribution_enabled`
+- `tp_embstats_min_chunks_required`, `tp_embstats_topk`, `tp_embstats_variance_ddof`
 - `tp_embstats_n_chunks`, `tp_embstats_dim`
-- `tp_embstats_load_ms`, `tp_embstats_compute_ms`
+- `tp_embstats_load_ms`, `tp_embstats_compute_ms` (**NaN** при `emit_extra_metrics=false`)
 
 #### Метаданные
 
-- `device`: устройство обработки (`"cpu"`)
+- `device`: `"cpu"`
 - `version`: версия экстрактора
+- `model_name` / `model_version` / `weights_digest`: **`null`** (модель не загружается)
 
 #### Системные метрики
 
-- `system.pre_init`: снимок системы до инициализации
-- `system.post_init`: снимок системы после инициализации
-- `system.post_process`: снимок системы после обработки
-- `system.peaks.ram_peak_mb`: пиковое использование RAM (MB)
-- `system.peaks.gpu_peak_mb`: пиковое использование GPU памяти (MB, всегда 0)
+- `system.pre_init` / `post_init`: снимки из `_init_metrics` конструктора
+- `system.post_process`: снимок после `extract`
+- `system.peaks.ram_peak_mb`, `system.peaks.gpu_peak_mb`: пики по снимкам (GPU часто 0 на CPU-only)
 
 #### Тайминги
 
@@ -71,11 +76,11 @@
 
 #### 1. Загрузка чанков эмбеддингов
 
-**Приоритет источников**: настраивается через `transcript_source_priority` (по умолчанию `["whisper", "youtube_auto"]`).
+**Приоритет источников**: `transcript_source_priority`; допустимы только `whisper` и `youtube_auto`; по умолчанию в коде **`["whisper"]`** (Audit v3: ASR-first). Второй источник включают в конфиге при необходимости (например `["whisper", "youtube_auto"]`).
 
 **Процесс**:
-- Берём `embeddings_relpath` из `doc.tp_artifacts["transcript_chunks"][source]`
-- Загружаем `.npy` из `artifacts_dir/embeddings_relpath`
+- Сначала canonical: `doc.tp_artifacts["transcripts"][source]["chunk_embeddings_relpath"]`, иначе legacy `doc.tp_artifacts["transcript_chunks"][source]["embeddings_relpath"]`
+- Загружаем `.npy` из `artifacts_dir/<relpath>`
 - Нормализация формы: если `ndim == 1`, преобразуется в `(1, D)`
 - Конвертация в `float32`
 
@@ -85,7 +90,8 @@
 ```
 var_vec = np.var(chunks, axis=0, ddof=variance_ddof)  # Дисперсия по каждой компоненте
 l2_variance = ||var_vec||_2       # L2-норма вектора дисперсий
-topk_variances = sort(var_vec)[-topk:]  # Top-k наибольших дисперсий (экспортируется в fixed slots)
+topk_variances = sort(var_vec)[-topk:]  # Top-k наибольших дисперсий (отсортированы по возрастанию)
+# Заполнение слотов: topvar_1 = topk_variances[-1] (наибольшая), topvar_2 = topk_variances[-2], и т.д.
 ```
 
 **Интерпретация**:
@@ -111,9 +117,9 @@ entropy = -sum(p_i * log(p_i + eps))  # по top-K probs
 ```python
 {
     "artifacts_dir": None,        # Путь к директории артефактов (по умолчанию: default_artifacts_dir())
-    "transcript_source_priority": ["whisper", "youtube_auto"],
-    "top_k_slots": 8,             # фиксированное число слотов tp_embstats_topvar_*
-    "topk": 8,                    # сколько top-k реально выбирать (<= top_k_slots)
+    "transcript_source_priority": ["whisper"],  # при необходимости: ["whisper", "youtube_auto"]
+    "top_k_slots": 8,             # эффективное число заполняемых слотов (кламп ≤ 8; в схеме всегда 8 ключей)
+    "topk": 8,                    # сколько component variances брать у np.var по оси (может быть > слотов экспорта)
     "min_chunks_required": 2,     # минимум чанков для valid stats
     "variance_ddof": 0,           # ddof для np.var
     "enabled": True,              # feature-gating
@@ -127,12 +133,12 @@ entropy = -sum(p_i * log(p_i + eps))  # по top-K probs
 **Параметры**:
 - `artifacts_dir`: директория с артефактами эмбеддингов чанков
 - `transcript_source_priority`: приоритет источников transcript chunk embeddings
-- `top_k_slots`: фиксированное число слотов `tp_embstats_topvar_*` (стабильная схема)
+- `top_k_slots`: сколько слотов из **8** заполнять (значение из конфига клампится; см. `tp_embstats_top_k_slots_*`)
 - `topk`: сколько top-k реально выбирать
 - `min_chunks_required`: минимум чанков для valid вычисления дисперсии
 - `variance_ddof`: ddof для `np.var`
 - `require_chunks`: fail-fast, если required input отсутствует
-- `emit_extra_metrics`: включает дополнительные метрики/тайминги (см. выше)
+- `emit_extra_metrics`: при **True** заполняет `tp_embstats_load_ms` и `tp_embstats_compute_ms`; при **False** → **NaN**
 
 ### Особенности
 
@@ -175,8 +181,8 @@ entropy = -sum(p_i * log(p_i + eps))  # по top-K probs
 ### Связанные компоненты
 
 - **BaseExtractor**: базовый интерфейс экстрактора
-- **transcript_chunk_embedder**: создаёт эмбеддинги чанков, используемые этим экстрактором
-- **description_embedder**: может использовать похожие метаданные для топиков
+- **transcript_chunk_embedder**: создаёт матрицу чанков (`chunk_embeddings_relpath` в `tp_artifacts`)
+- **semantics_topics_keyphrases** (опционально): пишет `topic_probs` в `tp_artifacts` in-memory для энтропии
 
 ### Примечания
 

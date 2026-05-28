@@ -26,6 +26,11 @@ import torch
 from src.core.base_extractor import BaseExtractor, ExtractorResult
 from src.core.audio_utils import AudioUtils
 
+from .utils.resource_profile import (
+    capture_source_separation_resource_profile,
+    is_source_separation_resource_profile_enabled,
+)
+
 logger = logging.getLogger(__name__)
 
 # Contract version for downstream extractors compatibility validation
@@ -34,7 +39,7 @@ SOURCE_SEPARATION_CONTRACT_VERSION = "source_separation_contract_v1"
 
 class SourceSeparationExtractor(BaseExtractor):
     name = "source_separation_extractor"
-    version = "3.0.0"
+    version = "3.0.1"
     description = "Source separation shares via inprocess PyTorch model (log-mel input)"
     category = "source_separation"
     dependencies = ["numpy", "dp_models", "torchaudio", "torch"]
@@ -52,7 +57,8 @@ class SourceSeparationExtractor(BaseExtractor):
         # Feature gating flags (per-feature control, default: all False)
         enable_share_sequence: bool = False,
         enable_energy_sequence: bool = False,
-        enable_share_mean: bool = False,
+        # Audit v3 preset: mean shares are the baseline signal.
+        enable_share_mean: bool = True,
         enable_share_std: bool = False,
         enable_quality_metrics: bool = False,
         # Silence detection
@@ -88,6 +94,8 @@ class SourceSeparationExtractor(BaseExtractor):
         # Feature gating flags
         self.enable_share_sequence = bool(enable_share_sequence)
         self.enable_energy_sequence = bool(enable_energy_sequence)
+        # Audit v3: baseline always computes mean shares for model_facing.
+        # This flag only controls whether the `share_mean` vector key is emitted (tiny; default-on).
         self.enable_share_mean = bool(enable_share_mean)
         self.enable_share_std = bool(enable_share_std)
         self.enable_quality_metrics = bool(enable_quality_metrics)
@@ -482,7 +490,14 @@ class SourceSeparationExtractor(BaseExtractor):
         Progress reporting: каждые 10% батчей (если progress_callback установлен).
         """
         start_time = time.time()
-        timings = {}  # Детальное профилирование этапов
+        t0_total = time.perf_counter()
+        timings: Dict[str, float] = {}  # Детальное профилирование этапов (sec)
+
+        source_separation_resource_profile: Optional[Dict[str, Any]] = None
+        if is_source_separation_resource_profile_enabled():
+            source_separation_resource_profile = {
+                "at_start": capture_source_separation_resource_profile(stage="at_start"),
+            }
         
         try:
             if not self._validate_input(input_uri):
@@ -492,7 +507,33 @@ class SourceSeparationExtractor(BaseExtractor):
 
             dur_sec = float(max((float(s.get("end_sec", 0.0)) for s in segments), default=0.0))
             if dur_sec < 5.0:
-                raise RuntimeError(f"source_separation | audio too short (<5s): duration_sec={dur_sec:.3f}")
+                starts = [float(s.get("start_sec", 0.0)) for s in segments]
+                ends = [float(s.get("end_sec", 0.0)) for s in segments]
+                centers = [float(s.get("center_sec", 0.0)) for s in segments]
+                payload = {
+                    "status": "empty",
+                    "empty_reason": "audio_too_short",
+                    "segments_count": int(len(segments)),
+                    "sample_rate": int(self.sample_rate),
+                    "model_name": self.model_name,
+                    "device_used": self.device,
+                    "source_separation_contract_version": SOURCE_SEPARATION_CONTRACT_VERSION,
+                    "weights_digest": getattr(self, "weights_digest", None),
+                    "source_order": ["vocals", "drums", "bass", "other"],
+                    "segment_start_sec": starts,
+                    "segment_end_sec": ends,
+                    "segment_center_sec": centers,
+                    "segment_mask": np.zeros((len(segments),), dtype=bool),
+                    "share_mean": np.asarray([np.nan, np.nan, np.nan, np.nan], dtype=np.float32),
+                    "source_distribution_ratio": np.zeros((4,), dtype=np.float32),
+                    "source_segments_count": np.zeros((4,), dtype=np.int32),
+                    "source_duration_sec": np.zeros((4,), dtype=np.float32),
+                }
+                payload["stage_timings_ms"] = {"total_ms": (time.perf_counter() - t0_total) * 1000.0}
+                if source_separation_resource_profile is not None:
+                    source_separation_resource_profile["at_end"] = capture_source_separation_resource_profile(stage="at_end")
+                    payload["source_separation_resource_profile"] = source_separation_resource_profile
+                return self._create_result(True, payload=payload, processing_time=time.time() - start_time)
 
             # Этап 1: Загрузка аудио и вычисление mel features
             t_load_start = time.time()
@@ -546,8 +587,26 @@ class SourceSeparationExtractor(BaseExtractor):
                         "model_name": self.model_name,
                         "device_used": self.device,
                         "source_separation_contract_version": SOURCE_SEPARATION_CONTRACT_VERSION,
+                        "weights_digest": getattr(self, "weights_digest", None),
+                        "source_order": ["vocals", "drums", "bass", "other"],
+                        "segment_start_sec": starts,
+                        "segment_end_sec": ends,
+                        "segment_center_sec": centers,
+                        "segment_mask": np.zeros((len(segments),), dtype=bool),
+                        "share_mean": np.asarray([np.nan, np.nan, np.nan, np.nan], dtype=np.float32),
+                        "source_distribution_ratio": np.zeros((4,), dtype=np.float32),
+                        "source_segments_count": np.zeros((4,), dtype=np.int32),
+                        "source_duration_sec": np.zeros((4,), dtype=np.float32),
                     }
                     timings["silence_detection_sec"] = time.time() - t_silence_start
+                    payload["stage_timings_ms"] = {
+                        "load_audio_ms": float(timings.get("load_audio_sec", 0.0) * 1000.0),
+                        "silence_detection_ms": float(timings.get("silence_detection_sec", 0.0) * 1000.0),
+                        "total_ms": (time.perf_counter() - t0_total) * 1000.0,
+                    }
+                    if source_separation_resource_profile is not None:
+                        source_separation_resource_profile["at_end"] = capture_source_separation_resource_profile(stage="at_end")
+                        payload["source_separation_resource_profile"] = source_separation_resource_profile
                     return self._create_result(True, payload=payload, processing_time=time.time() - start_time)
             
             t_silence_end = time.time()
@@ -610,54 +669,144 @@ class SourceSeparationExtractor(BaseExtractor):
 
             # Этап 5: Нормализация энергий
             t_postprocess_start = time.time()
-            # Ensure energies are non-negative and finite (handle NaN/inf)
-            energy = np.nan_to_num(energy, nan=0.0, posinf=0.0, neginf=0.0)
-            energy = np.maximum(energy, 0.0)  # Ensure non-negative
-            
-            # Compute shares with safe normalization
-            total = np.sum(energy, axis=1, keepdims=True)
-            # Handle zero total case (all energies are zero) - set equal shares
-            zero_mask = (total.flatten() < 1e-9)
-            total = np.where(zero_mask.reshape(-1, 1), 1.0, total + 1e-9)
-            shares = energy / total  # [N,4]
-            
-            # For zero-energy segments, set equal shares (1/4 each)
-            if np.any(zero_mask):
-                shares[zero_mask] = 0.25  # Equal shares for silent segments
-            
-            # Ensure shares are finite and in valid range [0, 1]
-            shares = np.nan_to_num(shares, nan=0.25, posinf=1.0, neginf=0.0)
-            shares = np.clip(shares, 0.0, 1.0)
-            
-            # Renormalize to ensure sum = 1.0 (defensive)
-            row_sums = np.sum(shares, axis=1, keepdims=True)
-            shares = shares / (row_sums + 1e-9)
+            # Audit v3: fail-fast on invalid model outputs (no sanitizing).
+            if energy.dtype != np.float32:
+                energy = energy.astype(np.float32)
+            if not np.all(np.isfinite(energy)):
+                raise RuntimeError("source_separation | model returned NaN/inf energies (fail-fast)")
+            if np.any(energy < -1e-6):
+                raise RuntimeError(f"source_separation | model returned negative energies: min={float(np.min(energy)):.6g}")
+            energy = np.maximum(energy, 0.0).astype(np.float32)
+
+            # Segment mask: mask silent windows (and any zero-energy windows) to avoid injecting noise.
+            silent_mask = np.array(
+                [
+                    (float(peaks[i]) < self.silence_peak_threshold) and (float(rmss[i]) < self.silence_rms_threshold)
+                    for i in range(len(segments))
+                ],
+                dtype=bool,
+            )
+            total_energy = np.sum(energy, axis=1).astype(np.float32)  # [N]
+            zero_energy_mask = total_energy < 1e-9
+            segment_mask = (~silent_mask) & (~zero_energy_mask)
+
+            # If model produced zero energy everywhere, treat as silent empty (canonical).
+            if bool(np.all(zero_energy_mask)):
+                payload = {
+                    "status": "empty",
+                    "empty_reason": "audio_silent",
+                    "segments_count": int(len(segments)),
+                    "sample_rate": int(self.sample_rate),
+                    "model_name": self.model_name,
+                    "device_used": self.device,
+                    "source_separation_contract_version": SOURCE_SEPARATION_CONTRACT_VERSION,
+                    "weights_digest": getattr(self, "weights_digest", None),
+                    "source_order": ["vocals", "drums", "bass", "other"],
+                    "segment_start_sec": starts,
+                    "segment_end_sec": ends,
+                    "segment_center_sec": centers,
+                    "segment_mask": np.zeros((len(segments),), dtype=bool),
+                    "share_mean": np.asarray([np.nan, np.nan, np.nan, np.nan], dtype=np.float32),
+                    "source_distribution_ratio": np.zeros((4,), dtype=np.float32),
+                    "source_segments_count": np.zeros((4,), dtype=np.int32),
+                    "source_duration_sec": np.zeros((4,), dtype=np.float32),
+                }
+                timings["postprocess_sec"] = time.time() - t_postprocess_start
+                payload["stage_timings_ms"] = {
+                    "load_audio_ms": float(timings.get("load_audio_sec", 0.0) * 1000.0),
+                    "silence_detection_ms": float(timings.get("silence_detection_sec", 0.0) * 1000.0),
+                    "padding_ms": float(timings.get("padding_sec", 0.0) * 1000.0),
+                    "inference_ms": float(timings.get("inference_sec", 0.0) * 1000.0),
+                    "postprocess_ms": float(timings.get("postprocess_sec", 0.0) * 1000.0),
+                    "total_ms": (time.perf_counter() - t0_total) * 1000.0,
+                }
+                if source_separation_resource_profile is not None:
+                    source_separation_resource_profile["at_end"] = capture_source_separation_resource_profile(stage="at_end")
+                    payload["source_separation_resource_profile"] = source_separation_resource_profile
+                return self._create_result(True, payload=payload, processing_time=time.time() - start_time)
+
+            # Compute shares with safe normalization.
+            total = total_energy.reshape(-1, 1)
+            # For zero-energy rows, compute placeholder equal shares; they are masked out by segment_mask.
+            total_safe = np.where(total < 1e-9, 1.0, total)
+            shares = (energy / total_safe).astype(np.float32)  # [N,4]
+            if np.any(zero_energy_mask):
+                shares[zero_energy_mask] = 0.25
+
+            # Validate shares/energies (all rows must be finite & normalized; masked rows are still numerically valid).
+            is_valid, error_msg = self._validate_shares_and_energies(shares, energy, len(segments))
+            if not is_valid:
+                raise ValueError(f"source_separation | validation failed: {error_msg}")
             
             # Progress reporting: postprocessing завершен
             if self.progress_callback:
                 self.progress_callback(1, 1, f"Postprocessing completed ({time.time() - t_postprocess_start:.1f}s)")
 
-            # Validate shares and energies
-            is_valid, error_msg = self._validate_shares_and_energies(shares, energy, len(segments))
-            if not is_valid:
-                raise ValueError(f"source_separation | validation failed: {error_msg}")
-
             # Этап 6: Вычисление агрегатов
             t_aggregates_start = time.time()
-            # Compute basic aggregates (always needed for downstream)
-            share_mean = np.mean(shares, axis=0).astype(np.float32) if shares.size else np.zeros((4,), dtype=np.float32)
-            share_std = np.std(shares, axis=0).astype(np.float32) if shares.size else np.zeros((4,), dtype=np.float32)
+            # Compute baseline aggregates on unmasked segments only.
+            valid_idx = np.where(segment_mask)[0]
+            if valid_idx.size == 0:
+                # All segments are masked -> treat as silent empty.
+                payload = {
+                    "status": "empty",
+                    "empty_reason": "audio_silent",
+                    "segments_count": int(len(segments)),
+                    "sample_rate": int(self.sample_rate),
+                    "model_name": self.model_name,
+                    "device_used": self.device,
+                    "source_separation_contract_version": SOURCE_SEPARATION_CONTRACT_VERSION,
+                    "weights_digest": getattr(self, "weights_digest", None),
+                    "source_order": ["vocals", "drums", "bass", "other"],
+                    "segment_start_sec": starts,
+                    "segment_end_sec": ends,
+                    "segment_center_sec": centers,
+                    "segment_mask": np.zeros((len(segments),), dtype=bool),
+                    "share_mean": np.asarray([np.nan, np.nan, np.nan, np.nan], dtype=np.float32),
+                    "source_distribution_ratio": np.zeros((4,), dtype=np.float32),
+                    "source_segments_count": np.zeros((4,), dtype=np.int32),
+                    "source_duration_sec": np.zeros((4,), dtype=np.float32),
+                }
+                timings["aggregates_sec"] = time.time() - t_aggregates_start
+                payload["stage_timings_ms"] = {
+                    "load_audio_ms": float(timings.get("load_audio_sec", 0.0) * 1000.0),
+                    "silence_detection_ms": float(timings.get("silence_detection_sec", 0.0) * 1000.0),
+                    "padding_ms": float(timings.get("padding_sec", 0.0) * 1000.0),
+                    "inference_ms": float(timings.get("inference_sec", 0.0) * 1000.0),
+                    "postprocess_ms": float(timings.get("postprocess_sec", 0.0) * 1000.0),
+                    "aggregates_ms": float(timings.get("aggregates_sec", 0.0) * 1000.0),
+                    "total_ms": (time.perf_counter() - t0_total) * 1000.0,
+                }
+                if source_separation_resource_profile is not None:
+                    source_separation_resource_profile["at_end"] = capture_source_separation_resource_profile(stage="at_end")
+                    payload["source_separation_resource_profile"] = source_separation_resource_profile
+                return self._create_result(True, payload=payload, processing_time=time.time() - start_time)
+
+            shares_valid = shares[valid_idx]
+            starts_valid = [float(starts[i]) for i in valid_idx.tolist()]
+            ends_valid = [float(ends[i]) for i in valid_idx.tolist()]
+            share_mean = np.mean(shares_valid, axis=0).astype(np.float32)
+            share_std = np.std(shares_valid, axis=0).astype(np.float32)
 
             payload: Dict[str, Any] = {
                 "segments_count": int(len(segments)),
                 "sample_rate": int(self.sample_rate),
                 "device_used": self.device,
                 "model_name": self.model_name,
-                "source_order": self._source_names,
+                "weights_digest": getattr(self, "weights_digest", None),
+                # Audit v3: freeze canonical source order.
+                "source_order": ["vocals", "drums", "bass", "other"],
                 "source_separation_contract_version": SOURCE_SEPARATION_CONTRACT_VERSION,
+                # Canonical axis + mask (Audit v3)
+                "segment_start_sec": starts,
+                "segment_end_sec": ends,
+                "segment_center_sec": centers,
+                "segment_mask": segment_mask.astype(bool),
+                # Small, always-useful vector for analytics/render
+                "share_mean": share_mean,
             }
             
-            # Feature gating: share_sequence
+            # Feature gating: share_sequence (token-ready time series)
             if self.enable_share_sequence:
                 payload["share_sequence"] = shares.astype(np.float32)
             
@@ -665,95 +814,72 @@ class SourceSeparationExtractor(BaseExtractor):
             if self.enable_energy_sequence:
                 payload["energy_sequence"] = energy.astype(np.float32)
             
-            # Feature gating: share_mean
-            if self.enable_share_mean:
-                payload["share_mean"] = share_mean
-            
             # Feature gating: share_std
             if self.enable_share_std:
                 payload["share_std"] = share_std
             
-            # Always include segment timestamps (needed for downstream)
-            payload["segment_start_sec"] = starts
-            payload["segment_end_sec"] = ends
-            payload["segment_center_sec"] = centers
-            
-            # Additional aggregates (if any feature is enabled)
-            if self.enable_share_mean or self.enable_share_sequence:
-                # Dominant source
-                dominant_source_id = int(np.argmax(share_mean)) if share_mean.size else -1
-                dominant_source_share = float(np.max(share_mean)) if share_mean.size else 0.0
-                payload["dominant_source_id"] = dominant_source_id
-                payload["dominant_source_share"] = dominant_source_share
-                
-                # Source balance score (entropy-based, normalized)
-                if share_mean.size > 1:
-                    # Entropy of shares (higher = more balanced)
-                    entropy = float(-np.sum(share_mean * np.log(share_mean + 1e-9)))
-                    max_entropy = float(np.log(4.0))  # log(num_sources)
-                    balance_score = float(entropy / max_entropy) if max_entropy > 0 else 0.0
-                    payload["source_balance_score"] = balance_score
-                
-                # Source transitions and distribution (if share_sequence is enabled)
-                if self.enable_share_sequence:
-                    # Dominant source per segment
-                    dominant_sources = np.argmax(shares, axis=1).astype(np.int32)
-                    
-                    # Transitions count
-                    if len(dominant_sources) > 1:
-                        transitions = sum(1 for i in range(len(dominant_sources) - 1) if dominant_sources[i] != dominant_sources[i + 1])
-                        payload["source_transitions_count"] = int(transitions)
-                    
-                    # Source distribution (time ratios)
-                    source_duration = {}
-                    source_segments_count = {}
-                    total_duration = float(max(ends) if ends else 0.0)
-                    for i, src_id in enumerate(dominant_sources):
-                        src_id_int = int(src_id)
-                        if src_id_int not in source_duration:
-                            source_duration[src_id_int] = 0.0
-                            source_segments_count[src_id_int] = 0
-                        seg_duration = float(ends[i] - starts[i])
-                        source_duration[src_id_int] += seg_duration
-                        source_segments_count[src_id_int] += 1
-                    
-                    source_distribution = {}
-                    if total_duration > 0:
-                        for src_id, duration in source_duration.items():
-                            source_distribution[int(src_id)] = float(duration / total_duration)
-                    payload["source_distribution"] = source_distribution
-                    payload["source_segments_per_source"] = {int(k): int(v) for k, v in source_segments_count.items()}
-                    payload["source_duration_per_source"] = {int(k): float(v) for k, v in source_duration.items()}
-                    
-                    # Source stability score (inverse of transitions frequency)
-                    if total_duration > 0:
-                        transitions_freq = float(transitions) / total_duration if transitions > 0 else 0.0
-                        stability_score = float(1.0 / (1.0 + transitions_freq))  # 0 = unstable, 1 = stable
-                        payload["source_stability_score"] = stability_score
-                    
-                    # Advanced features (temporal, stability, distribution, musical heuristics)
-                    advanced_features = self._compute_advanced_features(shares)
-                    payload.update(advanced_features)
+            # Baseline aggregates (always computed/published as scalars for model_facing)
+            dominant_source_id = int(np.argmax(share_mean))
+            dominant_source_share = float(np.max(share_mean))
+            payload["dominant_source_id"] = dominant_source_id
+            payload["dominant_source_share"] = dominant_source_share
+
+            # Source balance score (entropy-based, normalized)
+            entropy = float(-np.sum(share_mean * np.log(share_mean + 1e-9)))
+            max_entropy = float(np.log(4.0))
+            payload["source_balance_score"] = float(entropy / max_entropy) if max_entropy > 0 else float("nan")
+
+            # Transitions/distribution/stability are computed from internal per-segment shares even if share_sequence is not emitted.
+            dominant_sources_valid = np.argmax(shares_valid, axis=1).astype(np.int32)
+            transitions = 0
+            if dominant_sources_valid.size > 1:
+                transitions = int(np.sum(dominant_sources_valid[1:] != dominant_sources_valid[:-1]))
+            payload["source_transitions_count"] = int(transitions)
+
+            # Structured per-source stats (fixed order)
+            durations_valid = np.asarray([float(ends_valid[i] - starts_valid[i]) for i in range(len(starts_valid))], dtype=np.float32)
+            total_duration_valid = float(np.sum(durations_valid)) if durations_valid.size > 0 else 0.0
+            per_source_duration = np.zeros((4,), dtype=np.float32)
+            per_source_segments = np.zeros((4,), dtype=np.int32)
+            for i, src_id in enumerate(dominant_sources_valid.tolist()):
+                sid = int(src_id)
+                per_source_segments[sid] += 1
+                per_source_duration[sid] += float(durations_valid[i])
+            per_source_ratio = (per_source_duration / total_duration_valid).astype(np.float32) if total_duration_valid > 0 else np.zeros((4,), dtype=np.float32)
+            payload["source_distribution_ratio"] = per_source_ratio
+            payload["source_segments_count"] = per_source_segments
+            payload["source_duration_sec"] = per_source_duration
+
+            # Stability score (inverse transitions frequency by duration)
+            if total_duration_valid > 0:
+                transitions_freq = float(transitions) / total_duration_valid
+                payload["source_stability_score"] = float(1.0 / (1.0 + transitions_freq))
+            else:
+                payload["source_stability_score"] = float("nan")
+
+            # Advanced features (analytics) only if share_sequence is enabled
+            if self.enable_share_sequence:
+                advanced_features = self._compute_advanced_features(shares_valid)
+                payload.update(advanced_features)
             
             # Feature gating: quality metrics
             if self.enable_quality_metrics:
-                quality_metrics = {}
-                if self.enable_share_mean:
-                    quality_metrics["share_mean_min"] = float(np.min(share_mean))
-                    quality_metrics["share_mean_max"] = float(np.max(share_mean))
-                    quality_metrics["share_mean_std"] = float(np.std(share_mean))
+                # Store as scalar keys (no object dicts in audited contract).
+                payload["quality_share_mean_min"] = float(np.min(share_mean))
+                payload["quality_share_mean_max"] = float(np.max(share_mean))
+                payload["quality_share_mean_std"] = float(np.std(share_mean))
                 if self.enable_share_std:
-                    quality_metrics["share_std_mean"] = float(np.mean(share_std))
-                    quality_metrics["share_std_max"] = float(np.max(share_std))
+                    payload["quality_share_std_mean"] = float(np.mean(share_std))
+                    payload["quality_share_std_max"] = float(np.max(share_std))
                 if self.enable_share_sequence:
-                    quality_metrics["share_sequence_min"] = float(np.min(shares))
-                    quality_metrics["share_sequence_max"] = float(np.max(shares))
-                    quality_metrics["share_sequence_mean"] = float(np.mean(shares))
+                    payload["quality_share_sequence_min"] = float(np.min(shares_valid))
+                    payload["quality_share_sequence_max"] = float(np.max(shares_valid))
+                    payload["quality_share_sequence_mean"] = float(np.mean(shares_valid))
                 if self.enable_energy_sequence:
-                    quality_metrics["energy_sequence_min"] = float(np.min(energy))
-                    quality_metrics["energy_sequence_max"] = float(np.max(energy))
-                    quality_metrics["energy_sequence_mean"] = float(np.mean(energy))
-                payload["source_quality_metrics"] = quality_metrics
+                    ev = energy[valid_idx]
+                    payload["quality_energy_sequence_min"] = float(np.min(ev))
+                    payload["quality_energy_sequence_max"] = float(np.max(ev))
+                    payload["quality_energy_sequence_mean"] = float(np.mean(ev))
             
             # Track enabled features for meta
             enabled_features = []
@@ -761,8 +887,6 @@ class SourceSeparationExtractor(BaseExtractor):
                 enabled_features.append("share_sequence")
             if self.enable_energy_sequence:
                 enabled_features.append("energy_sequence")
-            if self.enable_share_mean:
-                enabled_features.append("share_mean")
             if self.enable_share_std:
                 enabled_features.append("share_std")
             if self.enable_quality_metrics:
@@ -780,6 +904,18 @@ class SourceSeparationExtractor(BaseExtractor):
             logger.info(f"source_separation | run_segments completed: segments={len(segments)}, enabled_features={enabled_features}")
             logger.info(f"source_separation | profiling: load={timings.get('load_audio_sec', 0):.3f}s, silence={timings.get('silence_detection_sec', 0):.3f}s, pad={timings.get('padding_sec', 0):.3f}s, inference={timings.get('inference_sec', 0):.3f}s, aggregates={timings.get('aggregates_sec', 0):.3f}s, postprocess={timings.get('postprocess_sec', 0):.3f}s, total={total_time:.3f}s")
 
+            payload["stage_timings_ms"] = {
+                "load_audio_ms": float(timings.get("load_audio_sec", 0.0) * 1000.0),
+                "silence_detection_ms": float(timings.get("silence_detection_sec", 0.0) * 1000.0),
+                "padding_ms": float(timings.get("padding_sec", 0.0) * 1000.0),
+                "inference_ms": float(timings.get("inference_sec", 0.0) * 1000.0),
+                "postprocess_ms": float(timings.get("postprocess_sec", 0.0) * 1000.0),
+                "aggregates_ms": float(timings.get("aggregates_sec", 0.0) * 1000.0),
+                "total_ms": (time.perf_counter() - t0_total) * 1000.0,
+            }
+            if source_separation_resource_profile is not None:
+                source_separation_resource_profile["at_end"] = capture_source_separation_resource_profile(stage="at_end")
+                payload["source_separation_resource_profile"] = source_separation_resource_profile
             return self._create_result(True, payload=payload, processing_time=total_time)
 
         except Exception as e:

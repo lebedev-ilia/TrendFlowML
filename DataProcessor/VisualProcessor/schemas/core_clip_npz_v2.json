@@ -1,0 +1,80 @@
+{
+  "schema_system_version": "vp_schema_v1",
+  "schema_version": "core_clip_npz_v2",
+  "producer": "core_clip",
+  "artifact_kind": "npz",
+  "allow_extra_keys": false,
+  "meta": {
+    "required_keys": [
+      "producer",
+      "producer_version",
+      "schema_version",
+      "created_at",
+      "platform_id",
+      "video_id",
+      "run_id",
+      "config_hash",
+      "sampling_policy_version",
+      "dataprocessor_version",
+      "status",
+      "empty_reason",
+      "models_used",
+      "model_signature",
+      "stage_timings_ms"
+    ],
+    "optional_keys": [
+      "model_name",
+      "total_frames",
+      "batch_size",
+      "runtime",
+      "device",
+      "prompts_version",
+      "backend_proxy_version",
+      "export_prompt_scores",
+      "places365_topk_k"
+    ]
+  },
+  "fields": {
+    "frame_indices": { "required": true, "tier": "model_facing", "dtype": "int32", "shape": ["N"], "description": "union-domain frame indices" },
+    "times_s": { "required": true, "tier": "model_facing", "dtype": "float32", "shape": ["N"], "description": "union_timestamps_sec[frame_indices]" },
+    "frame_embeddings": { "required": true, "tier": "debug", "dtype": "float32", "shape": ["N", "D"], "description": "raw CLIP image embeddings (not backend-facing)" },
+
+    "shot_quality_prompts": { "required": true, "tier": "model_facing", "dtype": "object", "shape": ["P_shot_quality"] },
+    "shot_quality_text_embeddings": { "required": true, "tier": "debug", "dtype": "float32", "shape": ["P_shot_quality", "D"] },
+
+    "scene_aesthetic_prompts": { "required": true, "tier": "model_facing", "dtype": "object", "shape": ["P_scene_aesthetic"] },
+    "scene_aesthetic_text_embeddings": { "required": true, "tier": "debug", "dtype": "float32", "shape": ["P_scene_aesthetic", "D"] },
+
+    "scene_luxury_prompts": { "required": true, "tier": "model_facing", "dtype": "object", "shape": ["P_scene_luxury"] },
+    "scene_luxury_text_embeddings": { "required": true, "tier": "debug", "dtype": "float32", "shape": ["P_scene_luxury", "D"] },
+
+    "scene_atmosphere_prompts": { "required": true, "tier": "model_facing", "dtype": "object", "shape": ["P_scene_atmosphere"] },
+    "scene_atmosphere_text_embeddings": { "required": true, "tier": "debug", "dtype": "float32", "shape": ["P_scene_atmosphere", "D"] },
+
+    "cut_detection_transition_prompts": { "required": true, "tier": "model_facing", "dtype": "object", "shape": ["P_cut_transition"] },
+    "cut_detection_transition_text_embeddings": { "required": true, "tier": "debug", "dtype": "float32", "shape": ["P_cut_transition", "D"] },
+
+    "popularity_topic_prompts": { "required": true, "tier": "model_facing", "dtype": "object", "shape": ["P_pop_topic"] },
+    "popularity_topic_text_embeddings": { "required": true, "tier": "debug", "dtype": "float32", "shape": ["P_pop_topic", "D"] },
+
+    "places365_prompts": { "required": true, "tier": "model_facing", "dtype": "object", "shape": ["P_places365"] },
+    "places365_text_embeddings": { "required": true, "tier": "debug", "dtype": "float32", "shape": ["P_places365", "D"] },
+
+    "consecutive_cosine_prev": { "required": true, "tier": "analytics", "dtype": "float32", "shape": ["N"] },
+    "shot_quality_scores": { "required": true, "tier": "analytics", "dtype": "float32", "shape": ["N", "P_shot_quality"] },
+    "scene_aesthetic_scores": { "required": true, "tier": "analytics", "dtype": "float32", "shape": ["N", "P_scene_aesthetic"] },
+    "scene_luxury_scores": { "required": true, "tier": "analytics", "dtype": "float32", "shape": ["N", "P_scene_luxury"] },
+    "scene_atmosphere_scores": { "required": true, "tier": "analytics", "dtype": "float32", "shape": ["N", "P_scene_atmosphere"] },
+    "cut_detection_transition_scores": { "required": true, "tier": "analytics", "dtype": "float32", "shape": ["N", "P_cut_transition"] },
+    "popularity_topic_scores": { "required": true, "tier": "analytics", "dtype": "float32", "shape": ["N", "P_pop_topic"] },
+
+    "places365_topk_indices": { "required": true, "tier": "analytics", "dtype": "int32", "shape": ["N", "K_places365"] },
+    "places365_topk_scores": { "required": true, "tier": "analytics", "dtype": "float32", "shape": ["N", "K_places365"] },
+    "places365_video_topk_indices": { "required": true, "tier": "analytics", "dtype": "int32", "shape": ["K_places365"] },
+    "places365_video_topk_scores": { "required": true, "tier": "analytics", "dtype": "float32", "shape": ["K_places365"] },
+
+    "meta": { "required": true, "tier": "debug", "dtype": "object", "shape": [], "description": "boxed dict" }
+  }
+}
+
+

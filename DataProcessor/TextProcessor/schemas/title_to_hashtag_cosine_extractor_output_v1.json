@@ -1,0 +1,80 @@
+{
+  "schema_system_version": "vp_schema_v1",
+  "schema_version": "title_to_hashtag_cosine_extractor_output_v1",
+  "producer": "title_to_hashtag_cosine_extractor",
+  "artifact_kind": "extractor_features_flat",
+  "allow_extra_keys": false,
+  "description": "TitleToHashtagCosineExtractor: 11 fixed tp_titlehashcos_* keys; unsafe vs embed-missing split; no legacy aliases.",
+  "meta": {
+    "required_keys": [],
+    "optional_keys": []
+  },
+  "fields": {
+    "tp_titlehashcos_present": {
+      "required": true,
+      "tier": "analytics",
+      "dtype": "float32",
+      "shape": []
+    },
+    "tp_titlehashcos_cosine": {
+      "required": true,
+      "tier": "analytics",
+      "dtype": "float32",
+      "shape": []
+    },
+    "tp_titlehashcos_require_title_embedding_enabled": {
+      "required": true,
+      "tier": "analytics",
+      "dtype": "float32",
+      "shape": []
+    },
+    "tp_titlehashcos_require_hashtag_embedding_enabled": {
+      "required": true,
+      "tier": "analytics",
+      "dtype": "float32",
+      "shape": []
+    },
+    "tp_titlehashcos_title_present": {
+      "required": true,
+      "tier": "analytics",
+      "dtype": "float32",
+      "shape": []
+    },
+    "tp_titlehashcos_hashtag_present": {
+      "required": true,
+      "tier": "analytics",
+      "dtype": "float32",
+      "shape": []
+    },
+    "tp_titlehashcos_unsafe_relpath_flag": {
+      "required": true,
+      "tier": "analytics",
+      "dtype": "float32",
+      "shape": []
+    },
+    "tp_titlehashcos_title_embed_missing_flag": {
+      "required": true,
+      "tier": "analytics",
+      "dtype": "float32",
+      "shape": []
+    },
+    "tp_titlehashcos_hashtag_embed_missing_flag": {
+      "required": true,
+      "tier": "analytics",
+      "dtype": "float32",
+      "shape": []
+    },
+    "tp_titlehashcos_dim_mismatch_flag": {
+      "required": true,
+      "tier": "analytics",
+      "dtype": "float32",
+      "shape": []
+    },
+    "tp_titlehashcos_zero_norm_flag": {
+      "required": true,
+      "tier": "analytics",
+      "dtype": "float32",
+      "shape": []
+    }
+  }
+}

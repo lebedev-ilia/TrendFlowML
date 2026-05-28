@@ -2,11 +2,20 @@ fastapi
 uvicorn
 sqlalchemy>=2.0
 psycopg[binary]
+alembic>=1.13
 python-jose
 passlib[bcrypt]
 python-multipart
 redis>=5.0
 pydantic-settings
+email-validator>=2.0
 PyYAML
 celery
+httpx>=0.25.0
+
+# Tests (Backend ↔ DataProcessor integration)
+pytest>=7.0
+pytest-asyncio>=0.21
+pytest-cov>=4.0
+ruff>=0.9.0
 

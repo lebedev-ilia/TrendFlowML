@@ -1,0 +1,123 @@
+{
+  "schema_system_version": "vp_schema_v1",
+  "schema_version": "speaker_turn_embeddings_aggregator_output_v1",
+  "producer": "speaker_turn_embeddings_aggregator",
+  "artifact_kind": "extractor_features_flat",
+  "allow_extra_keys": false,
+  "description": "Logical contract for SpeakerTurnEmbeddingsAggregatorExtractor.features_flat. Per-speaker vectors in speaker_spk*_mean.npy / _max.npy.",
+  "meta": {
+    "required_keys": [],
+    "optional_keys": []
+  },
+  "fields": {
+    "tp_spkemb_present": {
+      "required": true,
+      "tier": "model_facing",
+      "dtype": "float32",
+      "shape": []
+    },
+    "tp_spkemb_speakers_total": {
+      "required": true,
+      "tier": "model_facing",
+      "dtype": "float32",
+      "shape": []
+    },
+    "tp_spkemb_speakers_embedded": {
+      "required": true,
+      "tier": "model_facing",
+      "dtype": "float32",
+      "shape": []
+    },
+    "tp_spkemb_turns_total": {
+      "required": true,
+      "tier": "model_facing",
+      "dtype": "float32",
+      "shape": []
+    },
+    "tp_spkemb_write_artifacts": {
+      "required": true,
+      "tier": "analytics",
+      "dtype": "float32",
+      "shape": []
+    },
+    "tp_spkemb_compute_mean": {
+      "required": true,
+      "tier": "analytics",
+      "dtype": "float32",
+      "shape": []
+    },
+    "tp_spkemb_compute_max": {
+      "required": true,
+      "tier": "analytics",
+      "dtype": "float32",
+      "shape": []
+    },
+    "tp_spkemb_input_present": {
+      "required": true,
+      "tier": "analytics",
+      "dtype": "float32",
+      "shape": []
+    },
+    "tp_spkemb_input_mode_diar_asr": {
+      "required": true,
+      "tier": "analytics",
+      "dtype": "float32",
+      "shape": [],
+      "description": "1.0 if diarization+ASR alignment path used"
+    },
+    "tp_spkemb_input_mode_legacy_doc_speakers": {
+      "required": true,
+      "tier": "analytics",
+      "dtype": "float32",
+      "shape": [],
+      "description": "1.0 if legacy doc.speakers path used"
+    },
+    "tp_spkemb_asr_present": {
+      "required": true,
+      "tier": "analytics",
+      "dtype": "float32",
+      "shape": []
+    },
+    "tp_spkemb_diar_present": {
+      "required": true,
+      "tier": "analytics",
+      "dtype": "float32",
+      "shape": []
+    },
+    "tp_spkemb_batch_size": {
+      "required": true,
+      "tier": "analytics",
+      "dtype": "float32",
+      "shape": [],
+      "description": "NaN when emit_extra_metrics=false"
+    },
+    "tp_spkemb_max_speakers": {
+      "required": true,
+      "tier": "analytics",
+      "dtype": "float32",
+      "shape": [],
+      "description": "NaN when emit_extra_metrics=false"
+    },
+    "tp_spkemb_max_turns_per_speaker": {
+      "required": true,
+      "tier": "analytics",
+      "dtype": "float32",
+      "shape": [],
+      "description": "NaN when emit_extra_metrics=false"
+    },
+    "tp_spkemb_min_chars_per_turn": {
+      "required": true,
+      "tier": "analytics",
+      "dtype": "float32",
+      "shape": [],
+      "description": "NaN when emit_extra_metrics=false"
+    },
+    "tp_spkemb_max_chars_per_turn": {
+      "required": true,
+      "tier": "analytics",
+      "dtype": "float32",
+      "shape": [],
+      "description": "NaN when emit_extra_metrics=false"
+    }
+  }
+}

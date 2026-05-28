@@ -1,0 +1,100 @@
+core_providers:
+  core_clip: true
+  core_depth_midas: false
+  core_optical_flow: true
+  core_object_detections: true
+  ocr_extractor: false
+  core_face_landmarks: true
+  content_domain: false
+  franchise_recognition: false
+  brand_semantics: false
+  car_semantics: false
+  face_identity: false
+  place_semantics: false
+
+modules:
+  cut_detection: true
+  scene_classification: false
+  video_pacing: false
+  uniqueness: false
+  shot_quality: false
+  story_structure: false
+  detalize_face: false
+  emotion_face: true
+  behavioral: false
+  optical_flow: false
+  action_recognition: false
+  color_light: false
+  frames_composition: false
+  high_level_semantic: true
+  micro_emotion: false
+  similarity_metrics: false
+  text_scoring: false
+
+global:
+  triton_http_url: "http://localhost:8000"
+
+core_clip:
+  runtime: "inprocess"
+  model_name: "ViT-B/32"
+  batch_size: 16
+  render:
+    enable_render: true
+    enable_html_render: true
+
+core_optical_flow:
+  runtime: "triton"
+  triton_model_spec: "raft_256_triton"
+  batch_size: 1
+  render:
+    enable_render: true
+    enable_html_render: true
+
+core_face_landmarks:
+  use_face_mesh: true
+  use_person_mask: true
+  render:
+    enable_render: true
+    enable_html_render: true
+
+core_object_detections:
+  runtime: "ultralytics"
+  model: "visual/yolo/yolo11x_41_best.pt"
+  batch_size: 16
+  device: "cuda"
+  box_threshold: 0.6
+  iou_threshold: 0.3
+  render:
+    enable_render: true
+    enable_html_render: true
+
+cut_detection:
+  no_use_clip: true
+  render:
+    enable_render: true
+    enable_html_render: true
+
+emotion_face:
+  device: "cuda"
+  emonet_model_spec: "emonet_8_inprocess"
+  emo_path: "DataProcessor/dp_models/bundled_models/visual/emonet/emonet_8.pth"
+  render:
+    enable_render: true
+    enable_html_render: true
+
+high_level_semantic:
+  feature_groups: null  # null = использовать дефолтные группы в модуле
+  require_cut_detection_model_facing: false
+  require_text_processor: false
+  require_audio_loudness: false
+  require_audio_tempo: false
+  require_audio_clap: false
+  progress_every_frames: 50
+  semantic_jump_topk_events: 256
+  semantic_jump_min_strength: 0.25
+  semantic_jump_min_distance_frames: 6
+  render:
+    enable_render: true
+    enable_html_render: true
+
+

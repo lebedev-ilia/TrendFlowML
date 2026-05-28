@@ -1,0 +1,27 @@
+{
+  "schema_system_version": "vp_schema_v1",
+  "schema_version": "embedding_source_id_extractor_output_v1",
+  "producer": "embedding_source_id_extractor",
+  "artifact_kind": "extractor_features_flat",
+  "allow_extra_keys": false,
+  "description": "EmbeddingSourceIdExtractor: 13 fixed tp_embid_* keys; nested result.embedding_source_id is documented in SCHEMA.md (not validated by this file).",
+  "meta": {
+    "required_keys": [],
+    "optional_keys": []
+  },
+  "fields": {
+    "tp_embid_present": { "required": true, "tier": "analytics", "dtype": "float32", "shape": [] },
+    "tp_embid_strict_missing_primary_enabled": { "required": true, "tier": "analytics", "dtype": "float32", "shape": [] },
+    "tp_embid_policy_transcript_first": { "required": true, "tier": "analytics", "dtype": "float32", "shape": [] },
+    "tp_embid_policy_title_first": { "required": true, "tier": "analytics", "dtype": "float32", "shape": [] },
+    "tp_embid_policy_description_first": { "required": true, "tier": "analytics", "dtype": "float32", "shape": [] },
+    "tp_embid_policy_title_only": { "required": true, "tier": "analytics", "dtype": "float32", "shape": [] },
+    "tp_embid_policy_transcript_only": { "required": true, "tier": "analytics", "dtype": "float32", "shape": [] },
+    "tp_embid_primary_is_transcript": { "required": true, "tier": "analytics", "dtype": "float32", "shape": [] },
+    "tp_embid_primary_is_title": { "required": true, "tier": "analytics", "dtype": "float32", "shape": [] },
+    "tp_embid_primary_is_description": { "required": true, "tier": "analytics", "dtype": "float32", "shape": [] },
+    "tp_embid_unsafe_relpath_flag": { "required": true, "tier": "analytics", "dtype": "float32", "shape": [] },
+    "tp_embid_primary_embed_missing_flag": { "required": true, "tier": "analytics", "dtype": "float32", "shape": [] },
+    "tp_embid_nan_inf_flag": { "required": true, "tier": "analytics", "dtype": "float32", "shape": [] }
+  }
+}

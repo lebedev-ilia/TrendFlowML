@@ -1,0 +1,2 @@
+# Dependencies for story_structure module
+# Add module-specific dependencies here

@@ -1,0 +1,2 @@
+# Dependencies for place_semantics component
+# Add component-specific dependencies here

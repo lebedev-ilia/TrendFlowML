@@ -10,6 +10,7 @@ Stage 3: GPU batching для content_domain с гибридным подходо
 from __future__ import annotations
 
 import os
+import json
 import sys
 import time
 import tempfile
@@ -56,7 +57,7 @@ if _content_domain_main.exists():
         _load_domain_db = getattr(content_domain_module, "_load_domain_db", None)
         NAME = getattr(content_domain_module, "NAME", "content_domain")
         VERSION = getattr(content_domain_module, "VERSION", "0.1")
-        SCHEMA_VERSION = getattr(content_domain_module, "SCHEMA_VERSION", "content_domain_npz_v1")
+        SCHEMA_VERSION = getattr(content_domain_module, "SCHEMA_VERSION", "content_domain_npz_v2")
         ARTIFACT_FILENAME = getattr(content_domain_module, "ARTIFACT_FILENAME", "content_domain.npz")
     else:
         raise ImportError("Failed to load content_domain module")
@@ -119,7 +120,19 @@ def process_content_domain_batch(
     domain_db_dir = config.get("domain_db_dir", "dp_models/bundled_models/semantics/content_domain/v1")
     clip_text_model_spec = config.get("clip_text_model_spec", "clip_text_triton")
     topk = int(config.get("topk", 5))
-    threshold_global = float(config.get("threshold_global", 0.23))
+    if topk != 5:
+        raise RuntimeError(f"{NAME} | batch | topk must be 5 (contract), got {topk}")
+
+    confidence_threshold_top1 = config.get("confidence_threshold_top1")
+    if confidence_threshold_top1 == "" or confidence_threshold_top1 is None:
+        confidence_threshold_top1 = float(config.get("threshold_global", 0.23))
+    else:
+        confidence_threshold_top1 = float(confidence_threshold_top1)
+    if not (0.0 <= float(confidence_threshold_top1) <= 1.0):
+        raise RuntimeError(
+            f"{NAME} | batch | confidence_threshold_top1 out of range [0,1]: {confidence_threshold_top1}"
+        )
+    threshold_global = float(confidence_threshold_top1)
     thresholds_json = config.get("thresholds_json") or None
     
     # Resolve domain_db_dir path (try DP_MODELS_ROOT if relative)
@@ -131,83 +144,12 @@ def process_content_domain_batch(
                 domain_db_dir = candidate
                 logger.info(f"{NAME} | batch | Resolved domain_db_dir via DP_MODELS_ROOT: {domain_db_dir}")
     
-    # Загружаем domain db и вычисляем text embeddings (один раз для всех видео)
-    try:
-        label_ids, label_names, prompts_per_label, db_meta, threshold_per_label = _load_domain_db(
-            db_dir=domain_db_dir,
-            threshold_global=threshold_global,
-            thresholds_json=str(thresholds_json) if thresholds_json else None,
-        )
-    except RuntimeError as e:
-        if "not found" in str(e) or "missing" in str(e):
-            # Valid empty: database not available
-            logger.warning(f"{NAME} | batch | Domain database not found, writing empty artifacts: {e}")
-            results = []
-            for video_ctx in video_contexts:
-                try:
-                    metadata = video_ctx.load_metadata()
-                    frame_indices = _require_frame_indices(metadata)
-                    
-                    uts = metadata.get("union_timestamps_sec")
-                    if uts is None:
-                        raise RuntimeError(f"{NAME} | metadata.json missing union_timestamps_sec (contract)")
-                    uts_arr = np.asarray(uts, dtype=np.float32).reshape(-1)
-                    fi_np = np.asarray(frame_indices, dtype=np.int32).reshape(-1)
-                    if fi_np.size == 0:
-                        raise RuntimeError(f"{NAME} | frame_indices is empty (no-fallback)")
-                    times_s = uts_arr[fi_np].astype(np.float32)
-                    
-                    required_run_keys = ["platform_id", "video_id", "run_id", "sampling_policy_version", "config_hash"]
-                    missing = [k for k in required_run_keys if not metadata.get(k)]
-                    if missing:
-                        raise RuntimeError(f"{NAME} | frames metadata missing required run identity keys: {missing}")
-                    
-                    meta_out: Dict[str, Any] = {
-                        "producer": NAME,
-                        "producer_version": VERSION,
-                        "schema_version": SCHEMA_VERSION,
-                        "created_at": datetime.utcnow().isoformat() + "Z",
-                        "status": "empty",
-                        "empty_reason": "dependency_missing",
-                    }
-                    for k in required_run_keys:
-                        meta_out[k] = metadata.get(k)
-                    meta_out["dataprocessor_version"] = str(metadata.get("dataprocessor_version") or "unknown")
-                    meta_out = apply_models_meta(meta_out, models_used=[])
-                    
-                    component_dir = video_ctx.get_component_rs_path(NAME)
-                    npz_path = os.path.join(component_dir, ARTIFACT_FILENAME)
-                    os.makedirs(component_dir, exist_ok=True)
-                    
-                    np.savez_compressed(
-                        npz_path,
-                        frame_indices=fi_np,
-                        times_s=times_s,
-                        label_ids=np.array([], dtype=np.int32),
-                        label_names=np.array([], dtype="U"),
-                        frame_topk_ids=np.full((len(frame_indices), topk), -1, dtype=np.int32),
-                        frame_topk_scores=np.full((len(frame_indices), topk), 0.0, dtype=np.float32),
-                        frame_is_confident_top1=np.zeros((len(frame_indices),), dtype=np.bool_),
-                        meta=np.asarray(meta_out, dtype=object),
-                    )
-                    
-                    results.append({
-                        "video_id": video_ctx.video_id,
-                        "status": "ok",
-                        "saved_path": npz_path,
-                    })
-                except Exception as e:
-                    logger.exception(f"{NAME} | batch | video {video_ctx.video_id} failed: {e}")
-                    results.append({
-                        "video_id": video_ctx.video_id,
-                        "status": "error",
-                        "error": str(e),
-                    })
-            return results
-        raise
-    
-    if topk != 5:
-        raise RuntimeError(f"{NAME} | batch | topk must be 5 (contract), got {topk}")
+    # Загружаем domain db и вычисляем text embeddings (один раз для всех видео) — fail-fast если базы нет/битая
+    label_ids, label_names, prompts_per_label, db_meta, threshold_per_label = _load_domain_db(
+        db_dir=domain_db_dir,
+        threshold_global=threshold_global,
+        thresholds_json=str(thresholds_json) if thresholds_json else None,
+    )
     
     # Get triton_http_url from config or environment
     triton_http_url = config.get("triton_http_url") or os.environ.get("TRITON_HTTP_URL")
@@ -250,7 +192,8 @@ def process_content_domain_batch(
                     "video_id": video_ctx.video_id,
                     "frame_indices": [],
                     "times_s": None,
-                    "status": "empty",
+                    "status": "error",
+                    "error": "core_clip.frame_indices empty/invalid (no-fallback)",
                 })
                 continue
             
@@ -414,11 +357,13 @@ def process_content_domain_batch(
         emb_end_idx = video_info.get("emb_end_idx", len(sims))
         
         if emb_start_idx >= emb_end_idx or emb_start_idx >= len(sims):
-            results.append({
-                "video_id": video_ctx.video_id,
-                "status": "empty",
-                "empty_reason": "no frames processed",
-            })
+            results.append(
+                {
+                    "video_id": video_ctx.video_id,
+                    "status": "error",
+                    "error": "no embeddings for this video (core_clip missing or empty)",
+                }
+            )
             continue
         
         # Извлекаем similarities для этого видео
@@ -439,10 +384,15 @@ def process_content_domain_batch(
         
         # Вычисляем top-K для каждого кадра
         A = int(label_emb.shape[0])
-        order = np.argsort(-video_sims, axis=1)[:, :topk]  # (N, K) indices into A
-        frame_topk_scores = np.take_along_axis(video_sims, order, axis=1).astype(np.float32)
+        if A <= 0:
+            raise RuntimeError(f"{NAME} | batch | domain db has 0 labels (fail-fast)")
+        k_eff = int(min(topk, A))
+        order = np.argsort(-video_sims, axis=1)[:, :k_eff]  # (N, k_eff) indices into A
         label_ids_np = np.asarray(label_ids, dtype=np.int32)
-        frame_topk_ids = label_ids_np[order].astype(np.int32)
+        frame_topk_scores = np.full((video_sims.shape[0], topk), np.nan, dtype=np.float32)
+        frame_topk_ids = np.full((video_sims.shape[0], topk), -1, dtype=np.int32)
+        frame_topk_scores[:, :k_eff] = np.take_along_axis(video_sims, order, axis=1).astype(np.float32)
+        frame_topk_ids[:, :k_eff] = label_ids_np[order].astype(np.int32)
         
         # Вычисляем is_confident для top-1
         threshold_global_val = float(db_meta.get("threshold_global") or threshold_global)
@@ -451,18 +401,23 @@ def process_content_domain_batch(
             lid = int(frame_topk_ids[i, 0])
             sc = float(frame_topk_scores[i, 0])
             thr = float(threshold_per_label.get(lid, threshold_global_val))
-            frame_is_confident_top1[i] = bool(np.isfinite(sc) and sc >= thr)
+            frame_is_confident_top1[i] = bool((lid >= 0) and np.isfinite(sc) and sc >= thr)
         
         # Video aggregate (track=1): max over time
         track_ids = np.asarray([0], dtype=np.int32)
         track_present_mask = np.asarray([True], dtype=np.bool_)
         max_scores = np.max(video_sims, axis=0)  # (A,)
-        top_vid = np.argsort(-max_scores)[:topk]
-        track_topk_scores = np.asarray(max_scores[top_vid], dtype=np.float32).reshape(1, topk)
-        track_topk_ids = np.asarray(label_ids_np[top_vid], dtype=np.int32).reshape(1, topk)
+        top_vid = np.argsort(-max_scores)[:k_eff]
+        track_topk_scores = np.full((1, topk), np.nan, dtype=np.float32)
+        track_topk_ids = np.full((1, topk), -1, dtype=np.int32)
+        track_topk_scores[0, :k_eff] = np.asarray(max_scores[top_vid], dtype=np.float32).reshape(1, k_eff)
+        track_topk_ids[0, :k_eff] = np.asarray(label_ids_np[top_vid], dtype=np.int32).reshape(1, k_eff)
         top1_lid = int(track_topk_ids[0, 0])
         top1_sc = float(track_topk_scores[0, 0])
-        track_is_confident_top1 = np.asarray([bool(np.isfinite(top1_sc) and top1_sc >= float(threshold_per_label.get(top1_lid, threshold_global_val)))], dtype=np.bool_)
+        track_is_confident_top1 = np.asarray(
+            [bool((top1_lid >= 0) and np.isfinite(top1_sc) and top1_sc >= float(threshold_per_label.get(top1_lid, threshold_global_val)))],
+            dtype=np.bool_,
+        )
         
         semantic_label_names = np.asarray([f"{int(i)}:{str(n)}" for i, n in zip(label_ids, label_names)], dtype="U")
         
@@ -509,6 +464,10 @@ def process_content_domain_batch(
             # model system
             "models_used": [],
         })
+        meta_out["top_k"] = int(topk)
+        meta_out["confidence_threshold_top1"] = float(confidence_threshold_top1)
+        meta_out["clip_text_model_spec"] = str(clip_text_model_spec)
+        meta_out["domain_db_dir"] = str(domain_db_dir)
         
         # Attach model provenance (clip_text only) + upstream (core_clip) for reproducibility
         meta_out["models_used"].extend(video_info.get("upstream_models_used", []))
@@ -524,11 +483,20 @@ def process_content_domain_batch(
             pass
         
         meta_out = apply_models_meta(meta_out, models_used=meta_out.get("models_used"))
+
+        # stage timings (batch mode): best-effort placeholders (ms)
+        meta_out["stage_timings_ms"] = {
+            "initialization": 0.0,
+            "load_deps": 0.0,
+            "process_frames": 0.0,
+            "saving": 0.0,
+            "total": 0.0,
+        }
         
         # Сохранение NPZ
         npz_dict = {
             "frame_indices": np.asarray(video_frame_indices, dtype=np.int32),
-            "times_s": video_times_s,
+            "times_s": np.asarray(video_times_s, dtype=np.float32),
             "semantic_label_names": semantic_label_names,
             "threshold_per_label_arr": threshold_per_label_arr.astype(np.float32),
             "track_ids": track_ids,
@@ -540,6 +508,10 @@ def process_content_domain_batch(
             "frame_topk_scores": frame_topk_scores,
             "frame_is_confident_top1": frame_is_confident_top1,
             "meta": np.asarray(meta_out, dtype=object),
+            "meta_json": np.asarray(
+                json.dumps(meta_out, ensure_ascii=False, sort_keys=True),
+                dtype="U",
+            ),
         }
         
         _atomic_save_npz(npz_path, **npz_dict)

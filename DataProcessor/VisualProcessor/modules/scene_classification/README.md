@@ -10,7 +10,9 @@ Scene segmentation + classification on **Places365** with CLIP-based semantics c
   - `core_clip` must exist in `rs_path/core_clip/embeddings.npz` and provide:
     - `frame_indices`, `frame_embeddings`
     - `scene_aesthetic_text_embeddings`, `scene_luxury_text_embeddings`, `scene_atmosphere_text_embeddings`
-    - `places365_text_embeddings` (**required** when `label_fusion=clip|fused`)
+    - `places365_text_embeddings` (**required** when `label_fusion=clip`)
+  - `cut_detection` must exist and provide:
+    - `detections.shot_boundaries_frame_indices` (used for precision segmentation)
 
 ## Models (ModelManager)
 
@@ -29,14 +31,22 @@ Supported `model_arch`:
 
 Saved to: `rs_path/scene_classification/scene_classification_features.npz`
 
+**Version**: 2.0.1  
+**Schema**: `scene_classification_npz_v2`  
+**Artifact filename**: `scene_classification_features.npz`
+
+Schemas:
+- Human: `DataProcessor/VisualProcessor/modules/scene_classification/SCHEMA.md`
+- Machine: `DataProcessor/VisualProcessor/schemas/scene_classification_npz_v2.json`
+
 Canonical keys:
 - `frame_indices (N,) int32` — union-domain indices processed by this module
 - `times_s (N,) float32` — `union_timestamps_sec[frame_indices]` (source-of-truth)
-- `label_fusion (str)` — runtime config snapshot: `places|clip|fused`
+- `label_fusion (str)` — runtime config snapshot: `places|clip`
 - **`scenes`**: dict mapping `scene_id -> scene_dict` where `scene_id` is `s0000`, `s0001`, ...
   - `scene_dict` includes:
     - `scene_label` (Places365 label)
-    - `fusion_mode` (`places|clip|fused`) — how label was chosen (segment majority)
+    - `fusion_mode` (`places|clip`) — how label was chosen (segment majority)
     - `indices` (list of union frame indices in this scene)
     - `start_frame`, `end_frame`, `length_frames`, `length_seconds`
     - `start_time_s`, `end_time_s`
@@ -74,6 +84,8 @@ Short-video note:
 This module supports two modes for the **final scene label** (heuristic mixing is forbidden):
 - `label_fusion=places` (default): use Places365 top‑1 (supervised)
 - `label_fusion=clip`: use CLIP zero-shot over the **same 365 labels** (requires `core_clip.places365_text_embeddings`)
+
+**Note**: The `fused` mode (heuristic mixing of Places365 and CLIP) is not supported. Only `places` and `clip` modes are available.
 
 Notes:
 - CLIP text embeddings for Places365 are computed in `core_clip` and stored in `core_clip/embeddings.npz`.
@@ -130,5 +142,39 @@ Triton contract (ensemble, external IO):
 
 Для ручной проверки сегментации/лейблов и CLIP-семантики:
 - `scripts/baseline/demo_scene_classification_quality.py`
+
+## Audit v3 — Decisions (FINAL)
+
+- **cut_detection**: **hard dependency** (no-fallback). Нет shot boundaries ⇒ `error`.
+- **label_fusion default**: `places` (supervised Places365 top‑1). `clip` — опционально.
+- **advanced features** (`enable_advanced_features`): **on by default** (tier=`analytics`).
+- **prompts in NPZ** (`places365_prompts`, `scene_*_prompts`): **keep** как `debug` для воспроизводимости/QA.
+
+## Render (dev-only, offline)
+
+NPZ — source-of-truth. Рендеры — только для QA/аудита.
+
+### Артефакты рендера
+
+- **Render-context JSON**: `result_store/<platform_id>/<video_id>/<run_id>/scene_classification/_render/render_context.json`
+- **HTML mini-dashboard**: `result_store/.../scene_classification/_render/render.html` (работает **offline**, без CDN)
+
+### Что смотреть (QA)
+
+- **Timeline**:
+  - `frame_top1_prob`: провалы = “неуверенные кадры” (часто motion blur / смена сцены / плохой кадр)
+  - `frame_entropy`: пики = сильная неопределённость / смешанные сцены
+  - `frame_top1_top2_gap`: малые значения = ambiguity
+- **Top / Anti-top**:
+  - top entropy → кандидаты на ошибки/переходы/смешанные сцены
+  - anti-top top1_prob → самые слабые кадры для классификации
+- **Scenes table**:
+  - адекватность `scene_label`
+  - `length_seconds` не слишком маленькие (контроль `min_scene_seconds`)
+  - `label_stability` и `scene_change_score` логично коррелируют с монтажом
+
+### Где смотреть время выполнения
+
+- `meta.stage_timings_ms` (и дублируется в `summary.stage_timings_ms`)
 
 

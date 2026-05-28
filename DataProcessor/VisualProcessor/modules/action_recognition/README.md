@@ -2,8 +2,11 @@
 
 Модуль распознавания действий в видео на основе архитектуры **SlowFast** (Meta AI Research). Компонент извлекает временные эмбеддинги и агрегированные метрики для анализа действий людей в видео.
 
+**Документация и проверка NPZ:** `docs/FEATURE_DESCRIPTION.md` (ключи, meta, melt/QA), `docs/SCHEMA.md`, `docs/FEATURES_DESCRIPTION.md` · `utils/validate_action_recognition.py` `<npz>` `--struct` / `--qa` (для старого отчёта: `--legacy`).
+
 ## 📋 Содержание
 
+- [⚠️ Статус качества и доработки](#️-статус-качества-и-доработки)
 - [Обзор](#обзор)
 - [Архитектура](#архитектура)
 - [Зависимости](#зависимости)
@@ -13,6 +16,68 @@
 - [Параметры конфигурации](#параметры-конфигурации)
 - [Технические детали](#технические-детали)
 - [Производительность](#производительность)
+
+## ⚠️ Статус качества и доработки
+
+**ВНИМАНИЕ**: Модуль требует **доработки качества** и **более тщательной проверки**.
+
+### Текущий статус
+
+- ✅ **Базовая функциональность**: Модуль успешно проходит smoke-тесты и генерирует корректные NPZ артефакты
+- ✅ **Схема и контракты**: Соответствует `action_recognition_npz_v2`, все обязательные поля присутствуют
+- ⚠️ **Качество алгоритмов**: Требуется валидация на репрезентативных датасетах
+- ⚠️ **Метрики стабильности**: Алгоритмы кластеризации (PCA+KMeans) требуют проверки на различных типах действий
+- ⚠️ **Сегментация треков**: Логика группировки person детекций в сегменты требует валидации на edge cases
+- ⚠️ **Временная согласованность**: Проверка корректности `temporal_jumps` и `clip_center_times_s` на различных видео
+
+### Результаты smoke-тестов
+
+**Тест 1** (`audit3_action_recognition_smoke_2`, video2.mp4, 58.8s):
+- Обработано: 235 кадров детекций
+- Найдено person детекций: 33 кадра
+- Создано сегментов: 15 треков
+- Статус: ✅ Успешно, NPZ артефакт сгенерирован
+
+**Тест 2** (`audit3_action_recognition_smoke_4`, video1.mp4, 28.8s):
+- Обработано: 115 кадров детекций
+- Найдено person детекций: 26 кадров
+- Создано сегментов: 18 треков
+- Статус: ✅ Успешно, NPZ артефакт сгенерирован
+
+### Области для доработки
+
+1. **Валидация метрик стабильности**:
+   - Проверка корректности `stability` и `stability_centroid_dist` на различных типах действий
+   - Валидация порогов для кластеризации (число кластеров K)
+   - Проверка на edge cases (очень короткие/длинные треки)
+
+2. **Улучшение сегментации**:
+   - Валидация параметров `segment_gap_sec` и `min_person_confidence` на различных видео
+   - Проверка корректности группировки кадров с person детекциями
+   - Обработка случаев с множественными людьми в кадре
+
+3. **Временная согласованность**:
+   - Проверка корректности `temporal_jumps` (должны быть `num_clips-1` элементов)
+   - Валидация `clip_center_times_s` относительно `union_timestamps_sec`
+   - Проверка согласованности `clip_center_frame_indices` с реальными кадрами
+
+4. **Качество эмбеддингов**:
+   - Валидация нормализации (L2) эмбеддингов
+   - Проверка проекции 2048d → 256d
+   - Анализ распределения эмбеддингов на различных типах действий
+
+5. **Render и визуализация**:
+   - Проверка корректности HTML render на различных данных
+   - Валидация offline SVG графиков (timeline, stability, distributions)
+   - Проверка fallback логики для `metric__*` ключей
+
+### Рекомендации по проверке
+
+1. Запустить на репрезентативном датасете (различные типы видео, длительности, количество людей)
+2. Сравнить метрики с ground truth (если доступен)
+3. Провести визуальный анализ HTML render для различных видео
+4. Проверить edge cases (очень короткие видео, видео без людей, множественные люди)
+5. Валидировать согласованность с downstream компонентами
 
 ## Обзор
 
@@ -42,7 +107,7 @@
 - **Модель**: `slowfast_r50` из `pytorchvideo.models.hub`
 - **Предобучение**: Kinetics-400 (400 классов действий)
 - **Входной размер**: 224×224 пикселей
-- **Длина клипа**: 32 кадра (минимум, T_fast для SlowFast, T_slow=8)
+- **Длина клипа**: по умолчанию 32 кадра (минимум для T_slow=8, T_fast=32 для SlowFast)
 - **Alpha**: 4 (T_fast / T_slow, по умолчанию)
 - **Размерность эмбеддингов**: 
   - Raw: 2048d (извлеченные из модели)
@@ -62,17 +127,29 @@
 
 Компонент **не генерирует sampling** самостоятельно. `frame_indices` берутся из `frames_dir/metadata.json` (Segmenter‑owned).
 
-Рекомендуемая стратегия (универсальная нелинейная кривая, Segmenter‑owned):
+### Требования к выборке кадров
+
+- **Единица обработки**: кадр (union‑domain)
+- **Источник индексов**: `metadata.json` секция `action_recognition.frame_indices` (Segmenter генерирует)
+- **Минимальная длительность видео**: 5 сек
+- **Максимальная длительность видео**: 20 мин
+- **Требования к `union_timestamps_sec`**: должен быть доступен для временной сегментации (используется для разрыва сегментов по временному порогу)
+
+### Рекомендуемая стратегия sampling (Segmenter‑owned)
+
+Универсальная нелинейная кривая:
 - **type**: `ease_out_power`
 - **k**: `0.7`
-- **min_units**: `120`
-- **max_units**: `1600`
-- **linear_until_sec**: `60`
-- **cap_duration_sec**: `1200` (20 минут)
+- **min_units**: `120` (минимум кадров для коротких видео)
+- **max_units**: `1600` (максимум кадров для длинных видео)
+- **linear_until_sec**: `60` (линейная выборка до 60 сек)
+- **cap_duration_sec**: `1200` (20 минут, максимальная длительность)
 
-Единица обработки: **кадр** (union‑domain). Фактические индексы выдаёт Segmenter и записывает в `metadata.json` секцию `action_recognition.frame_indices`.
+### No-fallback policy
 
-Минимальная длительность видео: **5 сек**. Максимальная: **20 мин**.
+- Если `action_recognition.frame_indices` отсутствует или пустой → **error** (fail-fast)
+- Если `core_object_detections` отсутствует → **error** (fail-fast)
+- Если нет person детекций → **valid empty** (`status="empty"`, `empty_reason="no_person_detections"`)
 
 ## Зависимости
 
@@ -147,8 +224,8 @@ export DP_MODELS_ROOT="/abs/path/to/DataProcessor/dp_models"
 python main.py \
     --frames-dir /path/to/frames \
     --rs-path /path/to/results \
-    --clip-len 32 \
-    --stride 16 \
+    --clip-len 16 \
+    --stride 8 \
     --batch-size 8 \
     --embedding-dim 256 \
     --alpha 4 \
@@ -190,7 +267,7 @@ recognizer = SlowFastActionRecognizer(
 saved_path = recognizer.run(
     frames_dir="/path/to/frames",
     config={
-        "clip_len": 16,
+        "clip_len": 32,
         "batch_size": 8,
         "embedding_dim": 256,
         "model_name": "slowfast_r50_action_recognition",
@@ -233,12 +310,11 @@ NPZ `meta` содержит стандартные baseline поля (`producer`
 #### Aggregate Features (для MLP/Tabular Head)
 
 **Core Dynamics:**
-- `mean_embedding_norm_raw` (`float`): Средняя норма raw‑эмбеддингов
-- `std_embedding_norm_raw` (`float`): Стандартное отклонение норм raw‑эмбеддингов
 - `max_temporal_jump` (`float`): Максимальный скачок между соседними клипами (L2 по normed)
 - `mean_temporal_jump` (`float`): Средний скачок (L2 по normed)
-- `stability` (`float`): Стабильность действий (через PCA+KMeans)
-- `num_switches` (`int`): Количество переключений между кластерами
+- `stability` (`float`): Стабильность действий (PCA+KMeans, доля самой длинной непрерывной серии одинаковых кластеров, 0-1)
+- `stability_centroid_dist` (`float`): Альтернативная метрика стабильности: среднее расстояние до центроида кластера (меньше = более стабильные действия)
+- `num_switches` (`int`): Количество переключений между кластерами (из KMeans labels)
 - `num_clips` (`int`): Количество клипов для трека
 - `track_frame_count` (`int`): Количество кадров в треке
 
@@ -253,11 +329,10 @@ NPZ `meta` содержит стандартные baseline поля (`producer`
 results = {
     0: {  # track_id
         "embedding_normed_256d": np.array([[0.1, 0.2, ...], ...]),  # [N, 256]
-        "mean_embedding_norm_raw": 0.95,
-        "std_embedding_norm_raw": 0.12,
         "max_temporal_jump": 0.45,
         "mean_temporal_jump": 0.21,
         "stability": 0.78,
+        "stability_centroid_dist": 0.15,
         "num_switches": 3,
         "num_clips": 12,
         "track_frame_count": 160,
@@ -287,12 +362,11 @@ results = {
 ### Aggregate Features (per-track)
 
 **Core Dynamics:**
-- `mean_embedding_norm_raw` (`float`): Средняя норма raw‑эмбеддингов
-- `std_embedding_norm_raw` (`float`): Стандартное отклонение норм raw‑эмбеддингов
 - `max_temporal_jump` (`float`): Максимальный скачок между соседними клипами
 - `mean_temporal_jump` (`float`): Средний скачок между соседними клипами
-- `stability` (`float`): Стабильность действий (через PCA+KMeans)
-- `num_switches` (`int`): Количество переключений между кластерами
+- `stability` (`float`): Стабильность действий (PCA+KMeans, доля самой длинной непрерывной серии одинаковых кластеров, 0-1)
+- `stability_centroid_dist` (`float`): Альтернативная метрика стабильности: среднее расстояние до центроида кластера (меньше = более стабильные действия)
+- `num_switches` (`int`): Количество переключений между кластерами (из KMeans labels)
 - `num_clips` (`int`): Количество клипов для трека
 - `track_frame_count` (`int`): Количество кадров в треке
 
@@ -317,7 +391,7 @@ results = {
 
 | Параметр | Тип | По умолчанию | Описание | Δ latency | Δ cost |
 |----------|-----|--------------|----------|-----------|--------|
-| `clip_len` | `int` | `32` | Длина клипа в кадрах (T_fast, минимум 32 для T_slow=8) | +5-10 ms/clip при увеличении до 64 | +20-30% |
+| `clip_len` | `int` | `16` | Длина клипа в кадрах (T_fast, рекомендуется минимум 32 для T_slow=8) | +5-10 ms/clip при увеличении до 64 | +20-30% |
 | `alpha` | `int` | `4` | SlowFast alpha (T_fast / T_slow) | 0% | 0% |
 | `stride` | `int` | `clip_len // 2` | Шаг скользящего окна | -10-15% при уменьшении stride | -10-15% |
 | `batch_size` | `int` | `8` | Размер батча для inference | -20-30% при увеличении с 4 до 16 (GPU) | -20-30% |
@@ -330,7 +404,8 @@ results = {
 ### Рекомендации по настройке
 
 - **`clip_len`**: 
-  - 32 кадра — минимум для SlowFast (T_slow=8, требуется моделью)
+  - По умолчанию 16 кадров (в коде)
+  - Рекомендуется минимум 32 кадра для SlowFast (T_slow=8, требуется моделью)
   - Увеличение до 64 улучшает качество, но замедляет обработку (~+30% latency)
   - Должно быть кратно `alpha` (по умолчанию 4)
 - **`batch_size`**:
@@ -353,6 +428,8 @@ action_recognition:
   batch_size: 16
   embedding_dim: 256
   alpha: 4
+  segment_gap_sec: 0.5  # Временной порог для разрыва сегмента
+  min_person_confidence: 0.3  # Минимальный confidence для person детекций
 ```
 
 **Стандартная (рекомендуемая)**:
@@ -363,6 +440,8 @@ action_recognition:
   batch_size: 8
   embedding_dim: 256
   alpha: 4
+  segment_gap_sec: 0.5
+  min_person_confidence: 0.3
 ```
 
 **Качественная (медленная)**:
@@ -504,10 +583,12 @@ action_recognition:
 - Путь: `result_store/<platform_id>/<video_id>/<run_id>/action_recognition/_render/render_context.json`
 
 Этот JSON содержит:
-- **Summary**: статистики по распознаванию действий (tracks_count, total_clips, avg_stability, avg_max_temporal_jump, avg_mean_temporal_jump)
-- **Timeline**: данные по каждому клипу (track_id, clip_index, clip_center_time_s, temporal_jump, embedding_norm)
-- **Distributions**: распределения метрик (stability, max_temporal_jump, mean_temporal_jump, embedding_norm) с min, max, mean, std, median, percentiles
+- **Summary**: статистики по распознаванию действий (tracks_count, total_clips, avg_stability, avg_stability_centroid_dist, avg_max_temporal_jump, avg_mean_temporal_jump)
+- **Timeline**: данные по каждому клипу (track_id, clip_index, clip_center_time_s, temporal_jump, embedding_norm, frame_idx)
+- **Distributions**: распределения метрик (stability, stability_centroid_dist, max_temporal_jump, mean_temporal_jump, embedding_norm) с min, max, mean, std, median, percentiles
 - **Tracks**: информация о каждом треке с метриками и временными данными
+- **Track stability**: per-track stability значения для визуализации
+- **Top jumps**: Top 10 клипов с наибольшими temporal jumps (для примеров)
 
 Render-context может быть использован:
 - **LLM** для генерации текстовых описаний действий в видео
@@ -516,11 +597,12 @@ Render-context может быть использован:
 
 **HTML debug страница** (опционально):
 - Путь: `result_store/.../action_recognition/_render/render.html`
-- Содержит интерактивные графики (Chart.js):
-  - Timeline: temporal jumps по времени для каждого трека
-  - Tracks summary: таблица со всеми треками и их метриками
-  - Distributions: статистики по метрикам
-  - Summary metrics: ключевые показатели в удобном формате
+- Содержит offline SVG графики (без CDN):
+  - **Timeline**: embedding norms по времени для каждого трека (multi-track line chart)
+  - **Stability by Track**: bar chart со stability для каждого трека
+  - **Top 10 Clips with Highest Temporal Jumps**: таблица с примерами клипов с наибольшими скачками (track_id, clip_index, time, jump, frame_idx)
+  - **Distributions**: статистики по метрикам (stability, stability_centroid_dist, max_temporal_jump, embedding_norm_mean) с min, max, mean, std, median
+  - **Summary metrics**: ключевые показатели в удобном формате (num_tracks, total_clips, avg_stability, avg_stability_centroid_dist, avg_max_temporal_jump, avg_mean_temporal_jump)
 
 **Конфигурация** (в `global_config.yaml`):
 ```yaml
@@ -534,26 +616,38 @@ action_recognition:
 
 ## Quality validation & human-friendly inspection
 
+### ⚠️ Текущий статус валидации
+
+**ВНИМАНИЕ**: Модуль требует **доработки качества** и **более тщательной проверки**. Smoke-тесты пройдены успешно, но полная валидация на репрезентативных датасетах еще не проведена.
+
 ### Как проверить качество выхода компонента
 
 #### 1. Автоматическая оценка (если доступна)
-- Запустить компонент на эталонных видео (short/long, single/multi person)
-- Сверить распределения `max_temporal_jump`, `stability`, `num_switches`
+- ✅ Запустить компонент на эталонных видео (short/long, single/multi person) — **требуется**
+- ⚠️ Сверить распределения `max_temporal_jump`, `stability`, `num_switches` — **требуется валидация**
+- ⚠️ Проверить корректность метрик на различных типах действий — **требуется**
 
 #### 2. Human-friendly визуализация
-- Построить графики `temporal_jumps` по времени (`clip_center_times_s`)
-- Показать top‑K клипы с наибольшим `max_temporal_jump`
-- Демо‑скрипт: `VisualProcessor/modules/action_recognition/quality_report/demo_action_recognition_quality.py`
-- Использовать HTML render страницу для интерактивного просмотра результатов
+- ✅ Построить графики `temporal_jumps` по времени (`clip_center_times_s`) — доступно через HTML render
+- ✅ Показать top‑K клипы с наибольшим `max_temporal_jump` — реализовано в HTML render
+- ⚠️ Демо‑скрипт: `VisualProcessor/modules/action_recognition/quality_report/demo_action_recognition_quality.py` — **требуется проверка**
+- ✅ Использовать HTML render страницу для интерактивного просмотра результатов — доступно
 
 #### 3. Статистическая валидация
-- `0.0 <= stability <= 1.0` (или `NaN` если недостаточно клипов)
-- `max_temporal_jump` не должен быть NaN при `num_clips >= 2`
-- `num_clips` согласован с `clip_len/stride`
+- ⚠️ `0.0 <= stability <= 1.0` (или `NaN` если недостаточно клипов) — **требуется проверка на различных данных**
+- ⚠️ `max_temporal_jump` не должен быть NaN при `num_clips >= 2` — **требуется валидация**
+- ⚠️ `num_clips` согласован с `clip_len/stride` — **требуется проверка**
+- ⚠️ `temporal_jumps` содержит `num_clips-1` элементов — **требуется валидация**
 
 #### 4. Интеграция с downstream модулями
-- Убедиться, что downstream читают `embedding_normed_256d`
-- Проверить корректность временной оси (clip_center_times_s)
+- ⚠️ Убедиться, что downstream читают `embedding_normed_256d` — **требуется проверка**
+- ⚠️ Проверить корректность временной оси (clip_center_times_s) — **требуется валидация**
+
+#### 5. Валидация алгоритмов (критично)
+- ⚠️ **Кластеризация (PCA+KMeans)**: Проверить корректность выбора числа кластеров K и валидацию на различных типах действий
+- ⚠️ **Сегментация треков**: Валидация логики группировки person детекций на edge cases
+- ⚠️ **Временная согласованность**: Проверка корректности `temporal_jumps` и `clip_center_times_s` на различных видео
+- ⚠️ **Нормализация эмбеддингов**: Валидация L2 нормализации и проекции 2048d → 256d
 
 ### Команды для теста
 
@@ -576,7 +670,10 @@ python VisualProcessor/modules/action_recognition/quality_report/demo_action_rec
   --out-html /path/to/action_recognition_quality.html
 ```
 
-**Статус**: тесты еще не проводились.
+**Статус**: 
+- ✅ Smoke-тесты пройдены (см. результаты выше)
+- ⚠️ Полная валидация качества на репрезентативных датасетах **требуется**
+- ⚠️ Визуальная проверка HTML render на различных видео **рекомендуется**
 
 ## Примеры использования
 

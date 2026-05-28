@@ -10,12 +10,24 @@ from __future__ import annotations
 import os
 import sys
 import argparse
+from pathlib import Path
 from typing import Optional, List
 
-sys.path.append(os.path.dirname(os.path.dirname(os.path.dirname(__file__))))
+_vp = str(Path(__file__).resolve().parents[2])
+if _vp not in sys.path:
+    sys.path.insert(0, _vp)
+elif sys.path[0] != _vp:
+    try:
+        sys.path.remove(_vp)
+    except ValueError:
+        pass
+    sys.path.insert(0, _vp)
+_repo_root = str(Path(_vp).parent)
+if _repo_root not in sys.path:
+    sys.path.append(_repo_root)
 
-from modules.color_light.processor import ColorLightProcessor
-from modules.color_light.presentation import write_presentation
+from modules.color_light.utils.processor import ColorLightProcessor
+from modules.color_light.utils.presentation import write_presentation
 from utils.logger import get_logger
 
 MODULE_NAME = "color_light"
@@ -44,13 +56,20 @@ def main(argv: Optional[List[str]] = None) -> int:
         "--max-frames-per-scene",
         type=int,
         default=350,
-        help="Максимальное количество кадров для обработки на сцену"
+        help="DEPRECATED: sampling контролируется Segmenter (параметр оставлен для совместимости)"
     )
     parser.add_argument(
         "--stride",
         type=int,
         default=5,
-        help="Шаг для выборки кадров"
+        help="DEPRECATED: sampling контролируется Segmenter (параметр оставлен для совместимости)"
+    )
+    parser.add_argument(
+        "--store-debug-objects",
+        type=int,
+        choices=[0, 1],
+        default=1,
+        help="Сохранять ли тяжёлые debug/analytics объекты (`frames`/`scenes`) в NPZ. 1=yes (default), 0=no",
     )
     parser.add_argument(
         "--log-level",
@@ -81,7 +100,8 @@ def main(argv: Optional[List[str]] = None) -> int:
         processor = ColorLightProcessor(
             rs_path=args.rs_path,
             max_frames_per_scene=args.max_frames_per_scene,
-            stride=args.stride
+            stride=args.stride,
+            store_debug_objects=bool(args.store_debug_objects),
         )
 
         # Запуск полного цикла через BaseModule.run (с валидацией meta)

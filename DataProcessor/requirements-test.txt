@@ -1,0 +1,20 @@
+# Requirements для тестирования DataProcessor API
+#
+# Установка:
+#   pip install -r requirements-test.txt
+
+# Базовые зависимости API
+-r requirements-api.txt
+
+# Тестирование
+pytest>=7.4.0
+pytest-asyncio>=0.21.0
+pytest-cov>=4.1.0
+pytest-mock>=3.11.0
+
+# Моки и фикстуры
+fakeredis>=2.18.0  # Для тестирования Redis операций
+
+# Утилиты для тестирования
+httpx>=0.25.0  # Для async HTTP тестов (уже в requirements-api.txt, но указан для ясности)
+

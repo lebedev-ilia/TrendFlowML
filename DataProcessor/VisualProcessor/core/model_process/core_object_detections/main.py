@@ -17,23 +17,29 @@ Production-ready object detection + tracking extractor.
 
 from __future__ import annotations
 
+import sys
+from pathlib import Path
+_vp = Path(__file__).resolve().parent
+for _ in range(3):
+    _vp = _vp.parent
+sys.path.insert(0, str(_vp))
+
 import argparse
 import json
 import os
-import sys
 import time
 import tempfile
+import hashlib
 from datetime import datetime
-from pathlib import Path
 from typing import Any, Dict, List, Optional, Tuple, Union
 from collections import defaultdict
 
 import cv2
 import numpy as np
 
-_path = os.path.dirname(os.path.dirname(os.path.dirname(os.path.dirname(__file__))))
-if _path not in sys.path:
-    sys.path.append(_path)
+_repo_root = str(_vp.parent)
+if _repo_root not in sys.path:
+    sys.path.insert(0, _repo_root)
 
 from utils.frame_manager import FrameManager
 from utils.logger import get_logger
@@ -42,12 +48,59 @@ from utils.utilites import load_metadata
 from utils.meta_builder import apply_models_meta, model_used
 
 NAME = "core_object_detections"
-VERSION = "2.1"
-SCHEMA_VERSION = "core_object_detections_npz_v1"
+VERSION = "2.2"
+SCHEMA_VERSION = "core_object_detections_npz_v2"
 LOGGER = get_logger(NAME)
 
 MAX_DETECTIONS = 100
 BBOX_DIMS = 4
+_PERSON_CLASS_ID = 0
+_LOGO_REGION_CLASS_ID = 33
+_TEXT_REGION_CLASS_ID = 34
+
+
+def _resource_profile_snapshot() -> Dict[str, Any]:
+    """
+    Best-effort resource snapshot for audit/profiling.
+    Enabled only when VP_RESOURCE_PROFILE=1|true|yes.
+    """
+    v = str(os.environ.get("VP_RESOURCE_PROFILE") or "").strip().lower()
+    if v not in ("1", "true", "yes", "y", "on"):
+        return {}
+
+    out: Dict[str, Any] = {}
+    try:
+        import psutil  # type: ignore
+
+        p = psutil.Process(os.getpid())
+        rss = int(getattr(p.memory_info(), "rss", 0) or 0)
+        out["rss_bytes"] = rss
+        out["rss_mib"] = float(rss) / (1024.0 * 1024.0)
+    except Exception:
+        pass
+
+    try:
+        import torch  # type: ignore
+
+        if hasattr(torch, "cuda") and torch.cuda.is_available():
+            try:
+                out["cuda_max_memory_allocated_bytes"] = int(torch.cuda.max_memory_allocated())
+                out["cuda_max_memory_reserved_bytes"] = int(torch.cuda.max_memory_reserved())
+            except Exception:
+                pass
+    except Exception:
+        pass
+
+    return out
+
+
+def _sha256_file(path: str) -> str:
+    """Return sha256 hex digest for a file (streaming, deterministic)."""
+    h = hashlib.sha256()
+    with open(path, "rb") as f:
+        for chunk in iter(lambda: f.read(1024 * 1024), b""):
+            h.update(chunk)
+    return h.hexdigest()
 
 # Final taxonomy v1.0 (41 classes) - source of truth for baseline and production.
 # See: yolo_fine_tune/YOLO_CLASSES_V1_FINAL.md
@@ -379,6 +432,7 @@ def run_yolo(
     batch_size: int,
     device: Optional[str] = None,
     progress_callback: Optional[callable] = None,
+    class_names_hint: Optional[Dict[int, str]] = None,
 ) -> Tuple[np.ndarray, np.ndarray, np.ndarray, np.ndarray, Dict[int, str], List[np.ndarray]]:
     """
     Запускает ультраликтикс YOLO на батчах и возвращает фиксированные тензоры + raw detections per frame.
@@ -400,12 +454,26 @@ def run_yolo(
     LOGGER.info("%s | YOLO | loading model: %s", NAME, model_path)
     model = YOLO(model_path)
 
+    # Canonical class id -> name mapping (stable IDs). Prefer model-provided names when available.
+    class_names: Dict[int, str] = dict(class_names_hint or {})
+    try:
+        model_names = getattr(model, "names", None)
+        if isinstance(model_names, dict) and model_names:
+            for k, v in model_names.items():
+                try:
+                    class_names[int(k)] = str(v)
+                except Exception:
+                    continue
+    except Exception:
+        pass
+    if not class_names:
+        class_names = _load_final_taxonomy_v1_classes()
+
     n = len(frame_indices)
     boxes = np.zeros((n, MAX_DETECTIONS, BBOX_DIMS), dtype=np.float32)
     scores = np.zeros((n, MAX_DETECTIONS), dtype=np.float32)
     class_ids = np.zeros((n, MAX_DETECTIONS), dtype=np.int32)
     valid_mask = np.zeros((n, MAX_DETECTIONS), dtype=bool)
-    class_names: Dict[int, str] = {}
 
     raw_per_frame: List[np.ndarray] = [np.zeros((0, 5), dtype=np.float32) for _ in frame_indices]
 
@@ -428,8 +496,6 @@ def run_yolo(
             for j in range(min(len(res.boxes), MAX_DETECTIONS)):
                 try:
                     conf = float(res.boxes.conf[j].item())
-                    if conf < box_threshold:
-                        continue
                     xyxy = res.boxes.xyxy[j].cpu().numpy().astype(np.float32)
                     cls_id = int(res.boxes.cls[j].item())
                 except Exception:
@@ -439,22 +505,15 @@ def run_yolo(
                         xyxy = box[:4].astype(np.float32)
                         conf = float(box[4])
                         cls_id = int(box[5]) if box.shape[0] > 5 else 0
-                        if conf < box_threshold:
-                            continue
                     except Exception:
                         raise RuntimeError(f"{NAME} | YOLO | cannot parse detection output (ultralytics API drift?)")
 
                 boxes[out_i, j] = xyxy
                 scores[out_i, j] = conf
                 class_ids[out_i, j] = cls_id
-                valid_mask[out_i, j] = True
-                detections.append([xyxy[0], xyxy[1], xyxy[2], xyxy[3], conf])
-
-                if cls_id not in class_names:
-                    try:
-                        class_names[cls_id] = res.names.get(cls_id, f"class_{cls_id}")
-                    except Exception:
-                        class_names[cls_id] = f"class_{cls_id}"
+                valid_mask[out_i, j] = bool(conf >= float(box_threshold))
+                if conf >= float(box_threshold):
+                    detections.append([xyxy[0], xyxy[1], xyxy[2], xyxy[3], conf])
 
             raw_per_frame[out_i] = np.array(detections, dtype=np.float32)
 
@@ -527,12 +586,16 @@ def run_yolo_triton(
         cls_scores = pred[:, 4:].astype(np.float32)  # (N,nc)
         cls_id = np.argmax(cls_scores, axis=1).astype(np.int32)
         conf = np.max(cls_scores, axis=1).astype(np.float32)
-        m = conf >= float(box_threshold)
-        if not np.any(m):
+
+        # Keep some top candidates for NMS (safety cap). Threshold is applied later via valid_mask.
+        order = conf.argsort()[::-1]
+        pre_nms = int(min(order.size, 2000))
+        order = order[:pre_nms]
+        if order.size == 0:
             return np.zeros((0, 6), dtype=np.float32)
-        boxes_xyxy = _xywh_to_xyxy(boxes_xywh[m])
-        conf_m = conf[m]
-        cls_m = cls_id[m]
+        boxes_xyxy = _xywh_to_xyxy(boxes_xywh[order])
+        conf_m = conf[order]
+        cls_m = cls_id[order]
 
         dets: List[np.ndarray] = []
         for c in np.unique(cls_m):
@@ -588,13 +651,12 @@ def run_yolo_triton(
             xyxy = det_np[j, :4].astype(np.float32)
             conf = float(det_np[j, 4])
             cls_id = int(det_np[j, 5])
-            if conf < float(box_threshold):
-                continue
             boxes[i_out, j] = xyxy
             scores[i_out, j] = conf
             class_ids[i_out, j] = cls_id
-            valid_mask[i_out, j] = True
-            detections.append([float(xyxy[0]), float(xyxy[1]), float(xyxy[2]), float(xyxy[3]), float(conf)])
+            valid_mask[i_out, j] = bool(conf >= float(box_threshold))
+            if conf >= float(box_threshold):
+                detections.append([float(xyxy[0]), float(xyxy[1]), float(xyxy[2]), float(xyxy[3]), float(conf)])
 
             if cls_id not in class_names:
                 class_names[cls_id] = f"class_{cls_id}"
@@ -795,7 +857,9 @@ def main():
         if batch_size <= 0:
             raise RuntimeError(f"{NAME} | --batch-size must be > 0 (scheduler-controlled); got {batch_size}")
 
-        class_names: Dict[int, str] = {}
+        # Stable taxonomy (v1.0, 41 classes). We always emit full id->name mapping in NPZ.
+        base_taxonomy = _load_final_taxonomy_v1_classes()
+        class_names: Dict[int, str] = dict(base_taxonomy)
         
         # Resolve model path for both ultralytics and triton runtimes
         resolved_model_path = str(args.model) if args.model else ""
@@ -936,6 +1000,7 @@ def main():
                 batch_size=batch_size,
                 device=device,
                 progress_callback=progress_cb,
+                class_names_hint=base_taxonomy,
             )
             impl = "yolo"
 
@@ -944,7 +1009,9 @@ def main():
 
         # Tracking removed: no longer using StrongSORT or any tracking
         
-        class_names_arr = np.array([f"{k}:{v}" for k, v in sorted(class_names.items())], dtype="U")
+        # Emit full stable mapping 0..40 even if only a subset of classes was seen.
+        class_names_full = {i: str(class_names.get(i, base_taxonomy.get(i, f"class_{i}"))) for i in range(41)}
+        class_names_arr = np.array([f"{k}:{v}" for k, v in sorted(class_names_full.items())], dtype="U")
 
         # Get timestamps for times_s
         uts = meta.get("union_timestamps_sec")
@@ -955,6 +1022,53 @@ def main():
         if np.any(fi_np < 0) or np.any(fi_np >= int(uts_arr.shape[0])):
             raise RuntimeError(f"{NAME} | frame_indices out of range for union_timestamps_sec")
         times_s = uts_arr[fi_np].astype(np.float32)
+
+        # Derived / model-facing arrays (cheap, helps downstream models)
+        analysis_w = int(meta.get("analysis_width") or 0)
+        analysis_h = int(meta.get("analysis_height") or 0)
+        if analysis_w <= 0 or analysis_h <= 0:
+            # Best-effort fallback: infer from first frame in frames_dir (still deterministic for the run).
+            fr0 = frame_manager.get(int(frame_indices[0]))
+            analysis_h, analysis_w = int(fr0.shape[0]), int(fr0.shape[1])
+
+        denom_x = float(max(analysis_w - 1, 1))
+        denom_y = float(max(analysis_h - 1, 1))
+        boxes_norm = boxes.astype(np.float32).copy()
+        boxes_norm[..., 0] /= denom_x
+        boxes_norm[..., 2] /= denom_x
+        boxes_norm[..., 1] /= denom_y
+        boxes_norm[..., 3] /= denom_y
+        boxes_norm = np.clip(boxes_norm, 0.0, 1.0).astype(np.float32)
+
+        centers_norm = np.zeros((boxes.shape[0], boxes.shape[1], 2), dtype=np.float32)
+        centers_norm[..., 0] = ((boxes[..., 0] + boxes[..., 2]) / 2.0) / denom_x
+        centers_norm[..., 1] = ((boxes[..., 1] + boxes[..., 3]) / 2.0) / denom_y
+        centers_norm = np.clip(centers_norm, 0.0, 1.0).astype(np.float32)
+
+        w_box = np.clip(boxes[..., 2] - boxes[..., 0], 0.0, None).astype(np.float32)
+        h_box = np.clip(boxes[..., 3] - boxes[..., 1], 0.0, None).astype(np.float32)
+        denom_area = float(max(int(analysis_w) * int(analysis_h), 1))
+        areas_frac = (w_box * h_box / denom_area).astype(np.float32)
+
+        det_count = np.sum(valid_mask, axis=1).astype(np.int32)
+        person_mask = valid_mask & (class_ids == int(_PERSON_CLASS_ID))
+        text_mask = valid_mask & (class_ids == int(_TEXT_REGION_CLASS_ID))
+        logo_mask = valid_mask & (class_ids == int(_LOGO_REGION_CLASS_ID))
+
+        person_count = np.sum(person_mask, axis=1).astype(np.int32)
+        text_region_count = np.sum(text_mask, axis=1).astype(np.int32)
+        logo_region_count = np.sum(logo_mask, axis=1).astype(np.int32)
+
+        person_areas = np.where(person_mask, areas_frac, 0.0).astype(np.float32)
+        text_areas = np.where(text_mask, areas_frac, 0.0).astype(np.float32)
+        logo_areas = np.where(logo_mask, areas_frac, 0.0).astype(np.float32)
+
+        sum_person_area_frac = np.sum(person_areas, axis=1).astype(np.float32)
+        sum_text_area_frac = np.sum(text_areas, axis=1).astype(np.float32)
+        sum_logo_area_frac = np.sum(logo_areas, axis=1).astype(np.float32)
+        max_person_area_frac = np.max(person_areas, axis=1).astype(np.float32)
+        max_text_area_frac = np.max(text_areas, axis=1).astype(np.float32)
+        max_logo_area_frac = np.max(logo_areas, axis=1).astype(np.float32)
 
         out_dir = os.path.join(args.rs_path, NAME)
         os.makedirs(out_dir, exist_ok=True)
@@ -1016,13 +1130,19 @@ def main():
         else:
             model_name = str(args.model)
             engine = "ultralytics"
+            weights_digest = "unknown"
+            try:
+                if resolved_model_path and os.path.exists(resolved_model_path):
+                    weights_digest = _sha256_file(str(resolved_model_path))
+            except Exception as e:
+                LOGGER.warning("%s | failed to compute sha256 for model=%r (resolved=%r): %s", NAME, args.model, resolved_model_path, e)
             meta_info = apply_models_meta(
                 meta_info,
                 models_used=[
                     model_used(
                         model_name=model_name,
                         model_version="unknown",
-                        weights_digest="unknown",
+                        weights_digest=str(weights_digest),
                         runtime="inprocess",
                         engine=engine,
                         precision="fp32",
@@ -1038,6 +1158,9 @@ def main():
         for key, value in timings.items():
             stage_timings_ms[key] = float(value) * 1000.0
         meta_info["stage_timings_ms"] = stage_timings_ms
+        rp_before = _resource_profile_snapshot()
+        if isinstance(rp_before, dict) and rp_before:
+            meta_info["resource_profile_before"] = dict(rp_before)
 
         # Baseline contract: emit save stage
         _emit_stage(
@@ -1064,10 +1187,24 @@ def main():
             times_s=times_s,
             # detection arrays
             boxes=boxes,
+            boxes_norm=boxes_norm,
+            centers_norm=centers_norm,
+            areas_frac=areas_frac,
             scores=scores,
             class_ids=class_ids,
             valid_mask=valid_mask,
             class_names=class_names_arr,
+            # model-facing / analytics-friendly curves (frame-level)
+            det_count=det_count,
+            person_count=person_count,
+            text_region_count=text_region_count,
+            logo_region_count=logo_region_count,
+            sum_person_area_frac=sum_person_area_frac,
+            max_person_area_frac=max_person_area_frac,
+            sum_text_area_frac=sum_text_area_frac,
+            max_text_area_frac=max_text_area_frac,
+            sum_logo_area_frac=sum_logo_area_frac,
+            max_logo_area_frac=max_logo_area_frac,
         )
 
         timings["saving"] = time.perf_counter() - t_save_start

@@ -1,5 +1,8 @@
 ## Encoder contract (VisualEncoder + AudioEncoder)
 
+Статус: v1.0 (legacy) + v2 (FINAL interface-aligned)  
+См. также: `Models/docs/contracts/MODEL_INTERFACE_V2.md`
+
 ### Назначение
 
 Encoder запускается **после всех компонентов DataProcessor** и решает проблему variable-length последовательностей (очень разные длительности видео/аудио) совместно с Segmenter:
@@ -28,7 +31,7 @@ Encoder **не делает общий time-join** между модальнос
 Encoder выдаёт фиксированный интерфейс:
 - `global_embedding (D,) float32`
 - `summary_tokens (K, D) float32`
-- `summary_times_s (K,) float32` — **центры uniform time bins** на интервале [0..duration_sec]
+- `summary_times_s (K,) float32` — **якорные времена токенов** (v1: центры uniform bins; v2: learned/иерархические anchors)
 - `summary_mask (K,) bool`
 
 ### Budgets (v1.0)
@@ -57,5 +60,31 @@ Encoder обучается **end-to-end** вместе с v1 transformer. Раз
 
 - сложность: ≤ O(N) по длине исходной последовательности
 - missing values: используем NaN+masks, не “нули-заглушки”
+
+---
+
+## v2 (FINAL): Tokenizer + Learned Pooling (без требования uniform bins)
+
+В v2 Encoder трактуется как **Tokenizer + Learned Pooling** (см. `MODEL_INTERFACE_V2.md`):
+
+- Компоненты публикуют последовательности/события/эмбеддинги (и/или `TokenStreams` как артефакт).
+- Encoder строит fixed-budget представление **контентно**, а не через uniform time-binning.
+
+### v2 Input (рекомендуемый минимум)
+
+Один или несколько stream’ов вида:
+
+- `tokens (N,D_in)` + `times_s (N,)` + `mask (N,)`
+- опционально: `token_type`, `spans_s`, `importance`
+
+### v2 Output (совместим с v1 API)
+
+Выход сохраняет те же ключи, но с новой семантикой:
+
+- `summary_tokens (K,D)` — pooled tokens
+- `summary_times_s (K,)` — anchors (например: центры событий/сцен/или learnable queries с присвоенными times)
+- `summary_mask (K,)` — какие tokens валидны
+
+**Важно**: uniform bins остаются допустимым fallback (v1 compatibility mode), но не являются обязательным/каноничным.
 
 

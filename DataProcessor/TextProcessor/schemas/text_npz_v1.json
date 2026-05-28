@@ -1,0 +1,90 @@
+{
+  "schema_system_version": "vp_schema_v1",
+  "schema_version": "text_npz_v1",
+  "producer": "text_processor",
+  "artifact_kind": "npz",
+  "allow_extra_keys": false,
+  "meta": {
+    "required_keys": [
+      "producer",
+      "producer_version",
+      "schema_version",
+      "created_at",
+      "platform_id",
+      "video_id",
+      "run_id",
+      "config_hash",
+      "sampling_policy_version",
+      "dataprocessor_version",
+      "status",
+      "empty_reason",
+      "error",
+      "models_used",
+      "model_signature"
+    ],
+    "optional_keys": [
+      "input_json_basename",
+      "enable_embeddings",
+      "raw_payload_path",
+      "device_used",
+      "scheduler_knobs",
+      "resource_metrics",
+      "stage_timings_ms"
+    ]
+  },
+  "fields": {
+    "feature_names": {
+      "required": true,
+      "tier": "model_facing",
+      "dtype": "object",
+      "shape": ["F"],
+      "description": "Sorted flat scalar feature names from extractors."
+    },
+    "feature_values": {
+      "required": true,
+      "tier": "model_facing",
+      "dtype": "float32",
+      "shape": ["F"],
+      "description": "Values aligned with feature_names."
+    },
+    "payload": {
+      "required": true,
+      "tier": "analytics",
+      "dtype": "object",
+      "shape": [],
+      "description": "Privacy-safe payload summary (text_payload_summary_v1), not raw user text."
+    },
+    "meta": {
+      "required": true,
+      "tier": "debug",
+      "dtype": "object",
+      "shape": [],
+      "description": "Run meta dict (object array scalar)."
+    },
+    "primary_embedding": {
+      "required": false,
+      "tier": "model_facing",
+      "dtype": "float32",
+      "shape": ["*"],
+      "description": "Optional primary text embedding vector; run_cli may write a NaN placeholder when disabled."
+    },
+    "primary_embedding_present": {
+      "required": false,
+      "tier": "analytics",
+      "dtype": "bool",
+      "shape": []
+    },
+    "primary_embedding_source": {
+      "required": false,
+      "tier": "analytics",
+      "dtype": ["object", "str"],
+      "shape": []
+    },
+    "primary_embedding_model": {
+      "required": false,
+      "tier": "analytics",
+      "dtype": ["object", "str"],
+      "shape": []
+    }
+  }
+}

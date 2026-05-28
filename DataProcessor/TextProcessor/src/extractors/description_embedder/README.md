@@ -13,6 +13,13 @@
 **Категория**: text embeddings  
 **GPU**: поддерживается (cuda), опционально fp16
 
+**Описание фич (19), диапазоны; валидатор среза в NPZ:** [`docs/FEATURE_DESCRIPTION.md`](docs/FEATURE_DESCRIPTION.md) · `utils/validate_description_embedder_text_npz.py`
+
+**Контракт Audit v3 (`features_flat`)**: [`SCHEMA.md`](SCHEMA.md) · machine: [`../../../schemas/description_embedder_output_v1.json`](../../../schemas/description_embedder_output_v1.json) · отчёт: [`../../../docs/audit_v3/components/description_embedder_AUDIT_V3_REPORT.md`](../../../docs/audit_v3/components/description_embedder_AUDIT_V3_REPORT.md)  
+**Audit v4:** [`../../../../docs/audit_v4/components/text_processor/description_embedder_audit_v4.md`](../../../../docs/audit_v4/components/text_processor/description_embedder_audit_v4.md) · L2 stats: `scripts/audit_v4_npz_stats.py` → `storage/audit_v4/description_embedder_l2/`
+
+**Audit v3 preflight**: каноническая модель эмбеддингов — **`intfloat/multilingual-e5-large`** (задаётся профилем / `model_name`; см. `TEXTPROCESSOR_AUDIT_V3_PREFLIGHT_RULES.md`).
+
 ### Входы
 
 - **`doc.description`** (str): текстовое описание видео из `VideoDocument`
@@ -21,10 +28,34 @@
 
 Экстрактор возвращает только `result.features_flat` (privacy-safe скаляры для NPZ export):
 
-- `tp_descemb_present` (0/1) — эмбеддинг вычислен (не “файл существует”)
-- `tp_descemb_dim`
-- `tp_descemb_norm_raw` (NaN если `compute_raw_norm=false`)
-- `tp_descemb_l2_norm`
+**Основные метрики**:
+- `tp_descemb_present` (0/1) — эмбеддинг вычислен (не "файл существует")
+- `tp_descemb_dim` — размерность эмбеддинга
+- `tp_descemb_norm_raw` (NaN если `compute_raw_norm=false`) — L2-норма необработанного вектора (до нормализации)
+- `tp_descemb_l2_norm` — L2-норма нормализованного вектора (должна быть ~1.0)
+
+**Флаги присутствия и конфигурации**:
+- `tp_descemb_description_present` (0/1) — присутствует ли описание в документе
+- `tp_descemb_compute_enabled` (0/1) — включено ли вычисление эмбеддинга
+- `tp_descemb_write_artifact_enabled` (0/1) — включено ли сохранение артефакта
+- `tp_descemb_artifact_written` (0/1) — был ли артефакт успешно записан
+- `tp_descemb_cache_enabled` (0/1) — включено ли кеширование
+- `tp_descemb_cache_hit` (0/1 или NaN) — попадание в кеш (NaN если кеш отключен)
+
+**Метрики производительности и устройства**:
+- `tp_descemb_fp16` (0/1) — использовался ли режим float16
+- `tp_descemb_device_cuda` (0/1) — использовалось ли устройство CUDA
+- `tp_descemb_model_digest_u24` — первые 24 бита хеша модели (для идентификации)
+
+**Метрики chunking и pooling**:
+- `tp_descemb_pooling_length_weighted` (0/1) — использовалась ли стратегия length_weighted_mean
+- `tp_descemb_n_chunks` (NaN если не применимо) — количество чанков, на которые был разбит текст
+- `tp_descemb_avg_chunk_tokens` (NaN если не применимо) — среднее количество токенов в чанке
+
+**Тайминги** (NaN если не применимо):
+- `tp_descemb_chunk_ms` — время разбиения на чанки (миллисекунды)
+- `tp_descemb_encode_ms` — время кодирования через модель (миллисекунды)
+- `tp_descemb_pool_ms` — время агрегации (pooling) эмбеддингов чанков (миллисекунды)
 
 Для детерминированного доступа downstream-экстракторами в рамках этого же run используется in-memory реестр (только если `write_artifact=true`):
 `doc.tp_artifacts["embeddings"]["description"]["relpath"]` (`description_embedding.npy`).
@@ -91,26 +122,44 @@
 {
     "model_name": "sentence-transformers/all-MiniLM-L6-v2",  # Модель для эмбеддингов
     "cache_dir": None,                                        # Путь к кешу (по умолчанию: default_cache_dir() / "embed_cache")
-    "cache_enabled": False,
-    "cache_ttl_days": 30.0,
-    "cache_max_items": 200000,
-    "cache_max_bytes": 2000000000,
-    "cache_cleanup_on_init": True,
-    "cache_cleanup_max_seconds": 0.2,
+    "cache_enabled": False,                                   # Включить/выключить кеширование
+    "cache_ttl_days": 30.0,                                   # Время жизни кеша в днях (None = без ограничений)
+    "cache_max_items": 200000,                               # Максимальное количество элементов в кеше
+    "cache_max_bytes": 2000000000,                           # Максимальный размер кеша в байтах
+    "cache_cleanup_on_init": True,                           # Очищать кеш при инициализации
+    "cache_cleanup_max_seconds": 0.2,                        # Максимальное время на очистку кеша (секунды)
     "device": "cpu",                                          # "cpu" | "cuda"
-    "fp16": True,                                             # Использовать float16 на GPU
-    "batch_size": 32,                                         # Размер батча для обработки чанков
-    "artifacts_dir": None,                                    # Путь к артефактам (по умолчанию: default_artifacts_dir())
-    "tokenizer_spec_name": "shared_tokenizer_v1",             # dp_models tokenizer spec
-    "max_chunk_tokens_model": 512,                             # Максимум токенов модели в чанке
-    "pooling_strategy": "length_weighted_mean",               # mean | length_weighted_mean | max | logsumexp
-    "compute_embedding": True,                                 # считать ли эмбеддинг
-    "write_artifact": True,                                    # писать ли `.npy` и регистрировать relpath
-    "write_embedding_artifact": True,                          # (deprecated alias)
-    "compute_raw_norm": True,                                 # считать ли raw norm (иначе NaN)
-    "emit_extra_metrics": False                                # доп. метрики в features_flat
+    "fp16": True,                                             # Использовать float16 на GPU (только для CUDA)
+    "batch_size": 32,                                        # Размер батча для обработки чанков
+    "artifacts_dir": None,                                   # Путь к артефактам (по умолчанию: default_artifacts_dir())
+    "tokenizer_spec_name": "shared_tokenizer_v1",            # dp_models tokenizer spec
+    "max_chunk_tokens_model": 512,                            # Максимум токенов модели в чанке
+    "pooling_strategy": "length_weighted_mean",              # mean | length_weighted_mean | max | logsumexp
+    "compute_embedding": True,                                # считать ли эмбеддинг
+    "write_artifact": True,                                   # писать ли `.npy` и регистрировать relpath
+    "write_embedding_artifact": True,                         # (deprecated alias для write_artifact)
+    "compute_raw_norm": True,                                # считать ли raw norm (иначе NaN)
+    "emit_extra_metrics": False                              # зарезервировано: в v1.2.0 не влияет на features_flat (см. SCHEMA.md)
 }
 ```
+
+**Параметры**:
+- `model_name`: название модели sentence-transformers для эмбеддингов
+- `cache_*`: параметры кеширования (TTL, лимиты, очистка)
+- `device`: устройство для обработки (`"cpu"` или `"cuda"`)
+- `fp16`: использовать float16 на GPU (экономия памяти, минимальная потеря точности)
+- `batch_size`: размер батча для обработки чанков (больше → быстрее на GPU, но больше памяти)
+- `tokenizer_spec_name`: спецификация токенизатора из dp_models
+- `max_chunk_tokens_model`: максимальное количество токенов в одном чанке (для длинных текстов)
+- `pooling_strategy`: стратегия агрегации эмбеддингов чанков:
+  - `"mean"`: простое среднее
+  - `"length_weighted_mean"`: взвешенное среднее по длине чанка (default)
+  - `"max"`: максимум по каждой размерности
+  - `"logsumexp"`: стабильный logsumexp pooling
+- `compute_embedding`: feature-gating для вычисления эмбеддинга
+- `write_artifact`: сохранять ли `.npy` файл и регистрировать relpath в `doc.tp_artifacts`
+- `compute_raw_norm`: вычислять ли L2-норму необработанного вектора (до нормализации)
+- `emit_extra_metrics`: зарезервирован в v1.2.0 — **не** гейтит тайминги и chunking-статистику в `features_flat` (они заполняются на успешном пути как задокументировано в SCHEMA.md).
 
 ### Особенности
 

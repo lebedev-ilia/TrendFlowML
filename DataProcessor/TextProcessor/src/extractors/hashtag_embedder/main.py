@@ -35,8 +35,8 @@ class HashtagEmbedder(BaseExtractor):
         fp16: bool = True,
         batch_size: int = 128,
         require_hashtags: bool = False,
-        # Back-compat alias (deprecated): if True → require_hashtags=True
-        strict_missing_hashtags: bool = True,
+        # Back-compat alias (deprecated): if True → same as require_hashtags=True (default False so yaml require_hashtags:false is honored)
+        strict_missing_hashtags: bool = False,
         max_tags: int = 50,
         max_tag_len: int = 64,
         normalize_casefold: bool = True,
@@ -319,6 +319,9 @@ class HashtagEmbedder(BaseExtractor):
             return {
                 "device": self.device,
                 "version": self.VERSION,
+                "model_name": self.model_name,
+                "model_version": self.model_version,
+                "weights_digest": self.weights_digest,
                 "system": {
                     "pre_init": sys_before,
                     "post_init": sys_before,
@@ -343,6 +346,9 @@ class HashtagEmbedder(BaseExtractor):
             return {
                 "device": self.device,
                 "version": self.VERSION,
+                "model_name": self.model_name,
+                "model_version": self.model_version,
+                "weights_digest": self.weights_digest,
                 "system": {
                     "pre_init": sys_before,
                     "post_init": sys_before,
@@ -501,10 +507,11 @@ class HashtagEmbedder(BaseExtractor):
             tags_raw = getattr(doc, "hashtags", None)
             if tags_raw is None or not isinstance(tags_raw, list):
                 if self.require_hashtags:
-                    # Will be handled in per-doc result
-                    tags_raw = []
-                else:
-                    tags_raw = []
+                    raise RuntimeError(
+                        "HashtagEmbedder requires doc.hashtags list (missing). "
+                        "Ensure TagsExtractor ran with mutate_doc_hashtags=true and enable_extract_hashtags=true."
+                    )
+                tags_raw = []
 
             canonical, freq, n_truncated = self._canonicalize_tags(list(tags_raw))
             n_tags_in = len(tags_raw) if isinstance(tags_raw, list) else 0
@@ -603,6 +610,9 @@ class HashtagEmbedder(BaseExtractor):
                 results.append({
                     "device": self.device,
                     "version": self.VERSION,
+                    "model_name": self.model_name,
+                    "model_version": self.model_version,
+                    "weights_digest": self.weights_digest,
                     "system": {
                         "pre_init": sys_before,
                         "post_init": sys_before,
@@ -628,6 +638,9 @@ class HashtagEmbedder(BaseExtractor):
                 results.append({
                     "device": self.device,
                     "version": self.VERSION,
+                    "model_name": self.model_name,
+                    "model_version": self.model_version,
+                    "weights_digest": self.weights_digest,
                     "system": {
                         "pre_init": sys_before,
                         "post_init": sys_before,
@@ -711,8 +724,8 @@ class HashtagEmbedder(BaseExtractor):
                     "tp_hashemb_tag_count": float(int(len(canonical))),
                     "tp_hashemb_l2_norm": float(np.linalg.norm(mean_vec)),
                     "tp_hashemb_artifact_written": float(bool(artifact_written)),
-                    "tp_hashemb_cache_hit": 0.0,  # Cache not used in batch mode (could be added later)
-                    "tp_hashemb_encode_ms": float(round(t_enc_s * 1000.0 / n_docs, 3)) if t_enc_s == t_enc_s else float("nan"),  # Per-doc share
+                    "tp_hashemb_cache_hit": 0.0,  # batch path does not use per-doc disk cache
+                    "tp_hashemb_encode_ms": float(round(t_enc_s * 1000.0 / n_docs, 3)) if t_enc_s == t_enc_s else float("nan"),  # amortized share of shared encode across docs
                     "tp_hashemb_agg_ms": float(round(t_agg_s * 1000.0, 3)) if t_agg_s == t_agg_s else float("nan"),
                 })
             else:

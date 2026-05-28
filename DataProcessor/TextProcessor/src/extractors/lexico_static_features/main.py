@@ -69,7 +69,7 @@ def _truncate_text(text: str, *, max_chars: Optional[int]) -> Tuple[str, int, in
 
 
 class LexicalStatsExtractor(BaseExtractor):
-    VERSION = "1.1.0"
+    VERSION = "1.2.0"
 
     def __init__(
         self,
@@ -78,11 +78,12 @@ class LexicalStatsExtractor(BaseExtractor):
         enable_title: bool = True,
         enable_description: bool = True,
         enable_transcript: bool = True,
-        enable_emoji: bool = False,
+        require_transcript: bool = False,
+        enable_emoji: bool = True,
         enable_clickbait_heuristic: bool = True,
         transcript_source_policy: Literal["asr_only", "asr_then_legacy", "legacy_only"] = "asr_only",
         allow_legacy_transcripts: bool = False,  # legacy alias (deprecated)
-        emoji_policy: Literal["required", "optional"] = "required",
+        emoji_policy: Literal["required", "optional"] = "optional",
         max_title_chars: Optional[int] = None,
         max_description_chars: Optional[int] = None,
         max_transcript_chars: Optional[int] = None,
@@ -91,6 +92,7 @@ class LexicalStatsExtractor(BaseExtractor):
         self.enable_title = bool(enable_title)
         self.enable_description = bool(enable_description)
         self.enable_transcript = bool(enable_transcript)
+        self.require_transcript = bool(require_transcript)
         self.enable_emoji = bool(enable_emoji)
         self.enable_clickbait_heuristic = bool(enable_clickbait_heuristic)
         self.emoji_policy = str(emoji_policy)
@@ -157,6 +159,7 @@ class LexicalStatsExtractor(BaseExtractor):
                 "tp_lex_group_transcript_enabled": float(self.enable_transcript),
                 "tp_lex_group_emoji_enabled": float(self.enable_emoji),
                 "tp_lex_group_clickbait_enabled": float(self.enable_clickbait_heuristic),
+                "tp_lex_require_transcript_enabled": float(self.require_transcript),
                 "tp_lex_has_emoji_lib": float(_emoji is not None),
                 "tp_lex_emoji_dependency_missing_flag": float(self.enable_emoji and _emoji is None),
                 "tp_lex_transcript_source_policy_asr_only": float(self.transcript_source_policy == "asr_only"),
@@ -270,8 +273,16 @@ class LexicalStatsExtractor(BaseExtractor):
         has_transcript = bool(transcript.strip())
         present_any = bool(has_title or has_description or has_transcript)
 
+        if self.require_transcript and self.enable_transcript and not has_transcript:
+            raise RuntimeError(
+                "LexicalStatsExtractor: require_transcript=true but transcript text is empty after "
+                f"transcript_source_policy={self.transcript_source_policy!r}"
+            )
+
+        emoji_lib_ok = _emoji is not None
+
         def _is_emoji(ch: str) -> bool:
-            return (_emoji is not None) and (ch in _emoji.EMOJI_DATA)
+            return emoji_lib_ok and (ch in _emoji.EMOJI_DATA)
 
         # Title features
         title_len_words = float(len(title_tokens)) if has_title else float("nan")
@@ -279,7 +290,12 @@ class LexicalStatsExtractor(BaseExtractor):
         title_avg_word_len = float(np.mean([len(t) for t in title_tokens])) if title_tokens else float("nan")
         title_exclamation_count = float(title.count("!")) if has_title else float("nan")
         title_question_count = float(title.count("?")) if has_title else float("nan")
-        emoji_count_title = float(sum(1 for c in title if _is_emoji(c))) if (has_title and self.enable_emoji) else float("nan")
+        if not self.enable_emoji or not has_title:
+            emoji_count_title = float("nan")
+        elif not emoji_lib_ok:
+            emoji_count_title = float("nan")
+        else:
+            emoji_count_title = float(sum(1 for c in title if _is_emoji(c)))
         title_type_token_ratio = float(len(set(map(str.lower, title_tokens))) / max(1, len(title_tokens))) if title_tokens else float("nan")
         title_punct_ratio = float(sum(1 for c in title if _is_punct_symbol(c)) / max(1, len(title))) if has_title else float("nan")
         title_capital_words_ratio = float(sum(1 for t in title_tokens if t.isupper()) / max(1, len(title_tokens))) if title_tokens else float("nan")
@@ -292,11 +308,19 @@ class LexicalStatsExtractor(BaseExtractor):
         description_num_urls = float(len(_URL_RE.findall(description))) if has_description else float("nan")
         description_num_mentions = float(len(_MENTION_RE.findall(description))) if has_description else float("nan")
         description_has_timestamps_flag = float(bool(_TIMESTAMP_RE.search(description))) if has_description else float("nan")
-        emoji_count_description = float(sum(1 for c in description if _is_emoji(c))) if (has_description and self.enable_emoji) else float("nan")
+        if not self.enable_emoji or not has_description:
+            emoji_count_description = float("nan")
+        elif not emoji_lib_ok:
+            emoji_count_description = float("nan")
+        else:
+            emoji_count_description = float(sum(1 for c in description if _is_emoji(c)))
         # emoji diversity (по всем полям)
         all_text = (title or "") + "\n" + (description or "") + "\n" + (transcript or "")
-        all_emojis = [c for c in all_text if _is_emoji(c)] if self.enable_emoji else []
-        emoji_diversity = float(len(set(all_emojis)) / max(1, len(all_emojis))) if all_emojis else float("nan")
+        if self.enable_emoji and emoji_lib_ok:
+            all_emojis = [c for c in all_text if _is_emoji(c)]
+            emoji_diversity = float(len(set(all_emojis)) / max(1, len(all_emojis))) if all_emojis else float("nan")
+        else:
+            emoji_diversity = float("nan")
 
         # Transcript features
         transcript_len_words = float(len(trans_tokens)) if has_transcript else float("nan")
@@ -345,10 +369,6 @@ class LexicalStatsExtractor(BaseExtractor):
             title_clickbait_score = float(min(1.0, cb_signal / 3.0))
         else:
             title_clickbait_score = float("nan")
-
-        # Language detection removed from this extractor (dedicated component via dp_models if needed).
-        text_language = None
-        language_confidence = float("nan")
 
         # 59) orthographic_error_rate proxy: share of tokens not matching simple alpha pattern or too few vowels
         def _is_wellformed(tok: str) -> bool:
@@ -423,6 +443,7 @@ class LexicalStatsExtractor(BaseExtractor):
             "tp_lex_group_transcript_enabled": float(self.enable_transcript),
             "tp_lex_group_emoji_enabled": float(self.enable_emoji),
             "tp_lex_group_clickbait_enabled": float(self.enable_clickbait_heuristic),
+            "tp_lex_require_transcript_enabled": float(self.require_transcript),
             "tp_lex_has_emoji_lib": float(_emoji is not None),
             "tp_lex_emoji_dependency_missing_flag": float(self.enable_emoji and _emoji is None),
 

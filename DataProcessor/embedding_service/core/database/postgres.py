@@ -349,6 +349,56 @@ class PostgresEmbeddingStore:
         finally:
             self._put_conn(conn)
 
+    def get_labels(
+        self,
+        category: str,
+        embedding_model: Optional[str] = None,
+    ) -> List[Dict[str, Any]]:
+        """
+        Get label-space metadata for a category (WITHOUT embedding vectors).
+
+        This endpoint is used by semantic-head components to build a deterministic
+        UUID->int32 mapping and compute db_digest, without transferring heavy vectors.
+
+        Returns rows with keys:
+          - id (uuid)
+          - category (str)
+          - name (str|null)
+          - embedding_model (str)
+          - embedding_dim (int)
+          - metadata (dict|null)
+          - image_url (str|null)
+          - added_at (datetime)
+          - updated_at (datetime|null)
+        """
+        conn = self._get_conn()
+        try:
+            with conn.cursor(cursor_factory=RealDictCursor) as cur:
+                where_clauses = ["category = %s"]
+                params: List[Any] = [category]
+
+                if embedding_model:
+                    where_clauses.append("embedding_model = %s")
+                    params.append(embedding_model)
+
+                where_sql = " AND ".join(where_clauses)
+                query = f"""
+                    SELECT id, category, name, embedding_model, embedding_dim,
+                           metadata, image_url, added_at, updated_at
+                    FROM embeddings
+                    WHERE {where_sql}
+                    ORDER BY id;
+                """
+                cur.execute(query, params)
+                rows = cur.fetchall()
+                return [dict(r) for r in rows]
+        except Exception as e:
+            raise EmbeddingServiceError(
+                f"Failed to get labels: {e}", error_code="db_get_labels_failed"
+            ) from e
+        finally:
+            self._put_conn(conn)
+
     def close(self):
         """Close connection pool"""
         if hasattr(self, "pool"):

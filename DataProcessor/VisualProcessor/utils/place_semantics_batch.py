@@ -43,10 +43,28 @@ sys.path.insert(0, str(_place_semantics_path))
 
 # Import EmbeddingServiceClient (try full path first, then fallback to direct import)
 try:
-    from core.model_process.core_identity.place_semantics.embedding_service_client import EmbeddingServiceClient
+    from core.model_process.core_identity.place_semantics.utils.embedding_service_client import EmbeddingServiceClient
 except ImportError:
-    # Fallback: direct import (should work now since we added path)
-    from embedding_service_client import EmbeddingServiceClient
+    # Fallback: try direct import from utils directory
+    try:
+        _embedding_client_path = _place_semantics_path / "utils" / "embedding_service_client.py"
+        if _embedding_client_path.exists():
+            import importlib.util
+            spec_client = importlib.util.spec_from_file_location("embedding_service_client", str(_embedding_client_path))
+            if spec_client and spec_client.loader:
+                embedding_client_module = importlib.util.module_from_spec(spec_client)
+                spec_client.loader.exec_module(embedding_client_module)
+                EmbeddingServiceClient = embedding_client_module.EmbeddingServiceClient
+            else:
+                raise ImportError("Failed to load EmbeddingServiceClient")
+        else:
+            # Last fallback: try direct import (should work now since we added path)
+            from embedding_service_client import EmbeddingServiceClient
+    except ImportError:
+        raise ImportError(
+            f"place_semantics_batch | embedding_service_client not found. "
+            f"Expected at: {_place_semantics_path / 'utils' / 'embedding_service_client.py'}"
+        )
 
 # Import place_semantics functions
 _place_semantics_main = _place_semantics_path / "main.py"

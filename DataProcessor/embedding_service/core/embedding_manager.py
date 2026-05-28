@@ -182,6 +182,21 @@ class EmbeddingManager:
         
         return results
 
+    def get_labels(
+        self,
+        category: str,
+        embedding_model: Optional[str] = None,
+    ) -> List[Dict[str, Any]]:
+        """
+        Get label-space metadata for a category (WITHOUT embedding vectors).
+
+        Used by semantic heads to:
+        - build deterministic UUID->int32 mapping,
+        - compute db_digest,
+        without transferring heavy embeddings.
+        """
+        return self.db_store.get_labels(category, embedding_model)
+
     def batch_add(
         self,
         *,

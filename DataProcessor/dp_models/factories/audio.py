@@ -499,7 +499,10 @@ def create_pyannote_speaker_diarization_pipeline(*, checkpoint_path: str = None)
     # If checkpoint_path is provided, load from local directory
     if checkpoint_path and os.path.exists(checkpoint_path):
         try:
-            pipeline = Pipeline.from_pretrained(checkpoint_path)
+            try:
+                pipeline = Pipeline.from_pretrained(checkpoint_path, local_files_only=True)
+            except TypeError:
+                pipeline = Pipeline.from_pretrained(checkpoint_path)
             return pipeline
         except Exception as e:
             raise RuntimeError(f"Failed to load pyannote pipeline from {checkpoint_path}: {e}") from e

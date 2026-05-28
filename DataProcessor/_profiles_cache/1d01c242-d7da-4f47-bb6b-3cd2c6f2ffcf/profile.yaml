@@ -1,0 +1,15 @@
+config_hash: ingestion-e2e-full-max-global-yaml
+visual: {}
+processors:
+  segmenter:
+    enabled: true
+    required: true
+  audio:
+    enabled: true
+    required: false
+  text:
+    enabled: true
+    required: false
+  visual:
+    enabled: true
+    required: false

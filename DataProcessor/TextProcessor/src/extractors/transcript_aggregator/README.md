@@ -4,9 +4,15 @@
 
 Агрегирует **эмбеддинги чанков транскрипта** в единые векторные представления. Использует два метода агрегации: взвешенное среднее (weighted mean) с экспоненциальным затуханием и опциональными весами уверенности ASR, а также max pooling. Обрабатывает несколько источников транскрипта (whisper, youtube_auto) и создает комбинированные агрегаты.
 
-**Версия**: 1.2.0  
+**Версия**: 1.3.0  
 **Категория**: text embeddings aggregation  
-**GPU**: не требуется (только tensor операции на CPU)
+**GPU**: не требуется (tensor ops обычно на CPU)
+
+**Диапазоны, тайминги и валидатор среза** (`text_features.npz`): [`docs/FEATURE_DESCRIPTION.md`](docs/FEATURE_DESCRIPTION.md) · [`utils/validate_transcript_aggregator_text_npz.py`](utils/validate_transcript_aggregator_text_npz.py) (`--struct`, `--ranges`, `--timings`)
+
+**Контракт `features_flat`**: [SCHEMA.md](SCHEMA.md) · machine: [`../../schemas/transcript_aggregator_output_v1.json`](../../schemas/transcript_aggregator_output_v1.json) · Audit v3: [`../../docs/audit_v3/components/transcript_aggregator_AUDIT_V3_REPORT.md`](../../docs/audit_v3/components/transcript_aggregator_AUDIT_V3_REPORT.md) · **Audit v4:** [`../../../../docs/audit_v4/components/text_processor/transcript_aggregator_audit_v4.md`](../../../../docs/audit_v4/components/text_processor/transcript_aggregator_audit_v4.md) · **L2 stats:** [`../../../../storage/audit_v4/transcript_aggregator_l2/transcript_aggregator_audit_v4_stats.json`](../../../../storage/audit_v4/transcript_aggregator_l2/transcript_aggregator_audit_v4_stats.json) (tooling: `scripts/audit_v4_npz_stats.py`)
+
+**Табличный слой / набор B:** девять extra-полей (`n_chunks`, `mean_std`, `max_std` по источникам) при **дефолтном `emit_extra_metrics=false`** в merged NPZ — **NaN** (это ожидаемо, не «битый» табличный слой). Для корреляций по числу чанков и std задайте в профиле прогона **`emit_extra_metrics=true`**; **`compute_std=true`** нужен отдельно для колонок **`*_mean_std`** / **`*_max_std`**.
 
 ### Входы
 
@@ -22,16 +28,19 @@
 
 #### Основные результаты
 
-- `features_flat`: числовые скаляры `tp_tragg_*` для dataset/UI
+- `features_flat`: ровно **19** ключей `tp_tragg_*` (фиксированный порядок — JSON-схема).
+  - **10 core**: `present`, `present_whisper`, `present_youtube` (источник **`youtube_auto`**), `present_combined`, `decay_rate`, флаги `compute_*`, `write_artifacts`.
+  - **9 extra** (`whisper` / `youtube_auto` / `combined`: `n_chunks`, `mean_std`, `max_std`): при **`emit_extra_metrics=False`** все **NaN**; при **`compute_std=False`** поля **`*_mean_std`** / **`*_max_std`** — **NaN**.
 
 **Важно**: компонент **не возвращает абсолютные пути** к `.npy` в `result`.  
 Сгенерированные `.npy` живут в per-run `text_processor/_artifacts/` и перечисляются в `manifest.json.artifacts[]`.
 
 #### Метаданные
 
-- `device`: устройство обработки (всегда `"cpu"`)
-- `version`: версия экстрактора (`"1.0.0"`)
-- `system`: системные метрики (pre_init, post_init, post_process, peaks)
+- `device`: устройство из конфига (инференс модели не выполняется)
+- `version`: версия экстрактора (**`1.3.0`**)
+- `model_name`, `model_version`, `weights_digest`: **должны совпадать** с **`TranscriptChunkEmbedder`** (resolve через **`dp_models`** в **`__init__`**, без загрузки весов для forward)
+- `system`: pre/post init (resolve), post_process, peaks (**`gpu_peak_mb`** для единообразия)
 - `timings_s`: словарь с таймингами
   - `load`: время загрузки эмбеддингов (секунды)
   - `aggregate`: время агрегации (секунды)
@@ -43,9 +52,10 @@
 #### 1. Weighted Mean (взвешенное среднее)
 
 - **Экспоненциальное затухание**: веса уменьшаются экспоненциально от начала к концу (`decay_rate`)
-- **ASR confidence**: если доступны веса уверенности Whisper, они умножаются на веса затухания
+- **ASR confidence**: если доступны веса уверенности Whisper из `doc.tp_artifacts["transcripts"][source]["chunk_confidence"]`, они умножаются на веса затухания
 - **Нормализация весов**: веса нормализуются к сумме 1.0
 - **L2-нормализация**: итоговый вектор нормализуется к единичной длине
+- **Streaming computation**: вычисление выполняется потоково для экономии памяти
 
 Формула весов:
 ```
@@ -64,11 +74,11 @@ weights = weights / sum(weights)
 Экстрактор обрабатывает источники независимо и создает комбинированные агрегаты:
 
 1. **whisper**: если доступны эмбеддинги чанков whisper
-   - Использует `whisper_confidence` для взвешивания (если доступно)
+   - Использует `doc.tp_artifacts["transcripts"]["whisper"]["chunk_confidence"]` для взвешивания (если доступно)
 2. **youtube_auto**: если доступны эмбеддинги чанков youtube_auto
-   - Не использует веса уверенности (недоступны)
-3. **combined**: если доступен хотя бы один источник
-   - Объединяет все чанки из всех источников
+   - Не использует веса уверенности (недоступны для этого источника)
+3. **combined**: если доступен хотя бы один источник и `compute_combined=True`
+   - Объединяет все чанки из всех источников в порядке `sources`
    - Не использует веса уверенности для комбинированного агрегата
 
 ### Конфигурация
@@ -76,10 +86,17 @@ weights = weights / sum(weights)
 ```python
 {
     "artifacts_dir": None,                                    # Путь к артефактам (по умолчанию: из env)
-    "model_name": "sentence-transformers/all-MiniLM-L6-v2",  # Имя модели (для хеширования, должно совпадать с transcript_chunk_embedder)
+    "model_name": "intfloat/multilingual-e5-large",          # Audit v3; должно совпадать с transcript_chunk_embedder
     "device": "cpu",                                          # Устройство (не используется, всегда CPU)
-    "decay_rate": 0.01                                        # Коэффициент экспоненциального затухания для weighted mean
-    "compute_std": false                                      # Если true — считает std (дороже), иначе std=NaN
+    "decay_rate": 0.01,                                       # Коэффициент экспоненциального затухания для weighted mean
+    "compute_std": False,                                     # Если true — считает std (дороже), иначе std=NaN
+    "compute_mean": True,                                     # Вычислять weighted mean агрегат
+    "compute_max": True,                                      # Вычислять max pooling агрегат
+    "compute_combined": True,                                 # Вычислять комбинированный агрегат из всех источников
+    "write_artifacts": True,                                  # Сохранять агрегированные векторы в artifacts
+    "require_chunks": False,                                  # Если True и нет chunk embeddings → ошибка (fail-fast)
+    "sources": ["whisper", "youtube_auto"],                   # Список источников для обработки
+    "emit_extra_metrics": False                               # Включать дополнительные метрики (n_chunks, std по источникам)
 }
 ```
 

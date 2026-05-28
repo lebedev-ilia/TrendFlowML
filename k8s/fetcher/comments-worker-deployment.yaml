@@ -1,0 +1,86 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: fetcher-comments-worker
+  labels:
+    app: fetcher
+    component: comments-worker
+spec:
+  replicas: 2  # Начать с 2 worker'ов
+  selector:
+    matchLabels:
+      app: fetcher
+      component: comments-worker
+  template:
+    metadata:
+      labels:
+        app: fetcher
+        component: comments-worker
+    spec:
+      containers:
+      - name: worker
+        image: trendflow-fetcher:latest  # Замените на ваш registry
+        imagePullPolicy: Always
+        command: ["celery", "-A", "fetcher.celery_app", "worker", "--loglevel=info", "--queues=fetch.comments", "--concurrency=2"]
+        env:
+        - name: POSTGRES_DSN
+          valueFrom:
+            secretKeyRef:
+              name: fetcher-secrets
+              key: postgres-dsn
+        - name: REDIS_URL
+          valueFrom:
+            secretKeyRef:
+              name: fetcher-secrets
+              key: redis-url
+        - name: S3_ENDPOINT_URL
+          valueFrom:
+            configMapKeyRef:
+              name: fetcher-config
+              key: s3-endpoint-url
+        - name: S3_ACCESS_KEY_ID
+          valueFrom:
+            secretKeyRef:
+              name: fetcher-secrets
+              key: s3-access-key
+        - name: S3_SECRET_ACCESS_KEY
+          valueFrom:
+            secretKeyRef:
+              name: fetcher-secrets
+              key: s3-secret-key
+        - name: S3_BUCKET_RAW
+          valueFrom:
+            configMapKeyRef:
+              name: fetcher-config
+              key: s3-bucket-raw
+        - name: LOG_LEVEL
+          valueFrom:
+            configMapKeyRef:
+              name: fetcher-config
+              key: log-level
+        resources:
+          requests:
+            cpu: "1"        # 1 CPU (согласно чеклисту)
+            memory: "1Gi"   # 1 GB RAM (согласно чеклисту)
+          limits:
+            cpu: "2"        # Максимум 2 CPU
+            memory: "2Gi"   # Максимум 2 GB RAM
+        livenessProbe:
+          exec:
+            command:
+            - /bin/sh
+            - -c
+            - "celery -A fetcher.celery_app inspect ping -d celery@$(hostname) || exit 1"
+          initialDelaySeconds: 60
+          periodSeconds: 30
+          timeoutSeconds: 10
+        readinessProbe:
+          exec:
+            command:
+            - /bin/sh
+            - -c
+            - "celery -A fetcher.celery_app inspect ping -d celery@$(hostname) || exit 1"
+          initialDelaySeconds: 30
+          periodSeconds: 10
+          timeoutSeconds: 5
+

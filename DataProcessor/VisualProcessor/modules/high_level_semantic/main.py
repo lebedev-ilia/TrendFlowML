@@ -14,11 +14,23 @@ from __future__ import annotations
 import argparse
 import os
 import sys
+from pathlib import Path
 from typing import List, Optional
 
-sys.path.append(os.path.dirname(os.path.dirname(os.path.dirname(__file__))))
+_vp = str(Path(__file__).resolve().parents[2])
+if _vp not in sys.path:
+    sys.path.insert(0, _vp)
+elif sys.path[0] != _vp:
+    try:
+        sys.path.remove(_vp)
+    except ValueError:
+        pass
+    sys.path.insert(0, _vp)
+_repo_root = str(Path(_vp).parent)
+if _repo_root not in sys.path:
+    sys.path.append(_repo_root)
 
-from modules.high_level_semantic.hl_semantic import HighLevelSemanticModule
+from modules.high_level_semantic.utils.hl_semantic import HighLevelSemanticModule
 from utils.logger import get_logger
 
 MODULE_NAME = "high_level_semantic"
@@ -38,6 +50,7 @@ def run_pipeline(
     progress_every_frames: int = 50,
     semantic_jump_topk_events: int = 256,
     semantic_jump_min_strength: float = 0.25,
+    semantic_jump_min_distance_frames: int = 6,
 ) -> str:
     if not rs_path:
         raise ValueError(f"{MODULE_NAME} | rs_path is required")
@@ -53,6 +66,7 @@ def run_pipeline(
         progress_every_frames=progress_every_frames,
         semantic_jump_topk_events=semantic_jump_topk_events,
         semantic_jump_min_strength=semantic_jump_min_strength,
+        semantic_jump_min_distance_frames=semantic_jump_min_distance_frames,
     )
     return module.run(frames_dir=frames_dir, config={})
 
@@ -106,6 +120,7 @@ def main(argv: Optional[List[str]] = None) -> int:
     parser.add_argument("--progress-every-frames", type=int, default=50, help="Emit progress at least every N frames (unit=frame).")
     parser.add_argument("--semantic-jump-topk-events", type=int, default=256, help="Max semantic-jump events to emit.")
     parser.add_argument("--semantic-jump-min-strength", type=float, default=0.25, help="Min semantic jump strength for event candidates (1-cosine).")
+    parser.add_argument("--semantic-jump-min-distance-frames", type=int, default=6, help="Min distance (frames) between semantic-jump peaks (NMS).")
     parser.add_argument(
         "--log-level",
         type=str,
@@ -161,6 +176,7 @@ def main(argv: Optional[List[str]] = None) -> int:
             progress_every_frames=int(args.progress_every_frames),
             semantic_jump_topk_events=int(args.semantic_jump_topk_events),
             semantic_jump_min_strength=float(args.semantic_jump_min_strength),
+            semantic_jump_min_distance_frames=int(args.semantic_jump_min_distance_frames),
         )
 
         logger.info(f"Обработка завершена. Результаты сохранены: {saved_path}")

@@ -1,0 +1,223 @@
+{
+  "schema_system_version": "vp_schema_v1",
+  "schema_version": "qa_embedding_pairs_extractor_output_v1",
+  "producer": "qa_embedding_pairs_extractor",
+  "artifact_kind": "extractor_features_flat",
+  "allow_extra_keys": false,
+  "description": "Logical contract for QAEmbeddingPairsExtractor.features_flat. Question-like spans from title/description/ASR/comment texts → L2-normalized row-wise embeddings in qa_question_embeddings.npy (not Q–A pairwise structure).",
+  "meta": {
+    "required_keys": [],
+    "optional_keys": []
+  },
+  "fields": {
+    "tp_qa_present": {
+      "required": true,
+      "tier": "model_facing",
+      "dtype": "float32",
+      "shape": []
+    },
+    "tp_qa_disabled_by_policy": {
+      "required": true,
+      "tier": "analytics",
+      "dtype": "float32",
+      "shape": []
+    },
+    "tp_qa_enabled": {
+      "required": true,
+      "tier": "analytics",
+      "dtype": "float32",
+      "shape": []
+    },
+    "tp_qa_num_questions": {
+      "required": true,
+      "tier": "model_facing",
+      "dtype": "float32",
+      "shape": []
+    },
+    "tp_qa_embedding_dim": {
+      "required": true,
+      "tier": "model_facing",
+      "dtype": "float32",
+      "shape": [],
+      "description": "NaN when no questions encoded"
+    },
+    "tp_qa_q_title": {
+      "required": true,
+      "tier": "analytics",
+      "dtype": "float32",
+      "shape": []
+    },
+    "tp_qa_q_description": {
+      "required": true,
+      "tier": "analytics",
+      "dtype": "float32",
+      "shape": []
+    },
+    "tp_qa_q_transcript": {
+      "required": true,
+      "tier": "analytics",
+      "dtype": "float32",
+      "shape": []
+    },
+    "tp_qa_q_comments": {
+      "required": true,
+      "tier": "analytics",
+      "dtype": "float32",
+      "shape": []
+    },
+    "tp_qa_allow_legacy_transcripts": {
+      "required": true,
+      "tier": "analytics",
+      "dtype": "float32",
+      "shape": []
+    },
+    "tp_qa_transcript_source_policy_asr_only": {
+      "required": true,
+      "tier": "analytics",
+      "dtype": "float32",
+      "shape": []
+    },
+    "tp_qa_transcript_source_policy_asr_then_legacy": {
+      "required": true,
+      "tier": "analytics",
+      "dtype": "float32",
+      "shape": []
+    },
+    "tp_qa_transcript_source_policy_legacy_only": {
+      "required": true,
+      "tier": "analytics",
+      "dtype": "float32",
+      "shape": []
+    },
+    "tp_qa_use_title": {
+      "required": true,
+      "tier": "analytics",
+      "dtype": "float32",
+      "shape": []
+    },
+    "tp_qa_use_description": {
+      "required": true,
+      "tier": "analytics",
+      "dtype": "float32",
+      "shape": []
+    },
+    "tp_qa_use_transcript": {
+      "required": true,
+      "tier": "analytics",
+      "dtype": "float32",
+      "shape": []
+    },
+    "tp_qa_use_comments": {
+      "required": true,
+      "tier": "analytics",
+      "dtype": "float32",
+      "shape": []
+    },
+    "tp_qa_require_min_questions": {
+      "required": true,
+      "tier": "analytics",
+      "dtype": "float32",
+      "shape": []
+    },
+    "tp_qa_max_questions_total": {
+      "required": true,
+      "tier": "analytics",
+      "dtype": "float32",
+      "shape": []
+    },
+    "tp_qa_max_questions_per_source": {
+      "required": true,
+      "tier": "analytics",
+      "dtype": "float32",
+      "shape": []
+    },
+    "tp_qa_max_comments": {
+      "required": true,
+      "tier": "analytics",
+      "dtype": "float32",
+      "shape": []
+    },
+    "tp_qa_max_chars_per_comment": {
+      "required": true,
+      "tier": "analytics",
+      "dtype": "float32",
+      "shape": []
+    },
+    "tp_qa_max_transcript_chars": {
+      "required": true,
+      "tier": "analytics",
+      "dtype": "float32",
+      "shape": []
+    },
+    "tp_qa_min_chars_per_question": {
+      "required": true,
+      "tier": "analytics",
+      "dtype": "float32",
+      "shape": []
+    },
+    "tp_qa_max_question_chars": {
+      "required": true,
+      "tier": "analytics",
+      "dtype": "float32",
+      "shape": []
+    },
+    "tp_qa_dedup_questions": {
+      "required": true,
+      "tier": "analytics",
+      "dtype": "float32",
+      "shape": []
+    },
+    "tp_qa_write_question_hashes_artifact_enabled": {
+      "required": true,
+      "tier": "analytics",
+      "dtype": "float32",
+      "shape": []
+    },
+    "tp_qa_write_question_source_ids_artifact_enabled": {
+      "required": true,
+      "tier": "analytics",
+      "dtype": "float32",
+      "shape": []
+    },
+    "tp_qa_hashes_written": {
+      "required": true,
+      "tier": "analytics",
+      "dtype": "float32",
+      "shape": []
+    },
+    "tp_qa_source_ids_written": {
+      "required": true,
+      "tier": "analytics",
+      "dtype": "float32",
+      "shape": []
+    },
+    "tp_qa_questions_per_min": {
+      "required": true,
+      "tier": "analytics",
+      "dtype": "float32",
+      "shape": [],
+      "description": "NaN when emit_extra_metrics=false; valid empty + extra → 0.0 if duration ok, else NaN"
+    },
+    "tp_qa_questions_per_1k_chars": {
+      "required": true,
+      "tier": "analytics",
+      "dtype": "float32",
+      "shape": [],
+      "description": "NaN when emit_extra_metrics=false; valid empty with extra → NaN"
+    },
+    "tp_qa_mean_cosine_to_centroid": {
+      "required": true,
+      "tier": "analytics",
+      "dtype": "float32",
+      "shape": [],
+      "description": "NaN when emit_extra_metrics=false or fewer than 2 question embeddings"
+    },
+    "tp_qa_mean_cosine_to_centroid_present": {
+      "required": true,
+      "tier": "analytics",
+      "dtype": "float32",
+      "shape": [],
+      "description": "1.0 only when emit_extra_metrics and N>=2 and centroid defined"
+    }
+  }
+}

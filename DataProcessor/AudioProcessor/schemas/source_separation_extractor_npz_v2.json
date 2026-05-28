@@ -1,0 +1,105 @@
+{
+  "schema_system_version": "vp_schema_v1",
+  "schema_version": "source_separation_extractor_npz_v2",
+  "producer": "source_separation_extractor",
+  "artifact_kind": "npz",
+  "allow_extra_keys": false,
+  "meta": {
+    "required_keys": [
+      "producer",
+      "producer_version",
+      "schema_version",
+      "created_at",
+      "platform_id",
+      "video_id",
+      "run_id",
+      "config_hash",
+      "sampling_policy_version",
+      "dataprocessor_version",
+      "status",
+      "empty_reason",
+      "models_used",
+      "model_signature",
+      "stage_timings_ms"
+    ],
+    "optional_keys": [
+      "device_used",
+      "scheduler_knobs",
+      "resource_metrics",
+      "error",
+      "model_name",
+      "weights_digest",
+      "source_separation_contract_version",
+      "features_enabled"
+    ]
+  },
+  "fields": {
+    "feature_names": { "required": true, "tier": "model_facing", "dtype": "object", "shape": ["F"] },
+    "feature_values": { "required": true, "tier": "model_facing", "dtype": "float32", "shape": ["F"] },
+
+    "segment_start_sec": { "required": true, "tier": "analytics", "dtype": "float32", "shape": ["N"] },
+    "segment_end_sec": { "required": true, "tier": "analytics", "dtype": "float32", "shape": ["N"] },
+    "segment_center_sec": { "required": true, "tier": "analytics", "dtype": "float32", "shape": ["N"] },
+    "segment_mask": { "required": true, "tier": "analytics", "dtype": "bool", "shape": ["N"] },
+
+    "source_order": { "required": true, "tier": "analytics", "dtype": "object", "shape": [4] },
+    "share_mean": { "required": true, "tier": "analytics", "dtype": "float32", "shape": [4] },
+
+    "share_std": { "required": false, "tier": "analytics", "dtype": "float32", "shape": [4] },
+    "share_sequence": { "required": false, "tier": "analytics", "dtype": "float32", "shape": ["N", 4] },
+    "energy_sequence": { "required": false, "tier": "analytics", "dtype": "float32", "shape": ["N", 4] },
+
+    "source_distribution_ratio": { "required": true, "tier": "analytics", "dtype": "float32", "shape": [4] },
+    "source_segments_count": { "required": true, "tier": "analytics", "dtype": "int32", "shape": [4] },
+    "source_duration_sec": { "required": true, "tier": "analytics", "dtype": "float32", "shape": [4] },
+
+    "source_entropy_mean": { "required": false, "tier": "analytics", "dtype": "float32", "shape": [] },
+    "source_entropy_std": { "required": false, "tier": "analytics", "dtype": "float32", "shape": [] },
+    "energy_balance_mean": { "required": false, "tier": "analytics", "dtype": "float32", "shape": [] },
+    "vocals_presence_ratio": { "required": false, "tier": "analytics", "dtype": "float32", "shape": [] },
+    "drums_flux": { "required": false, "tier": "analytics", "dtype": "float32", "shape": [] },
+    "bass_floor_p20": { "required": false, "tier": "analytics", "dtype": "float32", "shape": [] },
+
+    "vocals_delta_mean": { "required": false, "tier": "analytics", "dtype": "float32", "shape": [] },
+    "vocals_delta_std": { "required": false, "tier": "analytics", "dtype": "float32", "shape": [] },
+    "vocals_delta_max": { "required": false, "tier": "analytics", "dtype": "float32", "shape": [] },
+    "drums_delta_mean": { "required": false, "tier": "analytics", "dtype": "float32", "shape": [] },
+    "drums_delta_std": { "required": false, "tier": "analytics", "dtype": "float32", "shape": [] },
+    "drums_delta_max": { "required": false, "tier": "analytics", "dtype": "float32", "shape": [] },
+    "bass_delta_mean": { "required": false, "tier": "analytics", "dtype": "float32", "shape": [] },
+    "bass_delta_std": { "required": false, "tier": "analytics", "dtype": "float32", "shape": [] },
+    "bass_delta_max": { "required": false, "tier": "analytics", "dtype": "float32", "shape": [] },
+    "other_delta_mean": { "required": false, "tier": "analytics", "dtype": "float32", "shape": [] },
+    "other_delta_std": { "required": false, "tier": "analytics", "dtype": "float32", "shape": [] },
+    "other_delta_max": { "required": false, "tier": "analytics", "dtype": "float32", "shape": [] },
+
+    "vocals_stability": { "required": false, "tier": "analytics", "dtype": "float32", "shape": [] },
+    "drums_stability": { "required": false, "tier": "analytics", "dtype": "float32", "shape": [] },
+    "bass_stability": { "required": false, "tier": "analytics", "dtype": "float32", "shape": [] },
+    "other_stability": { "required": false, "tier": "analytics", "dtype": "float32", "shape": [] },
+
+    "vocals_mean_share": { "required": false, "tier": "analytics", "dtype": "float32", "shape": [] },
+    "drums_mean_share": { "required": false, "tier": "analytics", "dtype": "float32", "shape": [] },
+    "bass_mean_share": { "required": false, "tier": "analytics", "dtype": "float32", "shape": [] },
+    "other_mean_share": { "required": false, "tier": "analytics", "dtype": "float32", "shape": [] },
+    "vocals_dominance_ratio": { "required": false, "tier": "analytics", "dtype": "float32", "shape": [] },
+    "drums_dominance_ratio": { "required": false, "tier": "analytics", "dtype": "float32", "shape": [] },
+    "bass_dominance_ratio": { "required": false, "tier": "analytics", "dtype": "float32", "shape": [] },
+    "other_dominance_ratio": { "required": false, "tier": "analytics", "dtype": "float32", "shape": [] },
+
+    "quality_share_mean_min": { "required": false, "tier": "analytics", "dtype": "float32", "shape": [] },
+    "quality_share_mean_max": { "required": false, "tier": "analytics", "dtype": "float32", "shape": [] },
+    "quality_share_mean_std": { "required": false, "tier": "analytics", "dtype": "float32", "shape": [] },
+    "quality_share_std_mean": { "required": false, "tier": "analytics", "dtype": "float32", "shape": [] },
+    "quality_share_std_max": { "required": false, "tier": "analytics", "dtype": "float32", "shape": [] },
+    "quality_share_sequence_min": { "required": false, "tier": "analytics", "dtype": "float32", "shape": [] },
+    "quality_share_sequence_max": { "required": false, "tier": "analytics", "dtype": "float32", "shape": [] },
+    "quality_share_sequence_mean": { "required": false, "tier": "analytics", "dtype": "float32", "shape": [] },
+    "quality_energy_sequence_min": { "required": false, "tier": "analytics", "dtype": "float32", "shape": [] },
+    "quality_energy_sequence_max": { "required": false, "tier": "analytics", "dtype": "float32", "shape": [] },
+    "quality_energy_sequence_mean": { "required": false, "tier": "analytics", "dtype": "float32", "shape": [] },
+
+    "meta": { "required": true, "tier": "debug", "dtype": "object", "shape": [] }
+  }
+}
+

@@ -1,0 +1,117 @@
+{
+  "schema_system_version": "vp_schema_v1",
+  "schema_version": "title_embedder_output_v1",
+  "producer": "title_embedder",
+  "artifact_kind": "extractor_features_flat",
+  "allow_extra_keys": false,
+  "description": "Logical contract for TitleEmbedder.result.features_flat merged into text_features.npz (text_npz_v1). Dense vector is stored in title_embedding.npy, not in features_flat.",
+  "meta": {
+    "required_keys": [],
+    "optional_keys": []
+  },
+  "fields": {
+    "tp_titleemb_present": {
+      "required": true,
+      "tier": "model_facing",
+      "dtype": "float32",
+      "shape": [],
+      "description": "1.0 if embedding was computed"
+    },
+    "tp_titleemb_dim": {
+      "required": true,
+      "tier": "model_facing",
+      "dtype": "float32",
+      "shape": [],
+      "description": "Embedding dimension or NaN"
+    },
+    "tp_titleemb_norm_raw": {
+      "required": true,
+      "tier": "analytics",
+      "dtype": "float32",
+      "shape": [],
+      "description": "L2 norm of raw vector before normalization, or NaN"
+    },
+    "tp_titleemb_l2_norm": {
+      "required": true,
+      "tier": "model_facing",
+      "dtype": "float32",
+      "shape": [],
+      "description": "L2 norm of returned vector (expected ~1)"
+    },
+    "tp_titleemb_title_present": {
+      "required": true,
+      "tier": "model_facing",
+      "dtype": "float32",
+      "shape": [],
+      "description": "1.0 if normalized title is non-empty"
+    },
+    "tp_titleemb_require_title_enabled": {
+      "required": true,
+      "tier": "analytics",
+      "dtype": "float32",
+      "shape": []
+    },
+    "tp_titleemb_compute_enabled": {
+      "required": true,
+      "tier": "analytics",
+      "dtype": "float32",
+      "shape": []
+    },
+    "tp_titleemb_write_artifact_enabled": {
+      "required": true,
+      "tier": "analytics",
+      "dtype": "float32",
+      "shape": []
+    },
+    "tp_titleemb_artifact_written": {
+      "required": true,
+      "tier": "analytics",
+      "dtype": "float32",
+      "shape": []
+    },
+    "tp_titleemb_cache_enabled": {
+      "required": true,
+      "tier": "analytics",
+      "dtype": "float32",
+      "shape": []
+    },
+    "tp_titleemb_cache_hit": {
+      "required": true,
+      "tier": "analytics",
+      "dtype": "float32",
+      "shape": [],
+      "description": "0/1 if cache on; may be NaN when cache disabled on some paths"
+    },
+    "tp_titleemb_fp16": {
+      "required": true,
+      "tier": "analytics",
+      "dtype": "float32",
+      "shape": []
+    },
+    "tp_titleemb_device_cuda": {
+      "required": true,
+      "tier": "analytics",
+      "dtype": "float32",
+      "shape": []
+    },
+    "tp_titleemb_model_digest_u24": {
+      "required": true,
+      "tier": "model_facing",
+      "dtype": "float32",
+      "shape": [],
+      "description": "First 6 hex chars of weights_digest as uint-ish float"
+    },
+    "tp_titleemb_encode_ms": {
+      "required": true,
+      "tier": "analytics",
+      "dtype": "float32",
+      "shape": []
+    },
+    "tp_titleemb_compute_raw_norm": {
+      "required": true,
+      "tier": "analytics",
+      "dtype": "float32",
+      "shape": []
+    }
+  }
+}

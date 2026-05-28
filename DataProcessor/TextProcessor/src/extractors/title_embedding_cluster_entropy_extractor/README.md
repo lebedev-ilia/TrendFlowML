@@ -2,54 +2,49 @@
 
 ### Назначение
 
-Вычисляет **энтропию распределения** эмбеддинга заголовка по кластерам (по общей таксономии `semantic_clusters_v1`). Компонент проецирует title embedding через PCA, считает cosine к centroid’ам, применяет softmax с температурой к top‑K и вычисляет энтропию (а также нормализованную энтропию и perplexity).
+Вычисляет **энтропию распределения** эмбеддинга заголовка по кластерам (общая таксономия `semantic_clusters_v1` через **`dp_models`**). Проекция **PCA**, cosine к **L2-нормированным** центроидам, **softmax** с температурой на **top‑K**, затем энтропия / нормированная энтропия / perplexity.
 
-**Версия**: 1.2.0  
+**Версия**: 1.3.0  
 **Категория**: text, clustering, entropy  
-**GPU**: не требуется (опционально FAISS, если доступен)
+**GPU**: не требуется (опционально **FAISS** IndexFlatIP)
+
+**Диапазоны и валидатор среза** (`text_features.npz`): [`docs/FEATURE_DESCRIPTION.md`](docs/FEATURE_DESCRIPTION.md) · [`utils/validate_title_embedding_cluster_entropy_extractor_text_npz.py`](utils/validate_title_embedding_cluster_entropy_extractor_text_npz.py)
+
+**Контракт Audit v3**: [SCHEMA.md](./SCHEMA.md) · machine: [`schemas/title_embedding_cluster_entropy_extractor_output_v1.json`](../../schemas/title_embedding_cluster_entropy_extractor_output_v1.json) · **Audit v4:** [`../../../../docs/audit_v4/components/text_processor/title_embedding_cluster_entropy_extractor_audit_v4.md`](../../../../docs/audit_v4/components/text_processor/title_embedding_cluster_entropy_extractor_audit_v4.md) · **L2 stats:** [`../../../../storage/audit_v4/title_embedding_cluster_entropy_extractor_l2/title_embedding_cluster_entropy_extractor_audit_v4_stats.json`](../../../../storage/audit_v4/title_embedding_cluster_entropy_extractor_l2/title_embedding_cluster_entropy_extractor_audit_v4_stats.json) (tooling: `scripts/audit_v4_npz_stats.py`)
 
 ### Входы
 
-- **Title embedding**: должен быть создан `title_embedder` и зарегистрирован в:
-  - `doc.tp_artifacts["embeddings"]["title"]["relpath"]`
-- **Кластера / PCA**: строго через `dp_models` (offline + reproducible):
-  - spec: `semantic_clusters_v1` (по умолчанию)
+- **Title embedding**: `title_embedder` → `doc.tp_artifacts["embeddings"]["title"]["relpath"]`
+- **Кластера / PCA**: `dp_models`, spec `clusters_spec_name` (по умолчанию `semantic_clusters_v1`)
 
 ### Выходы
 
-Экстрактор возвращает `result.features_flat` (A-policy, только scalars) + `title_cluster_entropy_meta` (privacy-safe, без путей и raw).
+`result.features_flat` — **24** фиксированных ключа (все ветки); `result.title_cluster_entropy_meta`.
 
-#### `features_flat` (основные)
+#### `features_flat` (сводка)
 
-- `tp_titleclent_present` (0/1)
-- `tp_titleclent_entropy_raw` (float, NaN если empty)
-- `tp_titleclent_entropy_norm` (float, NaN если empty; \(H/\log(K)\))
-- `tp_titleclent_perplexity` (float, NaN если empty; \(e^H\))
-- `tp_titleclent_distinct_clusters_topk` (float; NaN если empty)
-- `tp_titleclent_top_k_slots` (float; конфиг)
-- `tp_titleclent_top_k_used` (float; фактический K = min(top_k_slots, n_clusters))
-- `tp_titleclent_temperature` (float)
-- `tp_titleclent_title_present` (0/1)
-- `tp_titleclent_dim_mismatch_flag` (0/1)
-- `tp_titleclent_backend_faiss` (0/1)
+- **Зеркала:** `tp_titleclent_emit_extra_metrics_enabled`, `tp_titleclent_require_title_embedding_enabled`, `tp_titleclent_use_faiss_enabled`, `tp_titleclent_require_faiss_enabled`, `tp_titleclent_export_topk_distribution_enabled`
+- **Top‑K / кламп:** `tp_titleclent_schema_top_k_slots_max` (**8**), `tp_titleclent_top_k_slots_requested`, `tp_titleclent_top_k_slots`, `tp_titleclent_top_k_slots_clamped`
+- **Сигнал:** `tp_titleclent_present`, `tp_titleclent_title_present`, `tp_titleclent_entropy_raw`, `tp_titleclent_entropy_norm` (при **K≤1** → **0.0**), `tp_titleclent_perplexity`, `tp_titleclent_top_k_used`, `tp_titleclent_distinct_clusters_topk`, `tp_titleclent_temperature`, `tp_titleclent_dim_mismatch_flag`, `tp_titleclent_backend_faiss`
+- **Extra (NaN** если `emit_extra_metrics=False` **или** empty**):** `tp_titleclent_n_clusters`, `tp_titleclent_model_orig_dim`, `tp_titleclent_model_reduced_dim`, `tp_titleclent_margin_top2`, `tp_titleclent_compute_ms`
+
+Полный перечень и правила — в [SCHEMA.md](./SCHEMA.md).
 
 #### `title_cluster_entropy_meta`
 
-- `clusters_spec_name`, `clusters_spec_version`
-- `clusters_weights_digest`
-- `cluster_db_version`
-- `backend` (`faiss_ip` | `numpy_cosine`)
-- опционально (если `export_topk_distribution=True`): `topk` (ids/probs/scores) — без raw текста
+`clusters_spec_name`, `clusters_spec_version`, `clusters_weights_digest`, `cluster_db_version`, `backend`. При `export_topk_distribution=True` — `topk` (ids / probs / scores), без raw текста.
+
+#### Верхний уровень ответа
+
+`model_name` / `model_version` / `weights_digest`: **`null`**. `system`: снимки **`pre_init`/`post_init`** из `__init__` и **`post_process`**, **`gpu_peak_mb`**.
 
 ### Алгоритм
 
-1. **Загрузка assets через `dp_models`**: PCA + centroids (fail-fast в `__init__`)
-2. **Загрузка title embedding**: детерминированно через `doc.tp_artifacts["embeddings"]["title"]["relpath"]` (без `glob+mtime`)
-3. **Проекция PCA**: `reduced = title @ pca` → L2 normalize
-4. **Cosine к centroid’ам**: inner product на нормализованных векторах
-5. **Top‑K**: берём top‑K центроидов (K=min(top_k_slots, n_clusters))
-6. **Softmax( / temperature )** → вероятности
-7. **Entropy/perplexity**: \(H=-\sum p\log p\), \(H_{norm}=H/\log(K)\), perplexity=\(e^H\)
+1. **`__init__`**: загрузка PCA и centroids через ModelManager (fail-fast); опционально FAISS; **`_init_metrics`**
+2. **`extract`**: чтение `.npy` по безопасному `relpath`; проверка `orig_dim`
+3. `reduced = title @ PCA` → L2 normalize
+4. Top‑**K** = **min(`top_k_slots`, n_clusters)**; `top_k_slots` в рантайме — уже после клампа к **8**
+5. Softmax(scores / temperature) → **H**, **H_norm**, perplexity
 
 ### Конфигурация
 
@@ -61,97 +56,32 @@ TitleEmbeddingClusterEntropyExtractor(
     temperature=0.1,
     export_topk_distribution=False,
     require_title_embedding=False,
-    use_faiss=True,
     require_faiss=False,
+    use_faiss=True,
     emit_extra_metrics=False,
 )
 ```
 
-### Valid empty semantics (A-policy)
+`clusters_path` запрещён (RuntimeError).
 
-- Если title embedding отсутствует и `require_title_embedding=False` → `tp_titleclent_present=0` и метрики = NaN.
-- Если `require_title_embedding=True` → отсутствие/несовместимость входа = `RuntimeError`.
+### Valid empty semantics
 
-### Интерпретация энтропии
+- Нет `relpath` / нет файла / dim mismatch (и `require_title_embedding=False`): **`tp_titleclent_present=0`**, метрики **NaN**, ключи **все 24** присутствуют
+- `require_title_embedding=True`: отсутствие или несовместимость → **RuntimeError**
 
-- **Низкая энтропия** (~0.0-1.0): эмбеддинг близок к одному или нескольким кластерам, четкая принадлежность
-- **Средняя энтропия** (~1.0-2.0): эмбеддинг находится между несколькими кластерами
-- **Высокая энтропия** (~2.0+): эмбеддинг равномерно распределен между многими кластерами, неопределенность
+### Архитектура (фактическая)
 
-Максимальная энтропия для K кластеров: `log(K)` (при равномерном распределении).
-
-### Параметр температуры
-
-Температура в softmax контролирует "остроту" распределения:
-- **Низкая температура** (0.01-0.1): более острый пик, фокус на наиболее похожих кластерах
-- **Высокая температура** (1.0+): более сглаженное распределение, больше неопределенности
-
-### Особенности
-
-- **Без glob/mtime**: используется только `doc.tp_artifacts` (детерминизм)
-- **dp_models**: assets загружаются offline, `weights_digest` фиксируется в meta
-- **L2-нормализация**: автоматическая нормализация для корректного косинусного сходства
-- **Top‑K**: cost control и стабильный schema (`top_k_slots`)
-
-### Обработка ошибок
-
-- **Модели/asset не найдены в `dp_models`**: `RuntimeError` в `__init__` (no-fallback)
-- **Отсутствует title embedding**:
-  - `require_title_embedding=False` → valid empty (NaN + flags)
-  - `require_title_embedding=True` → `RuntimeError`
-
-### Архитектура
-
-1. **Инициализация**: сохранение путей к кластерам и артефактам
-2. **Ленивая загрузка центроидов**: загрузка при первом использовании с кешированием
-3. **Поиск эмбеддинга**: поиск последнего файла `title_embedding_*.npy` в artifacts_dir
-4. **Нормализация**: L2-нормализация эмбеддинга и центроидов
-5. **Вычисление сходства**: матричное умножение для косинусного сходства
-6. **Топ-K выборка**: выбор K наиболее похожих кластеров
-7. **Softmax**: преобразование сходств в вероятности с температурой
-8. **Энтропия**: вычисление энтропии Шеннона распределения
-
-### Performance characteristics
-
-**Resource costs**:
-- **CPU**: минимальные (только матричные операции numpy)
-- **RAM**: зависит от количества кластеров (~4KB на кластер для float32)
-- **Estimated duration**: <0.01 секунды для типичных размеров
-
-**Параметры производительности**:
-- Время выполнения линейно зависит от количества кластеров
-- Топ-K выборка ограничивает вычисления только релевантными кластерами
-- Кеширование центроидов исключает повторную загрузку
+1. **Инициализация**: резолв spec → загрузка **PCA** и **centroids**; построение **FAISS** при `use_faiss` и наличии пакета
+2. **Извлечение**: только **`tp_artifacts`** + `artifacts_dir` (без glob/mtime)
+3. **Вычисление**: numpy / FAISS inner product на нормализованных векторах
+4. **Результат**: фиксированный `features_flat` через **`_pack_features_flat`**
 
 ### Связанные компоненты
 
-- **BaseExtractor**: базовый интерфейс экстрактора
-- **title_embedder**: создает эмбеддинги заголовков (зависимость)
-- **numpy**: работа с массивами и матричными операциями
+- **TitleEmbedder** — источник вектора заголовка
+- **dp_models** — PCA/centroids taxonomy
+- **BaseExtractor** — контракт `extract(doc)`
 
 ### Примечания
 
-1. **Зависимость от title_embedder**: требует, чтобы `title_embedder` был выполнен ранее
-2. **Размерность эмбеддингов**: должна совпадать с размерностью центроидов
-3. **Косинусное сходство**: используется для сравнения нормализованных векторов
-4. **Температура**: низкие значения (0.1) подчеркивают различия между кластерами
-5. **Топ-K**: анализ только топ-K кластеров повышает эффективность и фокусирует внимание на наиболее релевантных
-6. **Энтропия как метрика неопределенности**: высокая энтропия может указывать на неопределенность классификации или межкластерное расположение
-7. **distinct_clusters_topk**: показывает, сколько уникальных кластеров попало в топ-K (может быть меньше K при повторяющихся индексах, хотя это маловероятно)
-
-### Примеры использования
-
-**Низкая энтропия** (четкая принадлежность):
-```python
-# Эмбеддинг очень близок к одному кластеру
-entropy ≈ 0.2
-distinct_clusters_topk = 1
-```
-
-**Высокая энтропия** (неопределенность):
-```python
-# Эмбеддинг равномерно распределен между кластерами
-entropy ≈ 1.5 (для top_k=5, максимум ≈ 1.61)
-distinct_clusters_topk = 5
-```
-
+До явной фиксации corpus pack для downstream ML трактуйте фичи как **analytics** (preflight §7).

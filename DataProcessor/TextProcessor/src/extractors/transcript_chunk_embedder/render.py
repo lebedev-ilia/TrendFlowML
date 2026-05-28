@@ -15,6 +15,24 @@ import numpy as np
 logger = logging.getLogger(__name__)
 
 
+def _truthy_scalar(d: Dict[str, Any], key: str, *, default: float = 0.0) -> bool:
+    """0/1 flags after _clean_value may be None; treat like falsy for comparisons."""
+    v = d.get(key, default)
+    if v is None:
+        v = default
+    try:
+        return float(v) > 0.5
+    except (TypeError, ValueError):
+        return False
+
+
+def _optional_scalar_flag(d: Dict[str, Any], key: str) -> Any:
+    """Like _truthy_scalar but None if key missing or value is None (post-clean)."""
+    if key not in d or d.get(key) is None:
+        return None
+    return _truthy_scalar(d, key)
+
+
 def render_transcript_chunk_embedder(
     extractor_features: Dict[str, Any],
     payload: Dict[str, Any],
@@ -106,19 +124,19 @@ def render_transcript_chunk_embedder(
     
     # Summary
     render["summary"] = {
-        "present": bool(embedding.get("present", 0) > 0.5),
+        "present": _truthy_scalar(embedding, "present"),
         "dimension": _clean_value(embedding.get("embedding_dim")),
         "sources_count": _clean_value(sources.get("sources_count", 0)),
-        "whisper_present": bool(sources.get("whisper_present", 0) > 0.5),
-        "youtube_auto_present": bool(sources.get("youtube_auto_present", 0) > 0.5),
+        "whisper_present": _truthy_scalar(sources, "whisper_present"),
+        "youtube_auto_present": _truthy_scalar(sources, "youtube_auto_present"),
         "whisper_chunks": _clean_value(chunks.get("whisper_chunks", 0)),
         "youtube_chunks": _clean_value(chunks.get("youtube_chunks", 0)),
         "total_chunks": _clean_value((chunks.get("whisper_chunks", 0) or 0) + (chunks.get("youtube_chunks", 0) or 0)),
-        "confidence_present": bool(confidence.get("conf_present", 0) > 0.5),
+        "confidence_present": _truthy_scalar(confidence, "conf_present"),
         "confidence_mean": _clean_value(confidence.get("conf_mean")),
         "confidence_min": _clean_value(confidence.get("conf_min")),
         "confidence_max": _clean_value(confidence.get("conf_max")),
-        "cache_enabled": bool(cache.get("cache_enabled", 0) > 0.5) if cache.get("cache_enabled") is not None else None,
+        "cache_enabled": _optional_scalar_flag(cache, "cache_enabled"),
     }
     
     return render
@@ -305,13 +323,13 @@ def render_transcript_chunk_embedder_html(
                 </tr>
                 <tr>
                     <td>Whisper (ASR)</td>
-                    <td>{'Да' if sources.get("whisper_present", 0) > 0.5 else 'Нет'}</td>
+                    <td>{'Да' if (sources.get("whisper_present") or 0) > 0.5 else 'Нет'}</td>
                     <td>{chunks.get("whisper_chunks", "N/A")}</td>
                     <td>Транскрипт из ASR модели Whisper (из doc.asr.segments). Содержит метрики confidence</td>
                 </tr>
                 <tr>
                     <td>YouTube Auto</td>
-                    <td>{'Да' if sources.get("youtube_auto_present", 0) > 0.5 else 'Нет'}</td>
+                    <td>{'Да' if (sources.get("youtube_auto_present") or 0) > 0.5 else 'Нет'}</td>
                     <td>{chunks.get("youtube_chunks", "N/A")}</td>
                     <td>Транскрипт из автоматических субтитров YouTube (из doc.transcripts["youtube_auto"]). Legacy источник</td>
                 </tr>
@@ -365,7 +383,7 @@ def render_transcript_chunk_embedder_html(
                 </tr>
                 <tr>
                     <td>Confidence присутствует</td>
-                    <td>{'Да' if confidence.get("conf_present", 0) > 0.5 else 'Нет'}</td>
+                    <td>{'Да' if (confidence.get("conf_present") or 0) > 0.5 else 'Нет'}</td>
                     <td>Были ли доступны метрики confidence для чанков Whisper (только для ASR источника)</td>
                 </tr>
                 <tr>
@@ -396,7 +414,7 @@ def render_transcript_chunk_embedder_html(
                 </tr>
                 <tr>
                     <td>Кеш включен</td>
-                    <td>{'Да' if cache.get("cache_enabled", 0) > 0.5 else 'Нет' if cache.get("cache_enabled") is not None else "N/A"}</td>
+                    <td>{'Да' if (cache.get("cache_enabled") or 0) > 0.5 else 'Нет' if cache.get("cache_enabled") is not None else "N/A"}</td>
                     <td>Было ли включено дисковое кеширование эмбеддингов чанков</td>
                 </tr>
             </table>

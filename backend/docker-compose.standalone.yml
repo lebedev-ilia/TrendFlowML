@@ -1,0 +1,74 @@
+# Для автономного репозитория (корень = бывший каталог backend/).
+# Профили: ./profiles/ (см. profiles/README.md)
+#
+# Запуск из корня backend-репозитория:
+#   docker compose -f docker-compose.standalone.yml up --build
+
+services:
+  db:
+    image: postgres:16-alpine
+    environment:
+      POSTGRES_USER: trendflow
+      POSTGRES_PASSWORD: trendflow
+      POSTGRES_DB: trendflow
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U trendflow -d trendflow"]
+      interval: 3s
+      timeout: 5s
+      retries: 12
+    ports:
+      - "5432:5432"
+    volumes:
+      - backend_pg_data:/var/lib/postgresql/data
+
+  redis:
+    image: redis:7-alpine
+    ports:
+      - "6379:6379"
+
+  api:
+    build:
+      context: .
+      dockerfile: Dockerfile
+      additional_contexts:
+        profiles: ./profiles
+    ports:
+      - "8080:8080"
+    environment:
+      TF_BACKEND_DB_DSN: postgresql+psycopg://trendflow:trendflow@db:5432/trendflow
+      TF_BACKEND_REDIS_URL: redis://redis:6379/0
+      TF_BACKEND_JWT_SECRET: ${TF_BACKEND_JWT_SECRET:-demo-change-me-in-production}
+      TF_BACKEND_DB_AUTO_CREATE: "false"
+      TF_BACKEND_CORS_ORIGINS: ${TF_BACKEND_CORS_ORIGINS:-*}
+    depends_on:
+      db:
+        condition: service_healthy
+      redis:
+        condition: service_started
+    volumes:
+      - ./storage:/srv/storage
+    command: >
+      sh -c "alembic upgrade head && uvicorn app.main:app --host 0.0.0.0 --port 8080"
+
+  worker:
+    build:
+      context: .
+      dockerfile: Dockerfile
+      additional_contexts:
+        profiles: ./profiles
+    environment:
+      TF_BACKEND_DB_DSN: postgresql+psycopg://trendflow:trendflow@db:5432/trendflow
+      TF_BACKEND_REDIS_URL: redis://redis:6379/0
+      TF_BACKEND_JWT_SECRET: ${TF_BACKEND_JWT_SECRET:-demo-change-me-in-production}
+      TF_BACKEND_DB_AUTO_CREATE: "false"
+    depends_on:
+      db:
+        condition: service_healthy
+      redis:
+        condition: service_started
+    volumes:
+      - ./storage:/srv/storage
+    command: ["celery", "-A", "app.worker:celery_app", "worker", "-l", "info"]
+
+volumes:
+  backend_pg_data:

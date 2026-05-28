@@ -28,6 +28,8 @@ import numpy as np
 from src.core.base_extractor import BaseExtractor, ExtractorResult
 from src.core.audio_utils import AudioUtils
 
+from .utils.resource_profile import capture_rhythmic_resource_profile, is_rhythmic_resource_profile_enabled
+
 logger = logging.getLogger(__name__)
 
 # Contract version for downstream extractors compatibility validation
@@ -41,7 +43,7 @@ class RhythmicExtractor(BaseExtractor):
     """Экстрактор ритмических метрик: beat tracking, регулярность, плотность ударов."""
 
     name = "rhythmic"
-    version = "2.0.0"
+    version = "2.0.1"
     description = "Ритмические метрики: темп, биты, регулярность"
     category = "rhythm"
     dependencies = ["librosa", "numpy"]
@@ -65,11 +67,12 @@ class RhythmicExtractor(BaseExtractor):
         ac_size: int = 4,
         max_tempo: Optional[float] = None,
         # Feature gating flags (per-feature control, default: all False)
-        enable_basic_metrics: bool = False,
-        enable_interval_stats: bool = False,
-        enable_regularity_metrics: bool = False,
+        # Audit v3 preset: default-on, so extractor isn't "almost empty".
+        enable_basic_metrics: bool = True,
+        enable_interval_stats: bool = True,
+        enable_regularity_metrics: bool = True,
         enable_beat_times: bool = False,
-        enable_tempo_metrics: bool = False,
+        enable_tempo_metrics: bool = True,
         # Optional audio normalization
         enable_audio_normalization: bool = False,
         # Progress reporting callback
@@ -218,41 +221,41 @@ class RhythmicExtractor(BaseExtractor):
             (is_valid, error_message)
         """
         try:
-            # Check for NaN/inf
-            for key, value in features.items():
-                if isinstance(value, (int, float)):
-                    if np.isnan(value) or np.isinf(value):
-                        return False, f"rhythmic | {key} contains NaN or inf: {value}"
-                elif isinstance(value, np.ndarray):
-                    if np.any(np.isnan(value)) or np.any(np.isinf(value)):
-                        return False, f"rhythmic | {key} contains NaN or inf"
-
-            # Validate ranges
+            # Validate ranges for finite scalars only (Audit v3: NaN is allowed for missing values).
             if "rhythm_tempo_bpm" in features:
                 tempo = features["rhythm_tempo_bpm"]
-                if not (40.0 <= tempo <= 300.0):
-                    return False, f"rhythmic | tempo_bpm out of range [40, 300]: {tempo}"
+                if tempo is not None:
+                    tempo_f = float(tempo)
+                    if np.isfinite(tempo_f) and not (40.0 <= tempo_f <= 300.0):
+                        return False, f"rhythmic | tempo_bpm out of range [40, 300]: {tempo_f}"
 
             if "rhythm_regularity" in features:
                 regularity = features["rhythm_regularity"]
-                if not (0.0 <= regularity <= 1.0):
-                    return False, f"rhythmic | regularity out of range [0, 1]: {regularity}"
+                if regularity is not None:
+                    reg_f = float(regularity)
+                    if np.isfinite(reg_f) and not (0.0 <= reg_f <= 1.0):
+                        return False, f"rhythmic | regularity out of range [0, 1]: {reg_f}"
 
             if "rhythm_beat_density" in features:
                 density = features["rhythm_beat_density"]
-                if density < 0.0 or density > 10.0:
-                    return False, f"rhythmic | beat_density out of reasonable range [0, 10]: {density}"
+                if density is not None:
+                    den_f = float(density)
+                    if np.isfinite(den_f) and (den_f < 0.0 or den_f > 10.0):
+                        return False, f"rhythmic | beat_density out of reasonable range [0, 10]: {den_f}"
 
             # Validate consistency
             if "rhythm_avg_period_sec" in features and "rhythm_tempo_bpm" in features:
                 avg_period = features["rhythm_avg_period_sec"]
                 tempo = features["rhythm_tempo_bpm"]
-                if avg_period > 0:
-                    expected_tempo = 60.0 / avg_period
-                    if abs(tempo - expected_tempo) > 10.0:  # Allow 10 BPM tolerance
-                        logger.warning(
-                            f"rhythmic | tempo_bpm ({tempo}) inconsistent with avg_period ({avg_period}): expected {expected_tempo:.2f}"
-                        )
+                if avg_period is not None and tempo is not None:
+                    ap = float(avg_period)
+                    tp = float(tempo)
+                    if np.isfinite(ap) and np.isfinite(tp) and ap > 0:
+                        expected_tempo = 60.0 / ap
+                        if abs(tp - expected_tempo) > 10.0:  # Allow 10 BPM tolerance
+                            logger.warning(
+                                f"rhythmic | tempo_bpm ({tp}) inconsistent with avg_period ({ap}): expected {expected_tempo:.2f}"
+                            )
 
             return True, None
         except Exception as e:
@@ -356,7 +359,13 @@ class RhythmicExtractor(BaseExtractor):
         except Exception as e:
             raise RuntimeError(f"rhythmic | librosa beat tracking failed: {e}") from e
 
-    def _compute_beat_metrics(self, beat_times: np.ndarray, duration: float) -> Dict[str, Any]:
+    def _compute_beat_metrics(
+        self,
+        beat_times: np.ndarray,
+        duration: float,
+        *,
+        backend_tempo_bpm: Optional[float] = None,
+    ) -> Dict[str, Any]:
         """
         Вычислить все метрики на основе beat_times.
 
@@ -370,21 +379,29 @@ class RhythmicExtractor(BaseExtractor):
         features: Dict[str, Any] = {}
 
         if beat_times.size == 0:
-            # No beats detected
+            # No beats detected (Audit v3: valid ok, encode missing as NaN where appropriate).
             if self.enable_basic_metrics:
-                features["rhythm_tempo_bpm"] = 0.0
+                features["rhythm_tempo_bpm"] = float("nan")
                 features["rhythm_beats_count"] = 0
                 features["rhythm_beat_density"] = 0.0
             if self.enable_interval_stats:
-                features["rhythm_avg_period_sec"] = 0.0
-                features["rhythm_period_std_sec"] = 0.0
-                features["rhythm_median_period_sec"] = 0.0
-                features["rhythm_min_period_sec"] = 0.0
-                features["rhythm_max_period_sec"] = 0.0
+                features["rhythm_avg_period_sec"] = float("nan")
+                features["rhythm_period_std_sec"] = float("nan")
+                features["rhythm_median_period_sec"] = float("nan")
+                features["rhythm_min_period_sec"] = float("nan")
+                features["rhythm_max_period_sec"] = float("nan")
             if self.enable_regularity_metrics:
-                features["rhythm_regularity"] = 0.0
+                features["rhythm_regularity"] = float("nan")
+                features["rhythm_syncopation_score"] = float("nan")
+                features["rhythm_polyrhythm_score"] = float("nan")
+                features["rhythm_beat_strength_mean"] = float("nan")
+                features["rhythm_beat_strength_std"] = float("nan")
+                features["rhythm_metrical_stability"] = float("nan")
             if self.enable_tempo_metrics:
-                features["rhythm_median_bpm"] = 0.0
+                features["rhythm_median_bpm"] = float("nan")
+                features["rhythm_tempo_variation"] = float("nan")
+                features["rhythm_beat_consistency"] = float("nan")
+                features["rhythm_ibi_tempo_bpm"] = float("nan")
             return features
 
         # Интервалы между ударами
@@ -392,8 +409,9 @@ class RhythmicExtractor(BaseExtractor):
 
         # Basic metrics
         if self.enable_basic_metrics:
-            tempo = float(60.0 / (np.median(intervals) + 1e-6)) if intervals.size > 0 else 0.0
-            features["rhythm_tempo_bpm"] = tempo
+            # Audit v3: rhythm_tempo_bpm = backend tempo; store IBI tempo separately.
+            bt = float(backend_tempo_bpm) if backend_tempo_bpm is not None else float("nan")
+            features["rhythm_tempo_bpm"] = bt
             features["rhythm_beats_count"] = int(beat_times.size)
             features["rhythm_beat_density"] = float(beat_times.size / (duration + 1e-9))
 
@@ -453,6 +471,8 @@ class RhythmicExtractor(BaseExtractor):
                 # Beat consistency (inverse of tempo variation)
                 beat_consistency = float(1.0 / (1.0 + tempo_variation))
                 features["rhythm_beat_consistency"] = beat_consistency
+                # IBI tempo (analytics): 60/median(intervals)
+                features["rhythm_ibi_tempo_bpm"] = median_bpm
 
         return features
 
@@ -470,16 +490,37 @@ class RhythmicExtractor(BaseExtractor):
         if beat_times.size < BEAT_TIMES_SAVE_THRESHOLD:
             return None
 
+    def _save_beat_segment_index_npy(self, beat_segment_index: np.ndarray, component_name: str) -> Optional[str]:
+        """
+        Сохранить beat_segment_index в .npy файл (per-run storage).
+        """
+        if beat_segment_index.size < BEAT_TIMES_SAVE_THRESHOLD:
+            return None
+        if self.artifacts_dir is None:
+            logger.warning("rhythmic | artifacts_dir not set, cannot save beat_segment_index to .npy")
+            return None
+        try:
+            os.makedirs(self.artifacts_dir, exist_ok=True)
+            npy_path = os.path.join(self.artifacts_dir, f"{component_name}_beat_segment_index.npy")
+            np.save(npy_path, beat_segment_index.astype(np.int32))
+            rel_path = f"_artifacts/{component_name}_beat_segment_index.npy"
+            logger.info(f"rhythmic | Saved beat_segment_index ({beat_segment_index.size} elements) to {npy_path}")
+            return rel_path
+        except Exception as e:
+            logger.warning(f"rhythmic | Failed to save beat_segment_index to .npy: {e}")
+            return None
+
         if self.artifacts_dir is None:
             logger.warning("rhythmic | artifacts_dir not set, cannot save beat_times to .npy")
             return None
 
         try:
             os.makedirs(self.artifacts_dir, exist_ok=True)
-            npy_path = os.path.join(self.artifacts_dir, "beat_times.npy")
+            # Deterministic but collision-resistant within a run directory.
+            npy_path = os.path.join(self.artifacts_dir, f"{component_name}_beat_times_sec.npy")
             np.save(npy_path, beat_times)
             # Return relative path from component directory
-            rel_path = "_artifacts/beat_times.npy"
+            rel_path = f"_artifacts/{component_name}_beat_times_sec.npy"
             logger.info(f"rhythmic | Saved beat_times ({beat_times.size} elements) to {npy_path}")
             return rel_path
         except Exception as e:
@@ -498,6 +539,14 @@ class RhythmicExtractor(BaseExtractor):
             ExtractorResult с ритмическими метриками
         """
         start_time = time.time()
+        t0_total = time.perf_counter()
+        stage_timings_ms: Dict[str, float] = {}
+
+        rhythmic_resource_profile: Optional[Dict[str, Any]] = None
+        if is_rhythmic_resource_profile_enabled():
+            rhythmic_resource_profile = {
+                "at_start": capture_rhythmic_resource_profile(stage="at_start"),
+            }
         try:
             if not self._validate_input(input_uri):
                 error_code = self._classify_error(ValueError("Invalid input"), "audio_load_failed")
@@ -510,43 +559,45 @@ class RhythmicExtractor(BaseExtractor):
             self._log_extraction_start(input_uri)
 
             # Load audio
+            t0 = time.perf_counter()
             y_t, sr = self.audio_utils.load_audio(input_uri, self.sample_rate)
             y = self.audio_utils.to_numpy(y_t)
             if y.ndim == 2:
                 y = np.mean(y, axis=0) if self.average_channels else y[0]
+            stage_timings_ms["load_audio_ms"] = (time.perf_counter() - t0) * 1000.0
 
             # Normalize audio if enabled
+            t0 = time.perf_counter()
             y = self._normalize_audio(y)
+            stage_timings_ms["normalize_audio_ms"] = (time.perf_counter() - t0) * 1000.0
 
             duration = float(y.shape[-1] / sr)
 
             # Beat tracking (explicit backend, fail-fast)
+            t0 = time.perf_counter()
             if self.backend == "essentia":
                 beat_times, tempo = self._beat_track_essentia(y, sr)
             elif self.backend == "librosa":
                 beat_times, tempo = self._beat_track_librosa(y, sr)
             else:
                 raise ValueError(f"rhythmic | Unknown backend: {self.backend}")
-
-            if beat_times.size == 0:
-                error_code = self._classify_error(RuntimeError("No beats detected"), "no_beats_detected")
-                return self._create_result(
-                    False,
-                    error=f"rhythmic | No beats detected (error_code={error_code})",
-                    processing_time=time.time() - start_time,
-                )
+            stage_timings_ms["beat_track_ms"] = (time.perf_counter() - t0) * 1000.0
 
             # Compute metrics
-            features = self._compute_beat_metrics(beat_times, duration)
+            t0 = time.perf_counter()
+            features = self._compute_beat_metrics(beat_times, duration, backend_tempo_bpm=tempo)
+            stage_timings_ms["compute_metrics_ms"] = (time.perf_counter() - t0) * 1000.0
 
             # Save beat_times if needed
+            t0 = time.perf_counter()
             beat_times_npy_path = None
             if self.enable_beat_times:
                 if beat_times.size >= BEAT_TIMES_SAVE_THRESHOLD:
                     beat_times_npy_path = self._save_beat_times_npy(beat_times, self.name)
-                    features["beat_times_npy"] = beat_times_npy_path
+                    features["beat_times_sec_npy"] = beat_times_npy_path
                 else:
-                    features["beat_times"] = beat_times.astype(np.float32).tolist()
+                    features["beat_times_sec"] = beat_times.astype(np.float32).tolist()
+            stage_timings_ms["save_artifacts_ms"] = (time.perf_counter() - t0) * 1000.0
 
             # Add metadata
             features["sample_rate"] = int(sr)
@@ -555,6 +606,12 @@ class RhythmicExtractor(BaseExtractor):
             features["device_used"] = self.device
             features["backend"] = self.backend
             features["rhythmic_contract_version"] = RHYTHMIC_CONTRACT_VERSION
+            features["status"] = "ok"
+            features["empty_reason"] = "none"
+            features["stage_timings_ms"] = stage_timings_ms
+            if rhythmic_resource_profile is not None:
+                rhythmic_resource_profile["at_end"] = capture_rhythmic_resource_profile(stage="at_end")
+                features["rhythmic_resource_profile"] = rhythmic_resource_profile
             
             # Add _features_enabled for feature gating
             features_enabled = []
@@ -571,7 +628,9 @@ class RhythmicExtractor(BaseExtractor):
             features["_features_enabled"] = features_enabled
 
             # Validate output
+            t0 = time.perf_counter()
             is_valid, error_msg = self._validate_output(features)
+            stage_timings_ms["validate_output_ms"] = (time.perf_counter() - t0) * 1000.0
             if not is_valid:
                 error_code = self._classify_error(ValueError(error_msg), "validation_failed")
                 return self._create_result(
@@ -581,6 +640,7 @@ class RhythmicExtractor(BaseExtractor):
                 )
 
             dt = time.time() - start_time
+            stage_timings_ms["total_ms"] = (time.perf_counter() - t0_total) * 1000.0
             self._log_extraction_success(input_uri, dt)
             return self._create_result(True, payload=features, processing_time=dt)
 
@@ -615,6 +675,14 @@ class RhythmicExtractor(BaseExtractor):
             ExtractorResult с агрегированными метриками по сегментам
         """
         start_time = time.time()
+        t0_total = time.perf_counter()
+        stage_timings_ms: Dict[str, float] = {}
+
+        rhythmic_resource_profile: Optional[Dict[str, Any]] = None
+        if is_rhythmic_resource_profile_enabled():
+            rhythmic_resource_profile = {
+                "at_start": capture_rhythmic_resource_profile(stage="at_start"),
+            }
         try:
             if not self._validate_input(input_uri):
                 error_code = self._classify_error(ValueError("Invalid input"), "audio_load_failed")
@@ -632,17 +700,20 @@ class RhythmicExtractor(BaseExtractor):
             progress_report_interval = max(1, total_segments // 10) if total_segments >= 10 else 1
             last_reported_pct = -1
 
-            # Process segments
-            all_beat_times: List[np.ndarray] = []
-            all_tempos: List[float] = []
-            segment_centers: List[float] = []
-            segment_durations: List[float] = []
+            # Canonical axis (Audit v3): strict alignment to Segmenter windows.
+            all_beat_times: List[np.ndarray] = [np.zeros((0,), dtype=np.float32) for _ in range(total_segments)]
+            tempos_by_segment: List[float] = [float("nan") for _ in range(total_segments)]
+            segment_start_sec: List[float] = [0.0 for _ in range(total_segments)]
+            segment_end_sec: List[float] = [0.0 for _ in range(total_segments)]
+            segment_centers: List[float] = [0.0 for _ in range(total_segments)]
+            segment_durations: List[float] = [0.0 for _ in range(total_segments)]
+            segment_mask: List[bool] = [False for _ in range(total_segments)]
 
             seg_p = max(1, int(segment_parallelism or 1))
             inflight = int(max_inflight) if max_inflight is not None else seg_p
             inflight = max(1, int(inflight))
 
-            def _process_segment(i: int, seg: dict) -> tuple[int, float, np.ndarray, float, float]:
+            def _process_segment(i: int, seg: dict) -> tuple[int, float, float, float, bool, np.ndarray, float, float]:
                 """Обработать один сегмент."""
                 ss = int(seg.get("start_sample", 0))
                 es = int(seg.get("end_sample", 0))
@@ -650,44 +721,57 @@ class RhythmicExtractor(BaseExtractor):
                 start_sec = float(seg.get("start_sec", 0.0))
                 end_sec = float(seg.get("end_sec", 0.0))
                 duration = end_sec - start_sec
+                ok = True
+                beat_times = np.zeros((0,), dtype=np.float32)
+                tempo = float("nan")
+                try:
+                    # Load audio segment
+                    waveform_t, sr = self.audio_utils.load_audio_segment(
+                        input_uri,
+                        start_sample=ss,
+                        end_sample=es,
+                        target_sr=self.sample_rate,
+                        mix_to_mono=self.average_channels,
+                    )
+                    waveform_np = self.audio_utils.to_numpy(waveform_t)
+                    if waveform_np.ndim == 2:
+                        waveform_np = np.mean(waveform_np, axis=0) if self.average_channels else waveform_np[0]
 
-                # Load audio segment
-                waveform_t, sr = self.audio_utils.load_audio_segment(
-                    input_uri,
-                    start_sample=ss,
-                    end_sample=es,
-                    target_sr=self.sample_rate,
-                    mix_to_mono=self.average_channels,
-                )
-                waveform_np = self.audio_utils.to_numpy(waveform_t)
-                if waveform_np.ndim == 2:
-                    waveform_np = np.mean(waveform_np, axis=0) if self.average_channels else waveform_np[0]
+                    # Normalize audio if enabled
+                    waveform_np = self._normalize_audio(waveform_np)
 
-                # Normalize audio if enabled
-                waveform_np = self._normalize_audio(waveform_np)
+                    # Beat tracking (explicit backend, fail-fast)
+                    if self.backend == "essentia":
+                        beat_times, tempo_val = self._beat_track_essentia(waveform_np, int(sr))
+                    elif self.backend == "librosa":
+                        beat_times, tempo_val = self._beat_track_librosa(waveform_np, int(sr))
+                    else:
+                        raise ValueError(f"rhythmic | Unknown backend: {self.backend}")
 
-                # Beat tracking (explicit backend, fail-fast)
-                if self.backend == "essentia":
-                    beat_times, tempo = self._beat_track_essentia(waveform_np, int(sr))
-                elif self.backend == "librosa":
-                    beat_times, tempo = self._beat_track_librosa(waveform_np, int(sr))
-                else:
-                    raise ValueError(f"rhythmic | Unknown backend: {self.backend}")
+                    tempo = float(tempo_val)
+                    beat_times = np.asarray(beat_times, dtype=np.float32).reshape(-1)
 
-                # Adjust beat_times to absolute time (add segment start time)
-                if beat_times.size > 0:
-                    beat_times = beat_times + start_sec
+                    # Adjust beat_times to absolute time (add segment start time)
+                    if beat_times.size > 0:
+                        beat_times = beat_times + float(start_sec)
+                except Exception as e:
+                    ok = False
+                    logger.warning(f"rhythmic | segment failed (i={i}): {e}")
 
-                return i, center_sec, beat_times, tempo, duration
+                return i, start_sec, end_sec, center_sec, ok, beat_times, tempo, duration
 
             # Process segments (sequential or parallel)
+            t0 = time.perf_counter()
             if seg_p <= 1:
                 for seg_idx, seg in enumerate(segments):
-                    _, center_sec, beat_times, tempo, duration = _process_segment(seg_idx, seg)
-                    all_beat_times.append(beat_times)
-                    all_tempos.append(tempo)
-                    segment_centers.append(center_sec)
-                    segment_durations.append(duration)
+                    _, s_sec, e_sec, center_sec, ok, beat_times, tempo, duration = _process_segment(seg_idx, seg)
+                    all_beat_times[seg_idx] = beat_times
+                    tempos_by_segment[seg_idx] = float(tempo)
+                    segment_start_sec[seg_idx] = float(s_sec)
+                    segment_end_sec[seg_idx] = float(e_sec)
+                    segment_centers[seg_idx] = float(center_sec)
+                    segment_durations[seg_idx] = float(duration)
+                    segment_mask[seg_idx] = bool(ok)
 
                     # Progress reporting
                     if self.progress_callback and seg_idx % progress_report_interval == 0:
@@ -702,11 +786,14 @@ class RhythmicExtractor(BaseExtractor):
                     futures = [ex.submit(_process_segment, i, seg) for i, seg in enumerate(segments)]
                     completed = 0
                     for fut in as_completed(futures):
-                        i, center_sec, beat_times, tempo, duration = fut.result()
-                        all_beat_times.append(beat_times)
-                        all_tempos.append(tempo)
-                        segment_centers.append(center_sec)
-                        segment_durations.append(duration)
+                        i, s_sec, e_sec, center_sec, ok, beat_times, tempo, duration = fut.result()
+                        all_beat_times[int(i)] = beat_times
+                        tempos_by_segment[int(i)] = float(tempo)
+                        segment_start_sec[int(i)] = float(s_sec)
+                        segment_end_sec[int(i)] = float(e_sec)
+                        segment_centers[int(i)] = float(center_sec)
+                        segment_durations[int(i)] = float(duration)
+                        segment_mask[int(i)] = bool(ok)
                         completed += 1
 
                         # Progress reporting
@@ -715,22 +802,28 @@ class RhythmicExtractor(BaseExtractor):
                             if pct != last_reported_pct:
                                 self.progress_callback("rhythmic", completed, total_segments, f"Processed {completed}/{total_segments} segments")
                                 last_reported_pct = pct
+            stage_timings_ms["process_segments_ms"] = (time.perf_counter() - t0) * 1000.0
 
             # Aggregate metrics across all segments
-            if len(all_beat_times) == 0:
-                error_code = self._classify_error(RuntimeError("No segments processed"), "no_beats_detected")
+            if total_segments == 0:
+                error_code = self._classify_error(RuntimeError("No segments provided"), "invalid_input")
                 return self._create_result(
                     False,
-                    error=f"rhythmic | No segments processed (error_code={error_code})",
+                    error=f"rhythmic | No segments provided (error_code={error_code})",
                     processing_time=time.time() - start_time,
                 )
 
+            t0 = time.perf_counter()
             # Concatenate all beat_times
             all_beats_combined = np.concatenate([bt for bt in all_beat_times if bt.size > 0]) if any(bt.size > 0 for bt in all_beat_times) else np.array([])
 
             # Compute aggregate metrics
-            total_duration = sum(segment_durations)
-            features = self._compute_beat_metrics(all_beats_combined, total_duration)
+            total_duration = float(np.sum(np.asarray(segment_durations, dtype=np.float32))) if segment_durations else 0.0
+            all_tempos = [t for i, t in enumerate(tempos_by_segment) if segment_mask[i] and np.isfinite(float(t))]
+            # Aggregate backend tempo for model-facing rhythm_tempo_bpm: robust median across successful segments.
+            backend_tempo_agg = float(np.median(np.asarray(all_tempos, dtype=np.float32))) if all_tempos else float("nan")
+            features = self._compute_beat_metrics(all_beats_combined, total_duration, backend_tempo_bpm=backend_tempo_agg)
+            stage_timings_ms["aggregate_metrics_ms"] = (time.perf_counter() - t0) * 1000.0
 
             # Add segment-level aggregates
             if self.enable_tempo_metrics and all_tempos:
@@ -738,15 +831,6 @@ class RhythmicExtractor(BaseExtractor):
                 features["rhythm_tempo_std"] = float(np.std(all_tempos))
                 features["rhythm_tempo_min"] = float(np.min(all_tempos))
                 features["rhythm_tempo_max"] = float(np.max(all_tempos))
-
-            # Save beat_times if needed
-            beat_times_npy_path = None
-            if self.enable_beat_times:
-                if all_beats_combined.size >= BEAT_TIMES_SAVE_THRESHOLD:
-                    beat_times_npy_path = self._save_beat_times_npy(all_beats_combined, self.name)
-                    features["beat_times_npy"] = beat_times_npy_path
-                else:
-                    features["beat_times"] = all_beats_combined.astype(np.float32).tolist()
 
             # Add metadata
             features["sample_rate"] = int(self.sample_rate)
@@ -756,6 +840,14 @@ class RhythmicExtractor(BaseExtractor):
             features["backend"] = self.backend
             features["segments_count"] = int(total_segments)
             features["rhythmic_contract_version"] = RHYTHMIC_CONTRACT_VERSION
+
+            # Audit v3: canonical empty semantics
+            if total_segments > 0 and (not any(segment_mask)):
+                features["status"] = "empty"
+                features["empty_reason"] = "rhythmic_all_segments_failed"
+            else:
+                features["status"] = "ok"
+                features["empty_reason"] = "none"
             
             # Add _features_enabled for feature gating
             features_enabled = []
@@ -772,13 +864,43 @@ class RhythmicExtractor(BaseExtractor):
             features["_features_enabled"] = features_enabled
 
             # Add segment-level time series if enabled
+            # Canonical segment axis is always published for run_segments (Audit v3).
+            features["segment_start_sec"] = segment_start_sec
+            features["segment_end_sec"] = segment_end_sec
+            features["segment_center_sec"] = segment_centers
+            features["segment_mask"] = segment_mask
+
+            # Beat events (token-ready) — flat arrays with segment index.
+            t0 = time.perf_counter()
             if self.enable_beat_times and len(all_beat_times) > 0:
-                features["segment_beat_times"] = [bt.astype(np.float32).tolist() for bt in all_beat_times]
-                features["segment_centers_sec"] = segment_centers
-                features["segment_durations_sec"] = segment_durations
+                beat_times_flat: List[float] = []
+                beat_seg_idx_flat: List[int] = []
+                for si, bt in enumerate(all_beat_times):
+                    if bt is None:
+                        continue
+                    bta = np.asarray(bt, dtype=np.float32).reshape(-1)
+                    if bta.size == 0:
+                        continue
+                    beat_times_flat.extend(bta.tolist())
+                    beat_seg_idx_flat.extend([int(si)] * int(bta.size))
+                bt_arr = np.asarray(beat_times_flat, dtype=np.float32).reshape(-1)
+                bsi_arr = np.asarray(beat_seg_idx_flat, dtype=np.int32).reshape(-1)
+                if bt_arr.size >= BEAT_TIMES_SAVE_THRESHOLD:
+                    bt_npy = self._save_beat_times_npy(bt_arr, self.name)
+                    bsi_npy = self._save_beat_segment_index_npy(bsi_arr, self.name)
+                    if bt_npy:
+                        features["beat_times_sec_npy"] = bt_npy
+                    if bsi_npy:
+                        features["beat_segment_index_npy"] = bsi_npy
+                else:
+                    features["beat_times_sec"] = bt_arr.tolist()
+                    features["beat_segment_index"] = bsi_arr.tolist()
+            stage_timings_ms["save_artifacts_ms"] = (time.perf_counter() - t0) * 1000.0
 
             # Validate output
+            t0 = time.perf_counter()
             is_valid, error_msg = self._validate_output(features)
+            stage_timings_ms["validate_output_ms"] = (time.perf_counter() - t0) * 1000.0
             if not is_valid:
                 error_code = self._classify_error(ValueError(error_msg), "validation_failed")
                 return self._create_result(
@@ -788,6 +910,11 @@ class RhythmicExtractor(BaseExtractor):
                 )
 
             dt = time.time() - start_time
+            stage_timings_ms["total_ms"] = (time.perf_counter() - t0_total) * 1000.0
+            features["stage_timings_ms"] = stage_timings_ms
+            if rhythmic_resource_profile is not None:
+                rhythmic_resource_profile["at_end"] = capture_rhythmic_resource_profile(stage="at_end")
+                features["rhythmic_resource_profile"] = rhythmic_resource_profile
             return self._create_result(True, payload=features, processing_time=dt)
 
         except Exception as e:

@@ -9,7 +9,7 @@ weights_digest: provided_by_deploy
 local_artifacts: []
 runtime_params:
   triton_http_url: "${TRITON_HTTP_URL}"
-  triton_timeout_sec: 60.0
+  triton_timeout_sec: 300.0
   triton_model_name: "raft_512"
   triton_model_version: "1"
   triton_input0_name: "INPUT0__0"

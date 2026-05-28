@@ -25,6 +25,7 @@ def resolve_model_metadata(args: Any) -> Dict[str, Optional[Dict[str, str]]]:
         "asr_model_used": None,
         "tokenizer_model_used": None,
         "diar_model_used": None,
+        "diar_whisper_model_used": None,
         "emo_model_used": None,
         "sep_model_used": None,
     }
@@ -49,12 +50,12 @@ def resolve_model_metadata(args: Any) -> Dict[str, Optional[Dict[str, str]]]:
     except Exception:
         result["clap_model_used"] = None
 
-    # Resolve Whisper(triton) + shared tokenizer meta for ASR reproducibility.
+    # Resolve Whisper(inprocess) + shared tokenizer meta for ASR reproducibility.
     try:
         from dp_models import get_global_model_manager  # type: ignore
 
         mm = get_global_model_manager()
-        whisper_spec_name = f"whisper_{str(args.asr_model_size).strip().lower()}_triton"
+        whisper_spec_name = f"whisper_{str(args.asr_model_size).strip().lower()}_inprocess"
         wspec = mm.get_spec(model_name=whisper_spec_name)
         device, precision, runtime, engine, weights_digest, _ = mm.resolve(wspec)
         result["asr_model_used"] = {
@@ -81,12 +82,15 @@ def resolve_model_metadata(args: Any) -> Dict[str, Optional[Dict[str, str]]]:
         result["asr_model_used"] = None
         result["tokenizer_model_used"] = None
 
-    # Resolve speaker diarization model meta via ModelManager.
+    # Resolve speaker diarization model meta via ModelManager (Audit v3: diarization-only).
+    # NOTE: audited speaker diarization uses only:
+    # - pyannote pipeline (pyannote_speaker_diarization, inprocess)
     try:
         from dp_models import get_global_model_manager  # type: ignore
 
         mm = get_global_model_manager()
-        diar_spec_name = f"speaker_diarization_{str(args.diarization_model_size).strip().lower()}_triton"
+        # pyannote pipeline
+        diar_spec_name = "pyannote_speaker_diarization"
         dspec = mm.get_spec(model_name=diar_spec_name)
         device, precision, runtime, engine, weights_digest, _ = mm.resolve(dspec)
         result["diar_model_used"] = {
@@ -98,15 +102,17 @@ def resolve_model_metadata(args: Any) -> Dict[str, Optional[Dict[str, str]]]:
             "precision": str(precision),
             "device": str(device),
         }
+        result["diar_whisper_model_used"] = None
     except Exception:
         result["diar_model_used"] = None
+        result["diar_whisper_model_used"] = None
 
     # Resolve emotion diarization model meta via ModelManager.
     try:
         from dp_models import get_global_model_manager  # type: ignore
 
         mm = get_global_model_manager()
-        emo_spec_name = f"emotion_diarization_{str(args.emotion_model_size).strip().lower()}_triton"
+        emo_spec_name = f"emotion_diarization_{str(args.emotion_model_size).strip().lower()}_inprocess"
         espec = mm.get_spec(model_name=emo_spec_name)
         device, precision, runtime, engine, weights_digest, _ = mm.resolve(espec)
         result["emo_model_used"] = {

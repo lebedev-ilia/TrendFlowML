@@ -1,0 +1,199 @@
+from __future__ import annotations
+
+import logging
+import uuid
+from datetime import datetime
+from typing import Any, Dict, List
+
+from fastapi import APIRouter, Depends, HTTPException, status
+from sqlalchemy.orm import Session
+
+from ..dbv2.enums import AnalysisStatus
+from ..dbv2.models import (
+    AnalysisJob,
+    Prediction,
+    Video,
+    Workspace,
+    WorkspaceMember,
+)
+from ..dbv2.models import User as CoreUser
+from ..deps import get_current_user, get_db
+from ..schemas import (
+    AnalysisJobCreate,
+    AnalysisJobOut,
+    PredictionCreate,
+    PredictionOut,
+)
+from ..services.dataprocessor import request_dataprocessor_cancel
+from ..tasks import process_analysis_job
+
+router = APIRouter(prefix="/api", tags=["analysis"])
+logger = logging.getLogger(__name__)
+
+
+def _require_workspace_member(db: Session, workspace_id: uuid.UUID, user_id: uuid.UUID) -> None:
+    ws = db.query(Workspace).filter(Workspace.id == workspace_id).first()
+    if not ws:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Workspace not found")
+    m = (
+        db.query(WorkspaceMember)
+        .filter(WorkspaceMember.workspace_id == workspace_id, WorkspaceMember.user_id == user_id)
+        .first()
+    )
+    if not m:
+        raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Workspace access denied")
+
+
+@router.post(
+    "/workspaces/{workspace_id}/videos/{video_id}/analysis",
+    response_model=AnalysisJobOut,
+    status_code=status.HTTP_201_CREATED,
+)
+def create_analysis_job(
+    workspace_id: uuid.UUID,
+    video_id: uuid.UUID,
+    payload: AnalysisJobCreate,
+    db: Session = Depends(get_db),
+    user: CoreUser = Depends(get_current_user),
+):
+    _require_workspace_member(db, workspace_id, user.id)
+    v = db.query(Video).filter(Video.id == video_id).first()
+    if not v:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Video not found")
+
+    job = AnalysisJob(
+        workspace_id=workspace_id,
+        video_id=video_id,
+        triggered_by_user_id=user.id,
+        processing_config_id=payload.processing_config_id,
+        model_version_id=payload.model_version_id,
+        status=AnalysisStatus.queued,
+        retry_count=0,
+    )
+    db.add(job)
+    db.commit()
+    db.refresh(job)
+
+    # Ставим задачу в очередь Celery для обработки
+    process_analysis_job.delay(str(job.id))
+
+    return job
+
+
+@router.post("/analysis/{analysis_job_id}/cancel")
+def cancel_analysis_job(
+    analysis_job_id: uuid.UUID,
+    db: Session = Depends(get_db),
+    user: CoreUser = Depends(get_current_user),
+) -> Dict[str, Any]:
+    """
+    Отмена AnalysisJob.
+
+    **Семантика:** ``queued`` → сразу ``canceled`` в БД; ``processing`` → запрос к DataProcessor
+    ``POST /api/v1/runs/{run_id}/cancel`` (``run_id`` = ``analysis_job.id``); терминальные статусы → noop.
+    Подробнее: ``docs/OPERATIONS.md``, ``GAPS_AND_ALIGNMENT.md`` §5.
+    """
+    job = db.query(AnalysisJob).filter(AnalysisJob.id == analysis_job_id).first()
+    if not job:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Analysis job not found")
+    _require_workspace_member(db, job.workspace_id, user.id)
+
+    if job.status in (
+        AnalysisStatus.completed,
+        AnalysisStatus.failed,
+        AnalysisStatus.canceled,
+    ):
+        return {
+            "status": "noop",
+            "analysis_job_id": str(job.id),
+            "job_status": job.status.value,
+        }
+
+    if job.status == AnalysisStatus.queued:
+        job.status = AnalysisStatus.canceled
+        job.completed_at = datetime.utcnow()
+        db.commit()
+        return {"status": "canceled", "analysis_job_id": str(job.id)}
+
+    if job.status == AnalysisStatus.processing:
+        dp_ok = request_dataprocessor_cancel(str(job.id))
+        if not dp_ok:
+            logger.warning(
+                "cancel_analysis_job: DataProcessor cancel did not succeed "
+                "(run may not exist yet or API error); job_id=%s",
+                job.id,
+            )
+        db.commit()
+        return {
+            "status": "cancel_requested",
+            "analysis_job_id": str(job.id),
+            "dataprocessor_notified": dp_ok,
+        }
+
+    raise HTTPException(
+        status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+        detail="Unexpected analysis job status",
+    )
+
+
+@router.get("/workspaces/{workspace_id}/analysis", response_model=List[AnalysisJobOut])
+def list_analysis_jobs(
+    workspace_id: uuid.UUID,
+    db: Session = Depends(get_db),
+    user: CoreUser = Depends(get_current_user),
+):
+    _require_workspace_member(db, workspace_id, user.id)
+    return (
+        db.query(AnalysisJob)
+        .filter(AnalysisJob.workspace_id == workspace_id)
+        .order_by(AnalysisJob.created_at.desc())
+        .all()
+    )
+
+
+@router.post("/analysis/{analysis_job_id}/predictions", response_model=PredictionOut)
+def create_prediction(
+    analysis_job_id: uuid.UUID,
+    payload: PredictionCreate,
+    db: Session = Depends(get_db),
+    user: CoreUser = Depends(get_current_user),
+):
+    job = db.query(AnalysisJob).filter(AnalysisJob.id == analysis_job_id).first()
+    if not job:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Analysis job not found")
+    _require_workspace_member(db, job.workspace_id, user.id)
+
+    p = Prediction(
+        analysis_job_id=analysis_job_id,
+        horizon_days=payload.horizon_days,
+        predicted_views=payload.predicted_views,
+        predicted_likes=payload.predicted_likes,
+        percentile_score=payload.percentile_score,
+        confidence_lower=payload.confidence_lower,
+        confidence_upper=payload.confidence_upper,
+        model_version_id=payload.model_version_id,
+    )
+    db.add(p)
+    db.commit()
+    db.refresh(p)
+    return p
+
+
+@router.get("/analysis/{analysis_job_id}/predictions", response_model=List[PredictionOut])
+def list_predictions(
+    analysis_job_id: uuid.UUID,
+    db: Session = Depends(get_db),
+    user: CoreUser = Depends(get_current_user),
+):
+    job = db.query(AnalysisJob).filter(AnalysisJob.id == analysis_job_id).first()
+    if not job:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Analysis job not found")
+    _require_workspace_member(db, job.workspace_id, user.id)
+    return (
+        db.query(Prediction)
+        .filter(Prediction.analysis_job_id == analysis_job_id)
+        .order_by(Prediction.horizon_days.asc())
+        .all()
+    )
+
+

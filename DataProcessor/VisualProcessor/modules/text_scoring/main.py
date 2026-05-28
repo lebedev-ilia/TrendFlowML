@@ -13,9 +13,20 @@ import os
 import sys
 from typing import Optional, List, Dict, Any
 
-sys.path.append(os.path.dirname(os.path.dirname(os.path.dirname(__file__))))
+_vp_root = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+if _vp_root not in sys.path:
+    sys.path.insert(0, _vp_root)
+elif sys.path[0] != _vp_root:
+    try:
+        sys.path.remove(_vp_root)
+    except ValueError:
+        pass
+    sys.path.insert(0, _vp_root)
+_repo_root = os.path.dirname(_vp_root)
+if _repo_root not in sys.path:
+    sys.path.append(_repo_root)
 
-from modules.text_scoring.text_scoring import TextScoringModule
+from modules.text_scoring.utils.text_scoring import TextScoringModule
 from utils.logger import get_logger
 
 MODULE_NAME = "text_scoring"
@@ -34,6 +45,7 @@ def main(argv: Optional[List[str]] = None) -> int:
 
     parser.add_argument("--ocr-npz", type=str, default=None, help="Путь к OCR NPZ (optional override)")
     parser.add_argument("--use-face-data", action="store_true", help="Использовать core_face_landmarks как сигнал alignment (optional)")
+    parser.add_argument("--use-motion-data", action="store_true", help="Best-effort: использовать optical_flow/core_optical_flow как motion signal (optional)")
     parser.add_argument("--alignment-window-seconds", type=float, default=0.5, help="Окно выравнивания (секунды, time-axis)")
     parser.add_argument("--motion-weight", type=float, default=0.0, help="Вес motion (baseline: 0)")
     parser.add_argument("--face-weight", type=float, default=1.0, help="Вес face (baseline: 1 if use_face_data)")
@@ -58,6 +70,7 @@ def main(argv: Optional[List[str]] = None) -> int:
         config: Dict[str, Any] = {
             "ocr_npz": args.ocr_npz,
             "use_face_data": bool(args.use_face_data),
+            "use_motion_data": bool(args.use_motion_data),
             "alignment_window_seconds": float(args.alignment_window_seconds),
             "motion_weight": float(args.motion_weight),
             "face_weight": float(args.face_weight),

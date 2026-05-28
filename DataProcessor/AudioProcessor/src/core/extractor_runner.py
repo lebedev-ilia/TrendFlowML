@@ -10,9 +10,12 @@ import json
 import tempfile
 import numpy as np
 from pathlib import Path
-from typing import Any, Dict, List, Optional, Callable, Tuple
+from typing import Any, Dict, List, Optional, Callable, Tuple, TYPE_CHECKING
 
 from ..utils.progress import emit_progress
+
+if TYPE_CHECKING:
+    from .orchestrator_telemetry import OrchestratorTelemetryCollector
 from ..utils.retry import retry_with_backoff, run_clap_with_oom_fallback
 from .dependency_resolver import REQUIRED_EXTRACTOR_DEPENDENCIES, OPTIONAL_EXTRACTOR_DEPENDENCIES
 
@@ -21,9 +24,14 @@ logger = logging.getLogger(__name__)
 def safe_log_warning(logger_instance, message, *args, **kwargs):
     """Safely log a warning message, catching I/O errors from closed handlers."""
     try:
-        # Try to log directly - handlers may exist but streams may be closed
-        # We catch all exceptions to prevent crashes when logging infrastructure is shutting down
-        logger_instance.warning(message, *args, **kwargs)
+        # Temporarily disable logging error reporting to prevent traceback output
+        old_raise_exceptions = logging.raiseExceptions
+        logging.raiseExceptions = False
+        try:
+            logger_instance.warning(message, *args, **kwargs)
+        finally:
+            # Restore original setting
+            logging.raiseExceptions = old_raise_exceptions
     except Exception:
         # Catch ALL exceptions silently - handlers may be closed, streams may be closed,
         # or logging infrastructure may be in an invalid state during shutdown
@@ -400,6 +408,24 @@ def run_single_extractor(
         )
         # Set progress callback on extractor instance (not passed as parameter)
         extractor.progress_callback = callback
+        # Attach Segmenter-owned sampling metadata (Audit v3) so ASR NPZ can carry it (schema v2),
+        # without changing the BaseExtractor.run_segments signature.
+        try:
+            fam = None
+            if isinstance(segments_payload, dict):
+                fam = (((segments_payload.get("families") or {}).get("asr") or {}) if isinstance(segments_payload.get("families"), dict) else {})
+            if not isinstance(fam, dict):
+                fam = {}
+            extractor.asr_segments_meta = {  # type: ignore[attr-defined]
+                "audio_duration_sec": (segments_payload.get("audio_duration_sec") if isinstance(segments_payload, dict) else None),
+                "asr_sampling_profile": fam.get("profile"),
+                "asr_window_sec": fam.get("window_sec"),
+                "asr_stride_sec": fam.get("stride_sec"),
+                "asr_max_windows": fam.get("max_windows"),
+            }
+        except Exception:
+            # Best-effort: do not affect ASR inference path if metadata extraction fails.
+            extractor.asr_segments_meta = {}  # type: ignore[attr-defined]
         logger.info(f"ASR | run_single_extractor: audio_path={audio_path}, asr_segments_count={len(asr_segments) if asr_segments else 0}")
         def run_asr():
             result = extractor.run_segments(  # type: ignore
@@ -484,13 +510,34 @@ def run_single_extractor(
             
             def run_diar_subprocess():
                 try:
-                    result = subprocess.run(
+                    logger.info(f"SpeakerDiarization | Running subprocess: {' '.join(cmd[:3])}...")
+                    # Use Popen for real-time output streaming
+                    process = subprocess.Popen(
                         cmd,
-                        check=True,
                         env=env,
-                        capture_output=True,
+                        stdout=subprocess.PIPE,
+                        stderr=subprocess.STDOUT,
                         text=True,
+                        bufsize=1,  # Line buffered
                     )
+                    
+                    # Stream output in real-time
+                    output_lines = []
+                    for line in process.stdout:
+                        line = line.rstrip()
+                        if line:
+                            output_lines.append(line)
+                            # Log important lines
+                            if any(keyword in line for keyword in ["ERROR", "WARNING", "Loading", "Loaded", "Starting", "SpeakerDiarization"]):
+                                logger.info(f"SpeakerDiarization | {line}")
+                    
+                    process.wait()
+                    result = subprocess.CompletedProcess(
+                        cmd, process.returncode, stdout='\n'.join(output_lines), stderr=''
+                    )
+                    
+                    if result.returncode != 0:
+                        raise subprocess.CalledProcessError(result.returncode, cmd, result.stdout, result.stderr)
                     
                     # Загружаем результат из JSON файла
                     with open(result_file_path, "r") as f:
@@ -499,6 +546,8 @@ def run_single_extractor(
                     # Восстанавливаем ExtractorResult
                     from src.core.base_extractor import ExtractorResult  # type: ignore
                     r = ExtractorResult(
+                        name="speaker_diarization_extractor",
+                        version="3.1.0",
                         success=result_dict.get("success", False),
                         error=result_dict.get("error"),
                         payload=result_dict.get("payload", {}),
@@ -512,6 +561,8 @@ def run_single_extractor(
                     logger.error(f"SpeakerDiarization | {error_msg}")
                     from src.core.base_extractor import ExtractorResult  # type: ignore
                     return ExtractorResult(
+                        name="speaker_diarization_extractor",
+                        version="3.1.0",
                         success=False,
                         error=error_msg,
                         payload={},
@@ -561,254 +612,16 @@ def run_single_extractor(
                 retry_on=["503", "504", "timeout", "connection", "triton"],
             )
     
-    # Emotion diarization (может запускаться в персональной venv через subprocess)
+    # Emotion diarization (Audit v3: direct mode only; no isolated venv/subprocess)
     elif extractor_key == "emotion_diarization":
-        # Проверяем наличие персональной venv
-        extractor_dir = Path(__file__).resolve().parent.parent / "extractors" / "emotion_diarization_extractor"
-        venv_path = extractor_dir / ".emotion_diarization_venv"
-        venv_python = venv_path / "bin" / "python"
-        
-        if venv_python.exists():
-            # Запускаем через subprocess в персональной venv
-            logger.info(f"EmotionDiarization | Using isolated venv: {venv_python}")
-            
-            # Создаем временный файл для сегментов (если есть)
-            segments_file = None
-            if emo_segments:
-                segments_file = tempfile.NamedTemporaryFile(mode="w", suffix=".json", delete=False, dir=tmp_dir)
-                json.dump({"families": {"emotion": {"segments": emo_segments}}}, segments_file)
-                segments_file.close()
-                segments_file_path = segments_file.name
-            else:
-                segments_file_path = None
-            
-            # Создаем временный файл для результата
-            result_file = tempfile.NamedTemporaryFile(mode="w", suffix=".json", delete=False, dir=tmp_dir)
-            result_file.close()
-            result_file_path = result_file.name
-            
-            # Собираем аргументы для wrapper скрипта
-            wrapper_script = extractor_dir / "run_in_venv.py"
-            cmd = [
-                str(venv_python),
-                str(wrapper_script),
-                "--audio-path", audio_path,
-                "--tmp-dir", tmp_dir,
-                "--output-json", result_file_path,
-                "--device", getattr(extractor, "device", "auto"),
-                "--model-size", getattr(extractor, "model_size", "small"),
-                "--sample-rate", str(getattr(extractor, "sample_rate", 16000)),
-                "--batch-size", str(getattr(extractor, "batch_size", 16)),
-            ]
-            
-            # Добавляем сегменты если есть
-            if segments_file_path:
-                cmd.extend(["--segments-json", segments_file_path])
-            
-            # Добавляем process_full_audio флаг
-            if getattr(extractor, "process_full_audio", False):
-                cmd.append("--process-full-audio")
-            
-            # Добавляем feature flags
-            if getattr(extractor, "enable_probs", False):
-                cmd.append("--enable-probs")
-            if getattr(extractor, "enable_ids", False):
-                cmd.append("--enable-ids")
-            if getattr(extractor, "enable_confidence", False):
-                cmd.append("--enable-confidence")
-            if getattr(extractor, "enable_mean_probs", False):
-                cmd.append("--enable-mean-probs")
-            if getattr(extractor, "enable_entropy", False):
-                cmd.append("--enable-entropy")
-            if getattr(extractor, "enable_dominant", False):
-                cmd.append("--enable-dominant")
-            if getattr(extractor, "enable_quality_metrics", False):
-                cmd.append("--enable-quality-metrics")
-            if not getattr(extractor, "enable_silence_detection", True):
-                cmd.append("--disable-silence-detection")
-            
-            # Настраиваем окружение
-            env = os.environ.copy()
-            repo_root = Path(__file__).resolve().parent.parent.parent.parent
-            prev_pp = env.get("PYTHONPATH", "")
-            env["PYTHONPATH"] = str(repo_root) if not prev_pp else (str(repo_root) + os.pathsep + prev_pp)
-            
-            def run_emotion_subprocess():
-                try:
-                    result = subprocess.run(
-                        cmd,
-                        check=False,  # Не выбрасываем исключение, проверяем exit code вручную
-                        env=env,
-                        capture_output=True,
-                        text=True,
-                    )
-                    
-                    # Если exit code не 0, но файл результата существует, пытаемся загрузить его
-                    # (возможно, это просто warnings в stderr)
-                    if result.returncode != 0:
-                        # Проверяем, есть ли файл результата (возможно, скрипт успешно выполнился, но были warnings)
-                        if os.path.exists(result_file_path):
-                            try:
-                                with open(result_file_path, "r") as f:
-                                    result_dict = json.load(f)
-                                # Если результат успешный, игнорируем exit code (это были только warnings)
-                                if result_dict.get("success", False):
-                                    from src.core.base_extractor import ExtractorResult  # type: ignore
-                                    r = ExtractorResult(
-                                        name="emotion_diarization_extractor",
-                                        version="3.0.0",
-                                        success=True,
-                                        error=None,
-                                        payload=result_dict.get("payload", {}),
-                                        processing_time=result_dict.get("processing_time", 0.0),
-                                    )
-                                    logger.info(f"EmotionDiarization | subprocess returned: success={r.success}, payload_keys={list(r.payload.keys()) if r.payload else None}")
-                                    return r
-                            except Exception:
-                                pass
-                        # Если файла нет или результат неуспешный, это реальная ошибка
-                        error_msg = f"Subprocess failed (exit code {result.returncode})"
-                        if result.stderr:
-                            # Фильтруем warnings и DEBUG логи из stderr
-                            stderr_lines = result.stderr.split('\n')
-                            error_lines = [
-                                line for line in stderr_lines 
-                                if 'UserWarning' not in line 
-                                and 'Warning' not in line 
-                                and 'DEBUG:' not in line
-                                and 'speechbrain.utils.checkpoints' not in line
-                                and line.strip()
-                                and not line.strip().startswith('DEBUG:')
-                            ]
-                            if error_lines:
-                                # Берем только реальные ошибки (не DEBUG, не warnings)
-                                real_errors = [line for line in error_lines if 'ERROR' in line or 'Traceback' in line or 'Exception' in line]
-                                if real_errors:
-                                    error_msg += f": {''.join(real_errors[:3])}"  # Берем первые 3 строки реальных ошибок
-                                elif error_lines:
-                                    error_msg += f": {error_lines[0]}"  # Берем первую строку, если нет явных ошибок
-                        logger.error(f"EmotionDiarization | {error_msg}")
-                        from src.core.base_extractor import ExtractorResult  # type: ignore
-                        return ExtractorResult(
-                            name="emotion_diarization_extractor",
-                            version="3.0.0",
-                            success=False,
-                            error=error_msg,
-                            processing_time=0.0
-                        )
-                    
-                    # Загружаем результат из JSON файла
-                    with open(result_file_path, "r") as f:
-                        result_dict = json.load(f)
-                    
-                    # Восстанавливаем ExtractorResult
-                    from src.core.base_extractor import ExtractorResult  # type: ignore
-                    r = ExtractorResult(
-                        name="emotion_diarization_extractor",
-                        version="3.0.0",
-                        success=result_dict.get("success", False),
-                        error=result_dict.get("error"),
-                        payload=result_dict.get("payload", {}),
-                        processing_time=result_dict.get("processing_time", 0.0),
-                    )
-                    
-                    logger.info(f"EmotionDiarization | subprocess returned: success={r.success}, error={r.error}, payload_keys={list(r.payload.keys()) if r.payload else None}")
-                    return r
-                except Exception as e:
-                    error_msg = f"Subprocess exception: {str(e)}"
-                    logger.error(f"EmotionDiarization | {error_msg}")
-                    from src.core.base_extractor import ExtractorResult  # type: ignore
-                    return ExtractorResult(
-                        name="emotion_diarization_extractor",
-                        version="3.0.0",
-                        success=False,
-                        error=error_msg,
-                        processing_time=0.0
-                    )
-                finally:
-                    # Cleanup temp files
-                    if segments_file_path and os.path.exists(segments_file_path):
-                        try:
-                            os.remove(segments_file_path)
-                        except Exception:
-                            pass
-                    if os.path.exists(result_file_path):
-                        try:
-                            os.remove(result_file_path)
-                        except Exception:
-                            pass
-            
-            # Для subprocess режима: добавляем промежуточные обновления прогресса на основе времени
-            # (subprocess не может использовать callback напрямую)
-            t_emotion_start = time.time()
-            progress_interval = 1.5  # Обновляем каждые 1.5 секунды для более плавного прогресса
-            
-            def update_progress_periodically():
-                """Периодически обновляет прогресс во время выполнения subprocess"""
-                import threading
-                stop_event = threading.Event()
-                
-                def progress_loop():
-                    iteration = 0
-                    while not stop_event.is_set():
-                        time.sleep(progress_interval)
-                        if stop_event.is_set():
-                            break
-                        iteration += 1
-                        # Симулируем прогресс: 0% -> 50% -> 100% (на основе времени)
-                        # Предполагаем, что inference занимает большую часть времени
-                        elapsed = time.time() - t_emotion_start
-                        # Оценочное время выполнения: ~30-40 секунд для inference
-                        estimated_total = 40.0
-                        # Прогресс внутри extractor: 0-70% (остальные 30% - это завершение и сохранение)
-                        progress_pct_internal = min(70, int((elapsed / estimated_total) * 70))
-                        # Базовый прогресс для extractor: 10% + (extractor_idx / total_extractors) * 70%
-                        base_progress = 10 + int((extractor_idx / total_extractors) * 70)
-                        progress_pct = base_progress + progress_pct_internal
-                        
-                        # Определяем этап на основе времени
-                        if elapsed < 2.0:
-                            stage_name = "Loading audio"
-                        elif elapsed < 5.0:
-                            stage_name = "Preprocessing"
-                        else:
-                            stage_name = f"Inference: {elapsed:.1f}s"
-                        
-                        from src.utils.progress import emit_progress
-                        emit_progress(
-                            platform_id=platform_id,
-                            video_id=video_id,
-                            run_id=run_id,
-                            component=component_name,
-                            stage_id="run_segments",
-                            stage_name=stage_name,
-                            progress_pct=min(80, progress_pct),
-                            extractor=extractor_key,
-                            elapsed_sec=elapsed,
-                            total_elapsed_sec=time.time() - t_start if t_start is not None else None,
-                        )
-                
-                thread = threading.Thread(target=progress_loop, daemon=True)
-                thread.start()
-                return stop_event
-            
-            # Запускаем периодические обновления прогресса
-            stop_event = update_progress_periodically()
-            try:
-                r = run_emotion_subprocess()
-            finally:
-                stop_event.set()
-        else:
-            # Fallback: запуск напрямую (без изолированной venv)
-            logger.info(f"EmotionDiarization | venv not found at {venv_python}, running directly")
-            callback = create_progress_callback(
-                extractor_key, component_name, platform_id, video_id, run_id,
-                extractor_idx, total_extractors, "batches", t_start=t_start
-            )
-            extractor.progress_callback = callback
-            r = extractor.run_segments(  # type: ignore
-                audio_path, tmp_dir, emo_segments or []
-            )
+        callback = create_progress_callback(
+            extractor_key, component_name, platform_id, video_id, run_id,
+            extractor_idx, total_extractors, "batches", t_start=t_start
+        )
+        extractor.progress_callback = callback
+        r = extractor.run_segments(  # type: ignore
+            audio_path, tmp_dir, emo_segments or []
+        )
     
     # Source separation (inprocess PyTorch model)
     elif extractor_key == "source_separation":
@@ -930,23 +743,34 @@ def run_single_extractor(
                     if chroma_result and chroma_result.get("success"):
                         chroma_payload = chroma_result.get("payload", {})
                         if isinstance(chroma_payload, dict):
-                            chroma_ts = chroma_payload.get("chroma")
-                            if chroma_ts is None:
-                                chroma_npy = chroma_payload.get("chroma_npy")
-                                if isinstance(chroma_npy, str) and chroma_npy:
-                                    npy_path = chroma_npy
-                                    if not os.path.isabs(npy_path):
-                                        npy_path = os.path.join(run_rs_path, "chroma_extractor", npy_path)
-                                    try:
-                                        if os.path.exists(npy_path):
-                                            chroma_ts = np.load(npy_path)
-                                    except Exception:
-                                        chroma_ts = None
+                            # Audit v3: prefer in-memory shared chroma matrix (not persisted).
+                            chroma_ts = chroma_payload.get("_shared_chroma")
                             if chroma_ts is not None:
                                 try:
                                     shared_features = {"chroma": np.asarray(chroma_ts, dtype=np.float32)}
                                 except Exception:
                                     shared_features = None
+                                    chroma_ts = None
+
+                            # Legacy path: reuse persisted chroma only if in-memory not available.
+                            if shared_features is None:
+                                chroma_ts = chroma_payload.get("chroma")
+                                if chroma_ts is None:
+                                    chroma_npy = chroma_payload.get("chroma_npy")
+                                    if isinstance(chroma_npy, str) and chroma_npy:
+                                        npy_path = chroma_npy
+                                        if not os.path.isabs(npy_path):
+                                            npy_path = os.path.join(run_rs_path, "chroma_extractor", npy_path)
+                                        try:
+                                            if os.path.exists(npy_path):
+                                                chroma_ts = np.load(npy_path)
+                                        except Exception:
+                                            chroma_ts = None
+                                if chroma_ts is not None:
+                                    try:
+                                        shared_features = {"chroma": np.asarray(chroma_ts, dtype=np.float32)}
+                                    except Exception:
+                                        shared_features = None
                 
                 # Get parallelism settings for key extractor
                 key_workers = get_extractor_parallelism(
@@ -993,6 +817,9 @@ def run_extractors(
     extractor_parallelism_config: Optional[Dict[str, Dict[str, Any]]] = None,
     strict_extractors: bool = True,
     t_start: Optional[float] = None,
+    on_extractor_start: Optional[Callable[[str], None]] = None,
+    on_extractor_done: Optional[Callable[[str, float, Dict[str, Any]], None]] = None,
+    telemetry: Optional["OrchestratorTelemetryCollector"] = None,
 ) -> Tuple[Dict[str, Any], Dict[str, Any], Dict[str, Dict[str, float]]]:
     """
     Запускает все extractors и возвращает результаты.
@@ -1027,8 +854,14 @@ def run_extractors(
     sep_segments = sep_f.get("segments") or []
     
     # Дополнительные семейства
-    pitch_f = families.get("pitch", {})
-    pitch_segments = pitch_f.get("segments") or []
+    # NOTE(Audit v3): unified sampling policy.
+    # Some extractors intentionally share `spectral` family as their required family:
+    # - pitch
+    # - band_energy
+    # - spectral_entropy
+    #
+    # This is NOT a runtime fallback; it is the declared sampling requirement.
+    pitch_segments = []
     spectral_f = families.get("spectral", {})
     spectral_segments = spectral_f.get("segments") or []
     quality_f = families.get("quality", {})
@@ -1043,37 +876,48 @@ def run_extractors(
     chroma_segments = chroma_f.get("segments") or []
     rhythmic_f = families.get("rhythmic", {})
     rhythmic_segments = rhythmic_f.get("segments") or []
+    # Audit v3 (rhythmic): prefer `families.tempo` windows (shared sampling requirement).
+    # Migration support: accept legacy `families.rhythmic` if tempo is absent.
+    rhythmic_segments_used_family = "tempo" if (isinstance(tempo_segments, list) and tempo_segments) else "rhythmic"
+    rhythmic_segments = tempo_segments if rhythmic_segments_used_family == "tempo" else rhythmic_segments
     voice_quality_f = families.get("voice_quality", {})
     voice_quality_segments = voice_quality_f.get("segments") or []
     hpss_f = families.get("hpss", {})
     hpss_segments = hpss_f.get("segments") or []
     key_f = families.get("key", {})
     key_segments = key_f.get("segments") or []
-    band_energy_f = families.get("band_energy", {})
-    band_energy_segments = band_energy_f.get("segments") or []
-    # Fallback для band_energy: если family отсутствует, используем spectral или primary segments
-    if not band_energy_segments:
-        if spectral_segments:
-            band_energy_segments = spectral_segments
-        elif primary_segments:
-            band_energy_segments = primary_segments
-    spectral_entropy_f = families.get("spectral_entropy", {})
-    spectral_entropy_segments = spectral_entropy_f.get("segments") or []
-    # Fallback для spectral_entropy: если family отсутствует, используем spectral или primary segments
-    if not spectral_entropy_segments:
-        if spectral_segments:
-            spectral_entropy_segments = spectral_segments
-        elif primary_segments:
-            spectral_entropy_segments = primary_segments
-    # Fallback для pitch: если family отсутствует, используем spectral или primary segments
-    if not pitch_segments:
-        if spectral_segments:
-            pitch_segments = spectral_segments
-        elif primary_segments:
-            pitch_segments = primary_segments
+    # Shared-family extractors (Audit v3): require spectral family
+    band_energy_segments = spectral_segments
+    spectral_entropy_segments = spectral_segments
+    pitch_segments = spectral_segments
     for idx, key in enumerate(extractor_keys):
-        logger.info(f"AudioProcessor | [{idx + 1}/{total_extractors}] Initializing extractor: {key}")
-        extractor = processor.extractors.get(key)
+        # Создаем экстрактор из фабрики (ленивая инициализация)
+        extractor = None
+        try:
+            logger.info(f"AudioProcessor | [{idx + 1}/{total_extractors}] Initializing extractor: {key}")
+            factory = processor.extractor_factories.get(key)
+            if factory is None:
+                error_msg = "extractor_not_available"
+                if strict_extractors:
+                    raise RuntimeError(f"AudioProcessor | extractor '{key}' is required but not available (fail-fast)")
+                safe_log_warning(logger, f"AudioProcessor | extractor '{key}' is not available, skipping (graceful degradation)")
+                extractor_results[key] = {"success": False, "payload": None, "error": error_msg, "device_used": "unknown"}
+                per_extractor_report[key] = {"status": "error", "error": error_msg}
+                continue
+            
+            # Создаем экстрактор из фабрики
+            extractor = factory()
+            processor.extractors[key] = extractor  # Временно сохраняем для совместимости
+        except Exception as init_error:
+            error_msg = f"extractor_initialization_failed: {init_error}"
+            logger.error(f"AudioProcessor | Failed to initialize extractor '{key}': {init_error}")
+            if strict_extractors:
+                raise RuntimeError(f"AudioProcessor | extractor '{key}' initialization failed: {init_error}") from init_error
+            safe_log_warning(logger, f"AudioProcessor | extractor '{key}' initialization failed, skipping (graceful degradation)")
+            extractor_results[key] = {"success": False, "payload": None, "error": error_msg, "device_used": "unknown"}
+            per_extractor_report[key] = {"status": "error", "error": error_msg}
+            continue
+        
         if extractor is None:
             error_msg = "extractor_not_available"
             if strict_extractors:
@@ -1125,6 +969,16 @@ def run_extractors(
         
         try:
             logger.info(f"AudioProcessor | [{idx + 1}/{total_extractors}] Running extractor: {key}")
+            if on_extractor_start is not None:
+                try:
+                    on_extractor_start(key)
+                except Exception as cb_err:
+                    safe_log_warning(logger, f"on_extractor_start({key!r}) failed: {cb_err}")
+            if telemetry is not None:
+                try:
+                    telemetry.mark_extractor_start(key)
+                except Exception as tel_err:
+                    safe_log_warning(logger, f"telemetry.mark_extractor_start({key!r}) failed: {tel_err}")
             t_e0 = time.time()
             r, effective = run_single_extractor(
                 extractor_key=key,
@@ -1175,13 +1029,18 @@ def run_extractors(
                 "error": r.error,
                 "processing_time": r.processing_time,
                 "device_used": r.device_used,
+                "producer_version": getattr(r, "version", None),
             }
+            # Audit v3 (rhythmic): record which sampling family was used (tempo preferred; rhythmic legacy supported).
+            if key == "rhythmic" and isinstance(extractor_results[key].get("payload"), dict):
+                extractor_results[key]["payload"]["sampling_family_used"] = rhythmic_segments_used_family
             if not bool(r.success):
                 safe_log_warning(logger, f"AudioProcessor | Extractor '{key}' failed: {r.error}")
             per_extractor_report[key] = {
                 "status": "ok" if bool(r.success) else "error",
                 "wall_ms": wall_time_ms,  # Будет перезаписано в вызывающем коде
                 "reported_ms": float((float(r.processing_time or 0.0)) * 1000.0),
+                "producer_version": getattr(r, "version", None),
                 "segments_count": (
                     int((r.payload or {}).get("segments_count"))
                     if isinstance(r.payload, dict) and (r.payload.get("segments_count") is not None)
@@ -1189,10 +1048,45 @@ def run_extractors(
                 ),
                 "effective_knobs": effective,
             }
+            if key == "rhythmic":
+                per_extractor_report[key]["sampling_family_used"] = rhythmic_segments_used_family
+            
+            # Освобождаем память после использования экстрактора
+            try:
+                # Удаляем экстрактор из реестра
+                if key in processor.extractors:
+                    del processor.extractors[key]
+                
+                # Освобождаем GPU память, если используется CUDA
+                try:
+                    import torch
+                    if torch.cuda.is_available():
+                        torch.cuda.empty_cache()
+                        # Принудительная сборка мусора для освобождения памяти
+                        import gc
+                        gc.collect()
+                        torch.cuda.empty_cache()
+                except Exception:
+                    pass  # Игнорируем ошибки при освобождении памяти
+                
+                logger.debug(f"AudioProcessor | Released memory for extractor '{key}'")
+            except Exception as cleanup_error:
+                logger.warning(f"AudioProcessor | Failed to cleanup extractor '{key}': {cleanup_error}")
             timings_by_extractor[key] = {
                 "wall_ms": wall_time_ms,  # Будет перезаписано в вызывающем коде
                 "reported_ms": float((float(r.processing_time or 0.0)) * 1000.0),
             }
+
+            if on_extractor_done is not None:
+                try:
+                    on_extractor_done(key, wall_time_ms, dict(extractor_results[key]))
+                except Exception as cb_err:
+                    safe_log_warning(logger, f"on_extractor_done({key!r}) failed: {cb_err}")
+            if telemetry is not None:
+                try:
+                    telemetry.mark_extractor_end(key, wall_time_ms, bool(r.success))
+                except Exception as tel_err:
+                    safe_log_warning(logger, f"telemetry.mark_extractor_end({key!r}) failed: {tel_err}")
             
             # Обновляем прогресс после завершения экстрактора
             # Более точный расчет: используем (idx + 1) для прогресса после завершения
@@ -1214,6 +1108,11 @@ def run_extractors(
                 total_elapsed_sec=total_elapsed,
             )
         except Exception as e:
+            wall_ms_fail = 0.0
+            try:
+                wall_ms_fail = float((time.time() - t_e0) * 1000.0)
+            except Exception:
+                wall_ms_fail = 0.0
             extractor_results[key] = {
                 "success": False,
                 "payload": None,
@@ -1228,6 +1127,17 @@ def run_extractors(
                 "effective_knobs": None,
                 "error": str(e),
             }
+            timings_by_extractor[key] = {"wall_ms": wall_ms_fail, "reported_ms": None}
+            if on_extractor_done is not None:
+                try:
+                    on_extractor_done(key, wall_ms_fail, dict(extractor_results[key]))
+                except Exception as cb_err:
+                    safe_log_warning(logger, f"on_extractor_done({key!r}) failed: {cb_err}")
+            if telemetry is not None:
+                try:
+                    telemetry.mark_extractor_end(key, wall_ms_fail, False)
+                except Exception as tel_err:
+                    safe_log_warning(logger, f"telemetry.mark_extractor_end({key!r}) failed: {tel_err}")
     
     return extractor_results, per_extractor_report, timings_by_extractor
 

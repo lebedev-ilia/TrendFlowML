@@ -27,6 +27,8 @@ import numpy as np
 from src.core.base_extractor import BaseExtractor, ExtractorResult
 from src.core.audio_utils import AudioUtils
 
+from .utils.resource_profile import capture_speech_analysis_resource_profile, is_speech_analysis_resource_profile_enabled
+
 logger = logging.getLogger(__name__)
 
 # Contract version for downstream extractors compatibility validation
@@ -35,7 +37,7 @@ SPEECH_ANALYSIS_CONTRACT_VERSION = "speech_analysis_contract_v1"
 
 class SpeechAnalysisExtractor(BaseExtractor):
     name = "speech_analysis_extractor"
-    version = "2.1.0"
+    version = "2.1.1"
     description = "Speech analysis bundle: ASR token stats + diarization + optional pitch (no raw text)"
     category = "speech"
     dependencies = ["dp_models", "numpy", "librosa"]
@@ -358,7 +360,15 @@ class SpeechAnalysisExtractor(BaseExtractor):
         Progress reporting: для этапов обработки (silence detection, aggregation).
         """
         start_time = time.time()
-        timings = {}  # Детальное профилирование этапов
+        t0_total = time.perf_counter()
+        timings = {}  # Детальное профилирование этапов (seconds)
+        stage_timings_ms: Dict[str, float] = {}
+
+        speech_analysis_resource_profile: Optional[Dict[str, Any]] = None
+        if is_speech_analysis_resource_profile_enabled():
+            speech_analysis_resource_profile = {
+                "at_start": capture_speech_analysis_resource_profile(stage="at_start"),
+            }
         
         try:
             if not self._validate_input(input_uri):
@@ -382,11 +392,24 @@ class SpeechAnalysisExtractor(BaseExtractor):
                 )
             )
             if dur_sec < 5.0:
-                error_code = self._classify_error(RuntimeError("audio too short"), "audio_too_short")
-                raise RuntimeError(f"speech_analysis | audio too short (<5s): duration_sec={dur_sec:.3f} (error_code={error_code})")
+                # Audit v3: return valid empty instead of error
+                payload: Dict[str, Any] = {
+                    "status": "empty",
+                    "empty_reason": "audio_too_short",
+                    "duration_sec": float(dur_sec),
+                    "sample_rate": int(self.sample_rate),
+                    "device_used": self.device,
+                    "speech_analysis_contract_version": SPEECH_ANALYSIS_CONTRACT_VERSION,
+                }
+                stage_timings_ms["total_ms"] = (time.perf_counter() - t0_total) * 1000.0
+                payload["stage_timings_ms"] = stage_timings_ms
+                if speech_analysis_resource_profile is not None:
+                    speech_analysis_resource_profile["at_end"] = capture_speech_analysis_resource_profile(stage="at_end")
+                    payload["speech_analysis_resource_profile"] = speech_analysis_resource_profile
+                return self._create_result(True, payload=payload, processing_time=time.time() - start_time)
 
             # Этап 1: Silence detection (if enabled)
-            t_silence_start = time.time()
+            t_silence_start = time.perf_counter()
             if self.enable_silence_detection:
                 try:
                     probe = diar_segments[0]
@@ -414,16 +437,23 @@ class SpeechAnalysisExtractor(BaseExtractor):
                         "device_used": self.device,
                         "speech_analysis_contract_version": SPEECH_ANALYSIS_CONTRACT_VERSION,
                     }
-                    timings["silence_detection_sec"] = time.time() - t_silence_start
+                    timings["silence_detection_sec"] = time.perf_counter() - t_silence_start
+                    stage_timings_ms["silence_detection_ms"] = float(timings["silence_detection_sec"] * 1000.0)
+                    stage_timings_ms["total_ms"] = (time.perf_counter() - t0_total) * 1000.0
+                    payload["stage_timings_ms"] = stage_timings_ms
+                    if speech_analysis_resource_profile is not None:
+                        speech_analysis_resource_profile["at_end"] = capture_speech_analysis_resource_profile(stage="at_end")
+                        payload["speech_analysis_resource_profile"] = speech_analysis_resource_profile
                     return self._create_result(True, payload=payload, processing_time=time.time() - start_time)
             
-            t_silence_end = time.time()
+            t_silence_end = time.perf_counter()
             timings["silence_detection_sec"] = t_silence_end - t_silence_start
+            stage_timings_ms["silence_detection_ms"] = float(timings["silence_detection_sec"] * 1000.0)
             logger.info(f"speech_analysis | silence detection completed: {timings['silence_detection_sec']:.3f}s")
 
             # Этап 2: Получение результатов от зависимых компонентов
             # ASR
-            t_asr_start = time.time()
+            t_asr_start = time.perf_counter()
             logger.info(f"speech_analysis | enable_asr_metrics={self.enable_asr_metrics}, asr_result provided={asr_result is not None}")
             if self.enable_asr_metrics:
                 if asr_result is None:
@@ -445,12 +475,13 @@ class SpeechAnalysisExtractor(BaseExtractor):
             else:
                 asr_payload = {}
             
-            t_asr_end = time.time()
+            t_asr_end = time.perf_counter()
             timings["asr_sec"] = t_asr_end - t_asr_start
+            stage_timings_ms["asr_ms"] = float(timings["asr_sec"] * 1000.0)
             logger.info(f"speech_analysis | ASR result processing completed: {timings['asr_sec']:.3f}s")
             
             # Diarization
-            t_diar_start = time.time()
+            t_diar_start = time.perf_counter()
             if self.enable_diarization_metrics:
                 if diarization_result is None:
                     error_code = self._classify_error(RuntimeError("Diarization result not provided"), "diarization_failed")
@@ -471,14 +502,15 @@ class SpeechAnalysisExtractor(BaseExtractor):
             else:
                 diar_payload = {}
             
-            t_diar_end = time.time()
+            t_diar_end = time.perf_counter()
             timings["diarization_sec"] = t_diar_end - t_diar_start
+            stage_timings_ms["diarization_ms"] = float(timings["diarization_sec"] * 1000.0)
             logger.info(f"speech_analysis | diarization result processing completed: {timings['diarization_sec']:.3f}s")
 
             # Pitch (требует pitch_result если enable_pitch_metrics=True - обязательная зависимость, падение при отсутствии)
             pitch_payload = None
             if self.pitch_enabled and self.enable_pitch_metrics:
-                t_pitch_start = time.time()
+                t_pitch_start = time.perf_counter()
                 if pitch_result is None:
                     error_code = self._classify_error(RuntimeError("Pitch result not provided"), "pitch_failed")
                     raise RuntimeError(f"speech_analysis | pitch_result is required when pitch_enabled=True and enable_pitch_metrics=True, but was not provided. Ensure 'pitch' extractor is enabled in config. (error_code={error_code})")
@@ -498,12 +530,13 @@ class SpeechAnalysisExtractor(BaseExtractor):
                     error_code = self._classify_error(ValueError(error_msg), "validation_failed")
                     raise ValueError(f"speech_analysis | {error_msg} (error_code={error_code})")
                 
-                t_pitch_end = time.time()
+                t_pitch_end = time.perf_counter()
                 timings["pitch_sec"] = t_pitch_end - t_pitch_start
+                stage_timings_ms["pitch_ms"] = float(timings["pitch_sec"] * 1000.0)
                 logger.info(f"speech_analysis | pitch processing completed: {timings['pitch_sec']:.3f}s")
 
             # Этап 3: Aggregate results (feature-gated)
-            t_aggregates_start = time.time()
+            t_aggregates_start = time.perf_counter()
             payload_out: Dict[str, Any] = {
                 "duration_sec": float(dur_sec),
                 "sample_rate": int(self.sample_rate),
@@ -547,30 +580,39 @@ class SpeechAnalysisExtractor(BaseExtractor):
             
             # Diarization metrics (feature-gated)
             if self.enable_diarization_metrics:
-                speaker_segments = diar_payload.get("speaker_segments") or []
-                if not isinstance(speaker_segments, list):
-                    speaker_segments = []
+                # Backward-compatible: prefer strict v2 structured arrays; fall back to legacy speaker_segments list[dict].
                 speaker_ids = np.asarray(diar_payload.get("speaker_ids") or [], dtype=np.int32).reshape(-1)
-                speaker_count = int(diar_payload.get("speaker_count") or (len(set(int(s.get("speaker_id", 0)) for s in speaker_segments)) if speaker_segments else 0))
+                speaker_count = int(diar_payload.get("speaker_count") or speaker_ids.size or 0)
 
-                # Dominant speaker share by total duration over diar windows
-                dur_by_spk: Dict[int, float] = {}
-                for s in speaker_segments:
-                    try:
-                        sid = int(s.get("speaker_id", 0))
-                        d = float(s.get("duration", float(s.get("end", 0.0)) - float(s.get("start", 0.0))) or 0.0)
-                        dur_by_spk[sid] = dur_by_spk.get(sid, 0.0) + max(0.0, d)
-                    except Exception:
-                        continue
-                total_speech_dur = float(sum(dur_by_spk.values())) if dur_by_spk else 0.0
-                dominant_share = float(max(dur_by_spk.values()) / max(1e-6, total_speech_dur)) if dur_by_spk else 0.0
+                speaker_duration_sec = diar_payload.get("speaker_duration_sec")
+                if isinstance(speaker_duration_sec, (list, np.ndarray)) and len(speaker_duration_sec) == speaker_count:
+                    dur_arr = np.asarray(speaker_duration_sec, dtype=np.float32).reshape(-1)
+                    total_speech_dur = float(np.sum(dur_arr)) if dur_arr.size else 0.0
+                    dominant_share = float(np.max(dur_arr) / max(1e-6, total_speech_dur)) if dur_arr.size else 0.0
+                    diar_segments_count = int(diar_payload.get("speaker_turns_count") or len(diar_payload.get("turn_start_sec") or []))
+                else:
+                    speaker_segments = diar_payload.get("speaker_segments") or []
+                    if not isinstance(speaker_segments, list):
+                        speaker_segments = []
+                    # Dominant speaker share by total duration over diar windows
+                    dur_by_spk: Dict[int, float] = {}
+                    for s in speaker_segments:
+                        try:
+                            sid = int(s.get("speaker_id", 0))
+                            d = float(s.get("duration", float(s.get("end", 0.0)) - float(s.get("start", 0.0))) or 0.0)
+                            dur_by_spk[sid] = dur_by_spk.get(sid, 0.0) + max(0.0, d)
+                        except Exception:
+                            continue
+                    total_speech_dur = float(sum(dur_by_spk.values())) if dur_by_spk else 0.0
+                    dominant_share = float(max(dur_by_spk.values()) / max(1e-6, total_speech_dur)) if dur_by_spk else 0.0
+                    diar_segments_count = int(diar_payload.get("segments_count") or len(speaker_segments))
                 
                 # Additional diarization metrics
                 speaker_balance_score = float(diar_payload.get("speaker_balance_score", 0.0) or 0.0)
                 speaker_transitions_count = int(diar_payload.get("speaker_transitions_count", 0) or 0)
                 
                 payload_out.update({
-                    "diar_segments_count": int(diar_payload.get("segments_count") or len(speaker_segments)),
+                    "diar_segments_count": int(diar_segments_count),
                     "speaker_count": int(speaker_count),
                     "dominant_speaker_share": float(dominant_share),
                     "speaker_balance_score": float(speaker_balance_score),
@@ -628,27 +670,24 @@ class SpeechAnalysisExtractor(BaseExtractor):
                 enabled_features.append("asr_metrics")
             if self.enable_diarization_metrics:
                 enabled_features.append("diarization_metrics")
-            if self.enable_pitch_metrics:
+            # Only flag pitch_metrics when pitch dependency was merged (avoids tabular NaN with pitch_enabled=false).
+            if self.enable_pitch_metrics and pitch_payload is not None:
                 enabled_features.append("pitch_metrics")
             
             payload_out["_features_enabled"] = enabled_features
             logger.info(f"speech_analysis | _features_enabled={enabled_features}, payload keys with 'asr': {[k for k in payload_out.keys() if 'asr' in k.lower()]}")
             
-            t_aggregates_end = time.time()
+            t_aggregates_end = time.perf_counter()
             timings["aggregates_sec"] = t_aggregates_end - t_aggregates_start
-            total_time = time.time() - start_time
-            
-            # Add stage timings to payload (for meta/stage_timings_ms)
-            payload_out["stage_timings_ms"] = {
-                "silence_detection_ms": float(timings.get("silence_detection_sec", 0.0) * 1000.0),
-                "asr_ms": float(timings.get("asr_sec", 0.0) * 1000.0),
-                "diarization_ms": float(timings.get("diarization_sec", 0.0) * 1000.0),
-                "pitch_ms": float(timings.get("pitch_sec", 0.0) * 1000.0),
-                "aggregates_ms": float(timings.get("aggregates_sec", 0.0) * 1000.0),
-                "total_ms": float(total_time * 1000.0),
-            }
+            stage_timings_ms["aggregates_ms"] = float(timings.get("aggregates_sec", 0.0) * 1000.0)
+            stage_timings_ms["total_ms"] = (time.perf_counter() - t0_total) * 1000.0
+            payload_out["stage_timings_ms"] = stage_timings_ms
+            if speech_analysis_resource_profile is not None:
+                speech_analysis_resource_profile["at_end"] = capture_speech_analysis_resource_profile(stage="at_end")
+                payload_out["speech_analysis_resource_profile"] = speech_analysis_resource_profile
             
             # Log detailed profiling
+            total_time = time.time() - start_time
             logger.info(f"speech_analysis | run_bundle completed: duration={dur_sec:.2f}s, enabled_features={enabled_features}")
             logger.info(f"speech_analysis | profiling: silence={timings.get('silence_detection_sec', 0):.3f}s, asr={timings.get('asr_sec', 0):.3f}s, diarization={timings.get('diarization_sec', 0):.3f}s, pitch={timings.get('pitch_sec', 0):.3f}s, aggregates={timings.get('aggregates_sec', 0):.3f}s, total={total_time:.3f}s")
 

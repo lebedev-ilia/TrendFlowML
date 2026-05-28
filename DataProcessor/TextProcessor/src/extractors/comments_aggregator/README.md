@@ -4,9 +4,14 @@
 
 Агрегирует эмбеддинги комментариев (уже вычисленные `CommentsEmbedder`) в единые векторы-представители с использованием двух стратегий: взвешенное среднее и медиана по компонентам. Сохраняет агрегированные векторы в артефакты и возвращает метаданные.
 
-**Версия**: 1.2.0  
+**Версия**: 1.3.0  
 **Категория**: embedding aggregation  
 **GPU**: не требуется
+
+**Описание фич, зеркал и диапазонов; валидатор среза в NPZ:** [`docs/FEATURE_DESCRIPTION.md`](docs/FEATURE_DESCRIPTION.md) · `utils/validate_comments_aggregator_text_npz.py`
+
+**Контракт (Audit v3)**: [`SCHEMA.md`](SCHEMA.md) · machine: [`schemas/comments_aggregator_output_v1.json`](../../schemas/comments_aggregator_output_v1.json)  
+**Audit v4:** [`../../../../docs/audit_v4/components/text_processor/comments_aggregator_audit_v4.md`](../../../../docs/audit_v4/components/text_processor/comments_aggregator_audit_v4.md) · L2 stats: `scripts/audit_v4_npz_stats.py` → `storage/audit_v4/comments_aggregator_l2/`
 
 ### Входы
 
@@ -35,16 +40,23 @@
 
 Возвращаемые скалярные признаки (`result.features_flat`):
 - **Canonical (new)**: `tp_commentsagg_*` (стабильная схема, ключи всегда присутствуют)
-  - `tp_commentsagg_present` (0/1) — агрегаты вычислены (не “файл существует”)
+  - `tp_commentsagg_present` (0/1) — агрегаты вычислены (не "файл существует")
   - `tp_commentsagg_count`, `tp_commentsagg_dim`
   - `tp_commentsagg_mean_std`, `tp_commentsagg_median_std`
   - `tp_commentsagg_artifact_mean_written`, `tp_commentsagg_artifact_median_written`
-  - `tp_commentsagg_weights_applied`, `tp_commentsagg_weights_mask_*`, `tp_commentsagg_weights_align_*`
-  - `tp_commentsagg_dim_mismatch_flag`, `tp_commentsagg_unsafe_relpath_flag`
+  - `tp_commentsagg_weights_applied` (0/1) — были ли применены веса
+  - `tp_commentsagg_weights_mask_likes` (0/1) — использовались ли лайки как веса
+  - `tp_commentsagg_weights_mask_authority` (0/1) — использовался ли авторитет как вес
+  - `tp_commentsagg_weights_mask_recency` (0/1) — использовалась ли актуальность как вес
+  - `tp_commentsagg_weights_align_present` (0/1) — были ли доступны индексы для выравнивания
+  - `tp_commentsagg_weights_align_shape_ok` (0/1) — соответствует ли форма весов форме эмбеддингов
+  - `tp_commentsagg_dim_mismatch_flag` (0/1) — см. [`SCHEMA.md`](SCHEMA.md) (ветка invalid/missing embeddings)
+  - `tp_commentsagg_unsafe_relpath_flag` (0/1) — был ли обнаружен небезопасный путь
+  - `tp_commentsagg_compute_mean_enabled`, `tp_commentsagg_compute_median_enabled`, `tp_commentsagg_compute_std_enabled` (0/1) — флаги включения вычислений
+  - `tp_commentsagg_write_artifacts_enabled`, `tp_commentsagg_require_comment_embeddings_enabled` (0/1) — флаги настроек
+  - `tp_commentsagg_agg_mean_ms`, `tp_commentsagg_agg_median_ms` — время агрегации в **мс** при `emit_extra_metrics=true` (иначе **NaN**; **NaN**, если соответствующий `compute_*` выключен)
 
-- **Legacy aliases (back-compat)**: также заполняются `tp_comments_agg_*` и `tp_cagg_*`.
-
-Back-compat: также заполняются алиасы `tp_cagg_*`.
+- **Legacy aliases (back-compat)**: также всегда заполняются `tp_comments_agg_*` (включая веса и `compute_*` на пустой ветке) и `tp_cagg_*`.
 
 ### Алгоритмы
 
@@ -56,12 +68,13 @@ w_i = likes_i × authority_i × recency_i
 ```
 
 **Процесс**:
-1. Инициализация весов: единичные веса для всех комментариев
-2. Применение весов: если доступны `likes`, `authority`, `recency`, они перемножаются
-3. Клиппинг: веса ограничиваются снизу значением 0.1
-4. Нормализация: веса нормализуются так, чтобы сумма = 1.0
-5. Взвешенное среднее: `vec = Σ(w_i × emb_i) / Σ(w_i)`
-6. L2 нормализация: `vec = vec / ||vec||`
+1. Загрузка индексов: чтение `selected_indices` из артефактов `CommentsEmbedder` (если доступны) для выравнивания весов с эмбеддингами
+2. Инициализация весов: единичные веса для всех комментариев
+3. Применение весов: если доступны `likes`, `authority`, `recency` и индексы выравнивания, они перемножаются (веса применяются к комментариям через `selected_indices`)
+4. Клиппинг: веса ограничиваются снизу значением 0.1
+5. Нормализация: веса нормализуются так, чтобы сумма = 1.0
+6. Взвешенное среднее: `vec = Σ(w_i × emb_i) / Σ(w_i)`
+7. L2 нормализация: `vec = vec / ||vec||`
 
 **Std (если `compute_std=true`)**:
 - считается как \( \text{mean}_d(\text{std}_n(embs)) \): std по комментариям для каждой координаты, затем среднее по координатам.
@@ -86,7 +99,7 @@ w_i = likes_i × authority_i × recency_i
 ```python
 {
     "artifacts_dir": None,              # Путь к директории артефактов (по умолчанию: default_artifacts_dir())
-    "model_name": "sentence-transformers/all-MiniLM-L6-v2", # Для сигнатуры (информативно)
+    "model_name": "intfloat/multilingual-e5-large",  # dp_models resolve (metadata); должен совпадать с CommentsEmbedder
     "compute_mean": True,
     "compute_median": True,
     "compute_std": False,
@@ -98,23 +111,27 @@ w_i = likes_i × authority_i × recency_i
 
 **Параметры**:
 - `artifacts_dir`: директория для сохранения агрегированных эмбеддингов
-- `model_name`: имя модели, используется для генерации хеша файла (должно совпадать с `CommentsEmbedder`)
+- `model_name`: идентификатор модели в **`dp_models`** (без inference в этом экстракторе); должен совпадать с **`CommentsEmbedder`**
 
 ### Архитектура
 
 1. **Загрузка эмбеддингов**: детерминированно берём relpath из `doc.tp_artifacts["embeddings"]["comments"]["relpath"]`
 2. **Загрузка матрицы**: `np.load(...)` из per-run `text_processor/_artifacts/`
-5. **Проверка наличия**: если эмбеддинги не найдены, возвращается пустой результат
-6. **Извлечение весов**: опциональные веса из `comments_likes`, `comments_authority`, `comments_recency`
-7. **Агрегация weighted mean**: вычисление взвешенного среднего
-8. **Агрегация median**: вычисление медианы по компонентам
-9. **Сохранение артефактов**: сохранение агрегированных векторов в `.npy` файлы
+3. **Проверка наличия**: если эмбеддинги не найдены, возвращается пустой результат
+4. **Загрузка индексов выравнивания**: чтение `selected_indices` из `doc.tp_artifacts["comments"]["selected_indices_relpath"]` (создаётся `CommentsEmbedder`)
+5. **Извлечение весов**: опциональные веса из `comments_likes`, `comments_authority`, `comments_recency` с выравниванием через `selected_indices`
+6. **Агрегация weighted mean**: вычисление взвешенного среднего (с весами, если доступны)
+7. **Агрегация median**: вычисление медианы по компонентам
+8. **Сохранение артефактов**: сохранение агрегированных векторов в `.npy` файлы (`comments_agg_mean.npy`, `comments_agg_median.npy`)
+9. **Регистрация в tp_artifacts**: запись relpath в `doc.tp_artifacts["comments"]["agg_mean_relpath"]` и `agg_median_relpath`
 10. **Возврат метаданных**: возврат путей к файлам и статистик
 
 ### Обработка ошибок
 
 - **Отсутствие эмбеддингов**: valid empty (`tp_commentsagg_present=0`), агрегаты не создаются; fail-fast при `require_comment_embeddings=true`
-- **Несоответствие размеров**: если веса не совпадают с количеством комментариев, они игнорируются
+- **Несоответствие размеров**: если веса не совпадают с количеством комментариев, они игнорируются (используется равномерное взвешивание)
+- **Отсутствие индексов выравнивания**: если `selected_indices` недоступны, веса применяются напрямую (если их длина совпадает с количеством эмбеддингов)
+- **Небезопасный путь**: если relpath пытается выйти за пределы `artifacts_dir`, устанавливается флаг `tp_commentsagg_unsafe_relpath_flag=1`
 - **Ошибка сохранения**: ошибка логируется, но не прерывает выполнение
 
 ### Особенности

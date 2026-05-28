@@ -1,0 +1,16 @@
+# Override только для сервиса prometheus: scrape DataProcessor, запущенного на хосте (E2E).
+# Запуск из каталога DataProcessor/:
+#   docker compose -f docker-compose.yml -f monitoring/docker-compose.prometheus-override-e2e.yml up -d prometheus grafana
+# Порты API/worker на хосте: отредактируйте `monitoring/prometheus/prometheus.e2e_host.yml` (шаблон — `prometheus.e2e_host.example.yml`).
+# Пути в volumes — от каталога DataProcessor/ (первый -f), не от этого файла.
+#
+# Примечание: dataprocessor-api / worker из основного compose при этом НЕ обязаны быть запущены в Docker;
+# в prometheus.e2e_host.yml остаётся scrape только host.docker.internal.
+
+version: "3.8"
+services:
+  prometheus:
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
+    volumes:
+      - ./monitoring/prometheus/prometheus.e2e_host.yml:/etc/prometheus/prometheus.yml:ro

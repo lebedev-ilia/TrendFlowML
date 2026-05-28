@@ -1,0 +1,2 @@
+# Dependencies for content_domain component
+# Add component-specific dependencies here

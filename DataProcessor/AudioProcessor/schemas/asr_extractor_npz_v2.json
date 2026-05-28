@@ -1,0 +1,61 @@
+{
+  "schema_system_version": "vp_schema_v1",
+  "schema_version": "asr_extractor_npz_v2",
+  "producer": "asr_extractor",
+  "artifact_kind": "npz",
+  "allow_extra_keys": false,
+  "meta": {
+    "required_keys": [
+      "producer",
+      "producer_version",
+      "schema_version",
+      "created_at",
+      "platform_id",
+      "video_id",
+      "run_id",
+      "config_hash",
+      "sampling_policy_version",
+      "dataprocessor_version",
+      "status",
+      "empty_reason",
+      "models_used",
+      "model_signature",
+      "stage_timings_ms"
+    ],
+    "optional_keys": [
+      "device_used",
+      "scheduler_knobs",
+      "resource_metrics",
+      "error",
+      "asr_text_contract_version",
+      "features_enabled"
+    ]
+  },
+  "fields": {
+    "feature_names": { "required": true, "tier": "model_facing", "dtype": "object", "shape": ["F"] },
+    "feature_values": { "required": true, "tier": "model_facing", "dtype": "float32", "shape": ["F"] },
+
+    "token_ids_by_segment": { "required": false, "tier": "model_facing", "dtype": "object", "shape": ["*"] },
+
+    "segment_start_sec": { "required": true, "tier": "analytics", "dtype": "float32", "shape": ["N"] },
+    "segment_end_sec": { "required": true, "tier": "analytics", "dtype": "float32", "shape": ["N"] },
+    "segment_center_sec": { "required": true, "tier": "analytics", "dtype": "float32", "shape": ["N"] },
+
+    "lang_id_by_segment": { "required": false, "tier": "analytics", "dtype": "int32", "shape": ["*"] },
+    "lang_code_by_segment": { "required": true, "tier": "analytics", "dtype": "object", "shape": ["N"] },
+    "lang_conf_by_segment": { "required": true, "tier": "analytics", "dtype": "float32", "shape": ["N"] },
+
+    "token_counts": { "required": false, "tier": "analytics", "dtype": "int32", "shape": ["*"] },
+    "lang_distribution": { "required": false, "tier": "analytics", "dtype": "object", "shape": [] },
+    "segment_quality_by_segment": { "required": false, "tier": "analytics", "dtype": "object", "shape": ["*"] },
+
+    "audio_duration_sec": { "required": true, "tier": "analytics", "dtype": "float32", "shape": [] },
+    "asr_sampling_profile": { "required": true, "tier": "analytics", "dtype": "object", "shape": [] },
+    "asr_window_sec": { "required": true, "tier": "analytics", "dtype": "float32", "shape": [] },
+    "asr_stride_sec": { "required": true, "tier": "analytics", "dtype": "float32", "shape": [] },
+    "asr_max_windows": { "required": true, "tier": "analytics", "dtype": "int32", "shape": [] },
+
+    "meta": { "required": true, "tier": "debug", "dtype": "object", "shape": [] }
+  }
+}
+

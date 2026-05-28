@@ -19,7 +19,21 @@
 ```python
 class TextScoringModule(BaseModule):
     def process(self, frame_manager, frame_indices, config) -> Dict[str, Any]
+    def process_batch(self, video_contexts: List[VideoContext], config) -> List[Dict[str, Any]]
 ```
+
+### Batch processing
+
+- Модуль объявляет `supports_batch = True` и поддерживает batch‑режим VisualProcessor.
+- Реализация `process_batch` следует Stage 0/1 плана `BATCH_PROCESSING_PLAN.md` для CPU‑модулей:
+  - перебор `VideoContext` по одному (CPU‑нагрузка, без межвидео state);
+  - для каждого видео создаётся отдельный `TextScoringModule(rs_path=video_ctx.rs_path)`;
+  - вызывается `run(frames_dir=video_ctx.frames_dir, config=config, metadata=video_ctx.load_metadata())`;
+  - результаты собираются в список `{"video_id", "status", "saved_path"}` / `{"video_id", "status": "error", "error": ...}`.
+- Таким образом:
+  - обеспечивается **изоляция ResultStore** по видео;
+  - NPZ‑артефакты и `meta` полностью эквивалентны single‑video запуску;
+  - ошибки одного видео не валят весь batch (см. политику VisualProcessor).
 
 Внутренний пайплайн `TextVideoInteractionPipeline` выполняет:
 1. Группировку OCR-детекций в уникальные текстовые элементы
@@ -78,7 +92,7 @@ CTA определяется как комбинация:
 
 1. **`frames_dir`**: Директория Segmenter с:
    - `metadata.json` с обязательными полями:
-     - `story_structure.frame_indices`: индексы кадров для обработки (union-domain, 0..N-1)
+     - `text_scoring.frame_indices`: индексы кадров для обработки (union-domain, 0..N-1)
      - `platform_id`, `video_id`, `run_id`, `sampling_policy_version`, `config_hash` (run identity keys)
 
 2. **`rs_path`**: Путь к хранилищу результатов (result_store), содержащий:
@@ -127,6 +141,8 @@ CTA определяется как комбинация:
 result_store/<platform_id>/<video_id>/<run_id>/text_scoring/text_scoring.npz
 ```
 
+- **Сводка по полям, meta → wide CSV, melt/QA:** `docs/FEATURE_DESCRIPTION.md`
+
 ### Структура NPZ файла
 
 #### Массивы (numpy)
@@ -138,10 +154,14 @@ result_store/<platform_id>/<video_id>/<run_id>/text_scoring/text_scoring.npz
 | `text_present` | `bool` | Наличие текста в видео |
 | `text_presence` | `(N,) bool` | Есть ли OCR детекции на кадре (privacy-safe) |
 | `text_count_per_frame` | `(N,) int32` | Кол-во OCR детекций на кадре (privacy-safe) |
-| `ocr_raw` | `(M,) object` | Список сырых OCR-детекций (после фильтрации) |
-| `ocr_unique_elements` | `(K,) object` | Список уникальных текстовых элементов |
+| `feature_names` | `(F,) object` | Имена скалярных model-facing фич (фиксированный порядок) |
+| `feature_values` | `(F,) float32` | Значения скалярных фич (0/1 для bool) |
+| `ocr_raw` | `(M,) object` | Debug (по флагу `store_debug_objects=true`): OCR-детекции (privacy-safe по умолчанию) |
+| `ocr_unique_elements` | `(K,) object` | Debug (по флагу `store_debug_objects=true`): уникальные элементы |
 
-#### Словарь `features` (object)
+#### Скалярные фичи (tabular, model-facing)
+
+Модуль больше не сохраняет object‑dict `features` в NPZ. Вместо этого скаляры сериализуются как `feature_names/feature_values` (фиксированный список).
 
 **1. Text → Action / Motion Correlation**
 
@@ -296,6 +316,34 @@ saved_path = module.run(
 )
 ```
 
+#### Batch API (VisualProcessor)
+
+```python
+from modules.text_scoring.text_scoring import TextScoringModule
+from utils.video_context import VideoContext
+
+video_contexts = [
+    VideoContext(
+        video_id="video_1",
+        frames_dir="/path/to/frames_1",
+        rs_path="/path/to/result_store/platform/video_1/run_1",
+        metadata_path="/path/to/frames_1/metadata.json",
+        platform_id="youtube",
+        run_id="run_1",
+        config_hash="...",
+        sampling_policy_version="v1",
+        dataprocessor_version="unknown",
+    ),
+    # ...
+]
+
+module = TextScoringModule(rs_path=None)  # rs_path будет переопределён per‑video внутри process_batch
+batch_results = module.process_batch(
+    video_contexts=video_contexts,
+    config=config,
+)
+```
+
 ### Интеграция в pipeline
 
 Модуль автоматически вызывается через VisualProcessor pipeline, если указан в конфигурации:
@@ -309,6 +357,40 @@ visual_modules:
       min_ocr_confidence: 0.4
 ```
 
+#### Глобальный конфиг (`global_config.yaml`)
+
+В секции VisualProcessor модуль конфигурируется через inline‑блок:
+
+```yaml
+processors:
+  visual:
+    inline_config:
+      modules:
+        text_scoring: true
+
+      text_scoring:
+        # OCR и мультимодальный alignment
+        ocr_npz: null                   # null = авто‑поиск OCR NPZ через ResultStore
+        use_face_data: false            # использовать core_face_landmarks (строгая зависимость если true)
+        use_motion_data: false          # best-effort: optical_flow/core_optical_flow (если motion_weight>0 тоже попытается)
+        alignment_window_seconds: 0.5   # окно выравнивания по времени
+        motion_weight: 0.0
+        face_weight: 1.0
+        audio_weight: 0.0
+        min_ocr_confidence: 0.4
+
+        # Privacy / noisy extras
+        retain_raw_ocr_text: false
+        store_debug_objects: false       # сохранять ocr_raw / ocr_unique_elements в NPZ (debug)
+        enable_text_peaks: false
+        enable_language_entropy: false
+        enable_text_movement_speed: false
+
+        render:
+          enable_render: true           # JSON render‑context (LLM / frontend)
+          enable_html_render: true      # HTML debug‑страница
+```
+
 ## Обработка ошибок
 
 ### Валидные empty состояния
@@ -319,19 +401,17 @@ visual_modules:
 {
     "frame_indices": fi,
     "text_present": np.asarray(False),
-    "features": {
-        "text_present": False,
-        "empty_reason": "ocr_not_available" | "ocr_empty" | "ocr_outside_sampling"
-    },
+    "feature_names": ...,
+    "feature_values": ...,
     "ocr_raw": np.asarray([], dtype=object),
     "ocr_unique_elements": np.asarray([], dtype=object),
+    "meta": {"status": "empty", "empty_reason": "..."}
 }
 ```
 
 **Возможные `empty_reason`:**
-- `"ocr_not_available"`: OCR NPZ файл не найден ни в одной из локаций
-- `"ocr_empty"`: OCR NPZ найден, но пуст (нет детекций)
-- `"ocr_outside_sampling"`: OCR детекции есть, но не попадают в `frame_indices` модуля
+- `"dependency_missing"`: OCR NPZ файл не найден ни в одной из локаций
+- `"no_text_available"`: OCR NPZ найден, но пуст / или нет детекций после фильтрации в `frame_indices`
 
 ### Fail-fast ошибки
 
@@ -394,9 +474,11 @@ import numpy as np
 # Загрузка NPZ
 data = np.load("text_scoring_features_*.npz", allow_pickle=True)
 
-# Извлечение features
-features = data["features"].item()  # object array → dict
-text_present = data["text_present"].item()
+# Извлечение tabular scalar features
+feat_names = [str(x) for x in data["feature_names"].tolist()]
+feat_vals = data["feature_values"].astype("float32")
+features = dict(zip(feat_names, feat_vals.tolist()))
+text_present = bool(data["text_present"].item())
 
 if text_present:
     # Text-action sync
@@ -416,13 +498,16 @@ if text_present:
     for elem in unique_elements:
         print(f"Text: {elem['text_raw']}, Duration: {elem['last_time'] - elem['first_time']:.2f}s")
 else:
-    print(f"No text found: {features.get('empty_reason')}")
+    meta = data["meta"].item()
+    print(f"No text found: {meta.get('empty_reason')}")
 ```
 
 ### Анализ CTA
 
 ```python
-features = data["features"].item()
+feat_names = [str(x) for x in data["feature_names"].tolist()]
+feat_vals = data["feature_values"].astype("float32")
+features = dict(zip(feat_names, feat_vals.tolist()))
 
 if features["cta_presence"] > 0.5:
     print(f"CTA detected with strength: {features['cta_strength']:.2f}")
@@ -437,9 +522,11 @@ else:
 ```python
 import matplotlib.pyplot as plt
 
-features = data["features"].item()
-peak_positions = features["text_emphasis_peak_positions"]
-peak_prominence = features["text_emphasis_peak_prominence"]
+feat_names = [str(x) for x in data["feature_names"].tolist()]
+feat_vals = data["feature_values"].astype("float32")
+features = dict(zip(feat_names, feat_vals.tolist()))
+peak_positions = []  # v2+: peak lists are not model-facing; keep analytics in debug payload if needed
+peak_prominence = []
 
 plt.figure(figsize=(12, 4))
 plt.bar(peak_positions, peak_prominence, width=0.01, alpha=0.7)
@@ -448,6 +535,19 @@ plt.ylabel("Peak Prominence")
 plt.title("Text Emphasis Peaks")
 plt.show()
 ```
+
+### Render‑контекст и HTML
+
+- Модуль имеет renderer `modules/text_scoring/render.py` с функциями:
+  - `render_text_scoring(npz_data, meta) -> dict` — формирует render‑context JSON:
+    - summary по ключевым метрикам (`text_action_sync_score`, `cta_presence`, `text_on_screen_continuity`, и т.д.);
+    - timeline по кадрам (`times_s`, `text_presence`, `text_count_per_frame`);
+    - markers по CTA и первому тексту;
+    - distributions для scalar‑метрик.
+  - `render_text_scoring_html(npz_path, output_path) -> str` — HTML‑дашборд с графиком
+    text_presence / text_count_per_frame во времени и сводкой метрик.
+- Render подключается через общую систему `utils.renderer.render_component` при включённых флагах
+  `visual.inline_config.text_scoring.render.enable_render/html_render`.
 
 ## Связанные компоненты
 

@@ -1,0 +1,6 @@
+visual:
+  # Path is relative to DataProcessor/ working directory (where main.py is usually run)
+  cfg_path: "configs/audit_v3/visual/visual_core_object_detections_and_action_recognition_only.yaml"
+
+
+

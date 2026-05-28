@@ -1,5 +1,12 @@
 ## Component: `core_optical_flow` (Tier‑0 baseline)
 
+**Версия**: 2.2  
+**Schema Version**: `core_optical_flow_npz_v3`  
+**Категория**: core provider (Tier-0)
+
+- **Контракт NPZ, melt/QA, примеры команд:** [docs/FEATURE_DESCRIPTION.md](docs/FEATURE_DESCRIPTION.md)
+- **Валидатор:** `utils/validate_core_optical_flow_npz.py` (`--struct`, `--qa`, `--ranges` или батч `--results-base`)
+
 ### Назначение
 
 `core_optical_flow` вычисляет **покадровую кривую движения** (optical flow) на primary выборке кадров и сохраняет её в NPZ для downstream модулей (например, `video_pacing`).
@@ -164,6 +171,20 @@ core_optical_flow:
   - `0` для первого кадра
   - для остальных: \( \mathrm{mean}(\sqrt{dx^2+dy^2}) / dt / \max(h,w) \)
 - `dt_seconds (N,) float32` (`NaN` для первого кадра)
+- **Compact per-frame flow/camera stats (v3)** — все shape `(N,)`, `NaN` на первом кадре:
+  - `flow_mag_std_per_sec_norm`, `flow_mag_p95_per_sec_norm`
+  - `flow_dx_mean_per_sec_norm`, `flow_dy_mean_per_sec_norm`
+  - `flow_dir_sin_mean`, `flow_dir_cos_mean`, `flow_dir_dispersion`
+  - `flow_div_abs_mean`, `flow_consistency`
+  - `cam_affine_scale`, `cam_affine_rotation`, `cam_tx_per_sec_norm`, `cam_ty_per_sec_norm`
+  - `cam_shake_std_norm`, `bg_ratio`
+- **Backend preview (Audit v3)**:
+  - `preview_pair_pos (K,) int32` — позиции пар в timeline (диапазон `1..N-1`, где pair=(k-1,k))
+  - `preview_prev_frame_indices (K,) int32`
+  - `preview_cur_frame_indices (K,) int32`
+  - `preview_prev_times_s (K,) float32`
+  - `preview_cur_times_s (K,) float32`
+  - `preview_flow_mag_map_norm (K,64,64) float32` — downsampled magnitude heatmaps в `[0,1]` (robust per-map normalization)
 - `meta` (dict, object-array)
 
 ### Empty/error semantics
@@ -177,15 +198,22 @@ core_optical_flow:
 
 ### Meta / models_used
 
-`models_used[]` обязателен:
-- `runtime="triton-gpu"`
-- `engine="onnx"`
-- `device="cuda"`
-- `weights_digest="unknown"` (baseline)
+Если задан `--triton-model-spec`: используем `models_used[]` из ModelManager (identity spec’а + `weights_digest`).
+Иначе (legacy): `models_used[]` формируется из CLI аргументов компонента.
+
+Дополнительно (backend contract):
+- `backend_proxy_version="core_optical_flow_backend_proxy_v1"`
+- `preview_k` и `preview_map_size` (в `meta`)
 
 Также обязательно:
 - `dataprocessor_version` (baseline допускает `"unknown"`, в проде — версия релиза)
 - `stage_timings_ms` — словарь `{stage_name: duration_ms}` с таймингами ключевых стадий
+
+**Стадии stage_timings_ms**:
+- `initialization` — загрузка `metadata.json`, валидация `frame_indices`, инициализация Triton клиента
+- `flow_inference_total` — общее время inference (включая загрузку кадров, preprocessing, Triton inference, post-processing)
+- `saving` — формирование `meta` и атомарная запись NPZ
+- `total` — общее время работы компонента
 
 **Логирование таймингов**:
 - После завершения обработки компонент логирует тайминги всех стадий в консоль:
@@ -193,6 +221,18 @@ core_optical_flow:
   core_optical_flow | stage timings (ms): flow_inference_total=363.5, initialization=24.4, saving=2.7, total=20793.7
   ```
 - Тайминги также сохраняются в `meta.stage_timings_ms` в NPZ артефакте для последующего анализа
+
+**Детальное логирование** (DEBUG уровень):
+- Компонент логирует детальные тайминги для каждого батча:
+  - `load`: время загрузки кадров из FrameManager
+  - `prep`: время preprocessing (resize до input_size)
+  - `infer`: время Triton inference (два входа: prev_frame, cur_frame)
+  - `post`: время post-processing (вычисление motion norm)
+  - `total`: общее время батча и `ms/pair`
+
+Компонент публикует прогресс в `state_events.jsonl`:
+- Стадии: `start → load_deps → process_frames → post_process → save → done`
+- Гранулярный прогресс во время `process_frames` (≥10-15 обновлений по парам кадров)
 
 ### Sampling requirements (shared group)
 
@@ -209,36 +249,68 @@ core_optical_flow:
 
 ### Quality validation & human-friendly inspection
 
-**Render System** (автоматическая генерация):
+### Render (dev-only): как читать “движение” человеку
 
-Компонент автоматически генерирует **render-context JSON** для каждого запуска:
+Цель рендера `core_optical_flow`: показать человеку простую картину “насколько видео динамичное по времени”
+и где находятся пики движения (экшен, тряска камеры, быстрые склейки).
 
-- Путь: `result_store/<platform_id>/<video_id>/<run_id>/core_optical_flow/_render/render_context.json`
+#### Где лежат файлы рендера
 
-Этот JSON содержит:
-- **Summary**: статистики по motion curve (frames_count, motion_mean, motion_std, motion_min, motion_max, dt_mean, dt_std)
-- **Timeline**: данные по каждому кадру (frame_index, time_sec, motion_norm_per_sec, dt_seconds)
-- **Distributions**: распределения motion_norm_per_sec и dt_seconds (min, max, mean, std, median, percentiles)
+- `.../core_optical_flow/_render/render_context.json`
+- `.../core_optical_flow/_render/render.html`
 
-**HTML debug страница** (опционально):
-- Путь: `result_store/.../core_optical_flow/_render/render.html`
-- Содержит интерактивные графики (Chart.js):
-  - Timeline: motion norm per second и dt seconds по времени
-  - Distributions: статистики по motion и dt
-  - Summary metrics: ключевые показатели в удобном формате
+#### Что показывает текущий HTML (MVP сейчас)
 
-**Конфигурация** (в `global_config.yaml`):
+- **Timeline: `motion_norm_per_sec_mean`** — “сколько движения” между соседними sampled кадрами.
+  - **0** на первом кадре (пары нет).
+  - Чем больше значение, тем сильнее среднее движение в кадре.
+- **Timeline: `dt_seconds`** — временной зазор между кадрами (помогает понимать нормализацию “в секунду”).
+- **Summary/Distributions** — статистика по кривой движения (min/max/median/percentiles).
+
+#### Что ДОЛЖНО появиться в персонализированном рендере (target)
+
+Текущие графики полезны, но человеку нужен “визуальный смысл”. Поэтому рендер должен включать:
+
+- **Preview motion maps** (K=10 равномерно по видео):
+  - рядом показывать два кадра (prev/cur thumbnails)
+  - и **heatmap magnitude** (`preview_flow_mag_map_norm`) как картинку (0..1) + легенда
+- **Top peaks**:
+  - топ-5 пиков `motion_norm_per_sec_mean` с превью пары кадров и heatmap
+  - анти-топ-5 (почти статичные участки)
+- **Интерпретация причин**:
+  - “камера двигается” vs “объект двигается” (простая эвристика по локализации heatmap — опционально)
+
+#### Как интерпретировать типовые ситуации
+
+- **Постоянно высокий motion**:
+  - тряска камеры / очень динамичное видео / сильный шум.
+- **Редкие очень высокие пики**:
+  - вероятны резкие склейки, быстрые панорамы, переходы.
+- **motion почти везде около нуля**:
+  - статичный контент (говорящая голова, слайд-шоу).
+
+#### Время выполнения (что смотреть)
+
+- `meta.stage_timings_ms.flow_inference_total` — основной cost.
+
+#### Параметры конфига, которые сильнее всего влияют на качество/стоимость
+
+- **Preset**: `raft_256/384/512` (`--triton-preprocess-preset` / `triton_model_spec`)
+  - качество ↑ и цена ↑ при увеличении размера.
+- **Sampling**: частота кадров (если кадры редкие, motion будет “средним по секунде”, но детали потеряются).
+- **`batch_size`**: влияет на throughput/VRAM, не меняет значения.
+
+#### Конфигурация render
+
 ```yaml
 core_optical_flow:
   render:
-    enable_render: true  # Генерировать render-context JSON
-    enable_html_render: true  # Генерировать HTML debug страницу
+    enable_render: true
+    enable_html_render: true
 ```
 
-**Примечание**: Render генерируется автоматически после успешной обработки компонента (best-effort: ошибки render не валят основной процесс).
-
-**Legacy demo** (deprecated):
-- `scripts/baseline/demo_core_optical_flow_quality.py` — генерирует HTML с timeline, thumbnails, motion curve
+Legacy demo (deprecated, но полезно как референс “как хотим видеть картинки”):
+- `scripts/baseline/demo_core_optical_flow_quality.py`
 
 ### Оптимизации производительности
 

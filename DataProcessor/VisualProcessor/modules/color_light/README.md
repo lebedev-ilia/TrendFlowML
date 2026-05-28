@@ -2,6 +2,8 @@
 
 Модуль для комплексного анализа цвета и освещения видео. Извлекает покадровые (frame-level), сценовые (scene-level) и видеоуровневые (video-level) признаки для анализа визуального стиля, цветокоррекции и качества освещения.
 
+**Документация и проверка NPZ:** `docs/FEATURE_DESCRIPTION.md` (ключи, melt/QA, `--ranges`), `docs/SCHEMA.md` · `utils/validate_color_light.py` — `<npz> --struct --qa --ranges` либо скан `**/color_light/color_light_features.npz` через `--results-base` / `--platform-id`; старый отчёт по тестовым деревьям: `--legacy-report`.
+
 ## 📋 Содержание
 
 - [Обзор](#обзор)
@@ -27,6 +29,15 @@
 1. **Frame-level** — компактные нормализованные признаки для каждого кадра (для VisualTransformer)
 2. **Scene-level** — агрегированные признаки по сценам с временными паттернами
 3. **Video-level** — глобальные метрики стиля, эстетики и цветокоррекции
+
+### Audit v3 (contract)
+
+- **producer_version**: `2.0.2`
+- **schema_version**: `color_light_npz_v2`
+- **Human schema**: `DataProcessor/VisualProcessor/modules/color_light/SCHEMA.md`
+- **Machine schema**: `DataProcessor/VisualProcessor/schemas/color_light_npz_v2.json`
+- **Render policy**: полностью offline (без CDN), HTML+render-context JSON в `_render/`
+- **Debug gating**: `store_debug_objects` (по умолчанию `true`) — можно отключить сохранение тяжёлых `frames/scenes` в NPZ
 
 ### Основные возможности
 
@@ -110,6 +121,7 @@ python main.py \
     --rs-path /path/to/results \
     --max-frames-per-scene 350 \
     --stride 5 \
+    --store-debug-objects \
     --log-level INFO \
     --presentation-dir /path/to/VisualProcessor/presentation
 ```
@@ -120,6 +132,7 @@ python main.py \
 - `--rs-path` (обязательный): Путь к хранилищу результатов (ResultsStore)
 - `--max-frames-per-scene` (по умолчанию: 350): deprecated (sampling контролируется Segmenter)
 - `--stride` (по умолчанию: 5): deprecated (sampling контролируется Segmenter)
+- `--store-debug-objects` (0/1, по умолчанию: 1): сохранять ли тяжёлые debug/analytics объекты `frames/scenes`
 - `--log-level` (по умолчанию: INFO): Уровень логирования (DEBUG/INFO/WARN/ERROR)
 - `--presentation-dir` (опционально): папка для UI‑presentation JSON/HTML (вне result_store)
 
@@ -133,7 +146,8 @@ from utils.frame_manager import FrameManager
 processor = ColorLightProcessor(
     rs_path="/path/to/results",
     max_frames_per_scene=350,
-    stride=5
+    stride=5,
+    store_debug_objects=True,
 )
 
 # Полный запуск (с валидацией meta)
@@ -197,8 +211,19 @@ saved_path = processor.run(
     "times_s": [...],                # float32, union_timestamps_sec[frame_indices]
     "sequence_frame_indices": [...], # int32, порядок соответствует sequence_inputs["frames"]
     "sequence_times_s": [...]        # float32, union_timestamps_sec[sequence_frame_indices]
+    "frame_compact_features": [[...]],        # float32, shape (M,16) stable for models
+    "frame_compact_feature_names": [...],     # object, shape (16,)
+    "frame_compact_frame_indices": [...],     # int32, shape (M,) (aligns to frame_compact_features)
+    "aggregated": {...},                      # object, fixed tabular stats over frame_compact_features
+    "meta": {...}                   # dict (object), baseline meta keys + stage_timings_ms + models_used/model_signature
 }
 ```
+
+**Важно (Audit v3):**
+
+- `stage_timings_ms` находится в `meta.stage_timings_ms` (top-level)
+- `frames/scenes` могут быть `{}` если `store_debug_objects=0`
+- для моделей используйте **`frame_compact_features (M,16)`** + имена; `sequence_inputs` — debug/compat
 
 ### Компактный вектор кадра
 
@@ -336,10 +361,14 @@ saved_path = processor.run(
 - `style_tiktok_prob` — вероятность стиля TikTok
 
 #### Эстетические оценки
-- `nima_mean`, `nima_std` — оценки эстетики на основе контраста
-- `laion_mean`, `laion_std` — оценки эстетики на основе цветности
-- `cinematic_lighting_score` — оценка кинематографического освещения (0-1)
-- `professional_look_score` — оценка профессиональности кадра (0-1)
+
+> **Текущее состояние:** в baseline‑реализации реальные NIMA/LAION/кино‑модели **не подключены**.  
+> Модуль возвращает `NaN` для значений ниже и использует флаги `*_present` для сигнализации наличия моделей.
+
+- `nima_mean`, `nima_std` — placeholder‑поля под оценки эстетики (сейчас `NaN`, `nima_present=0.0`)
+- `laion_mean`, `laion_std` — placeholder‑поля под оценки LAION aesthetic (сейчас `NaN`, `laion_present=0.0`)
+- `cinematic_lighting_score` — placeholder под оценку кинематографического освещения (сейчас `NaN`, `cinematic_present=0.0`)
+- `professional_look_score` — placeholder под оценку профессиональности кадра (сейчас `NaN`, `professional_present=0.0`)
 
 #### Глобальная динамика
 - `global_brightness_change_speed` — глобальная скорость изменения яркости

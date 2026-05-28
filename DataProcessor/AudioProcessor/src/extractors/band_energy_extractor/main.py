@@ -5,19 +5,18 @@ Production-grade implementation with:
 - Segmenter contract support (run_segments)
 - Feature gating (per-feature flags)
 - Full validation (outputs, parameters)
-- No-fallback policy (explicit method selection)
+- Audit v3 no-fallback policy (librosa-only; no Essentia/auto fallback)
 - Progress reporting
 - UI renderer support
 - Contract versioning
 - Detailed error codes
-- Optional audio normalization
+- Audio normalization enabled by default (Audit v3)
 - Additional ML/analytics metrics
 - Integration with spectral_extractor via shared_features
 """
 import time
 import logging
 import os
-import importlib.util
 from typing import Dict, Any, Optional, List, Tuple, Callable
 from pathlib import Path
 from concurrent.futures import ThreadPoolExecutor, as_completed
@@ -27,6 +26,11 @@ import librosa
 
 from src.core.base_extractor import BaseExtractor, ExtractorResult
 from src.core.audio_utils import AudioUtils
+from src.extractors.band_energy_extractor.utils.resource_profile import (
+    prefix_snapshot,
+    resource_profile_enabled,
+    snapshot_process_resources,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -38,7 +42,7 @@ class BandEnergyExtractor(BaseExtractor):
     """Экстрактор энергий по частотным полосам с поддержкой segment-based обработки."""
 
     name = "band_energy"
-    version = "2.0.0"
+    version = "2.1.1"
     description = "Энергии по полосам (low/mid/high) и доли энергии"
     category = "spectral"
     dependencies = ["librosa", "numpy"]
@@ -55,9 +59,11 @@ class BandEnergyExtractor(BaseExtractor):
         bands: Optional[List[Tuple[float, float]]] = None,
         n_fft: int = 2048,
         hop_length: int = 512,
-        use_mel_bands: bool = True,
+        # Audit v3: canonical output uses fixed 3 bands (low/mid/high).
+        use_mel_bands: bool = False,
         n_mels: int = 3,
-        band_method: str = "auto",  # "essentia" | "librosa" | "auto"
+        # Audit v3: librosa-only; fail-fast for other values.
+        band_method: str = "librosa",  # "librosa" (audit v3)
         average_channels: bool = True,
         # Feature gating flags (per-feature control, default: all False)
         enable_basic_stats: bool = False,
@@ -66,7 +72,7 @@ class BandEnergyExtractor(BaseExtractor):
         enable_dynamics: bool = False,
         enable_balance_metrics: bool = False,
         # Optional audio normalization
-        enable_audio_normalization: bool = False,
+        enable_audio_normalization: bool = True,
         # Progress reporting callback
         progress_callback: Optional[Callable[[str, int, int, str], None]] = None,
         # Per-run storage path for .npy files
@@ -97,7 +103,7 @@ class BandEnergyExtractor(BaseExtractor):
         super().__init__(device=device)
 
         # Validate parameters
-        self._validate_parameters(sample_rate, n_fft, hop_length, bands, n_mels, band_method)
+        self._validate_parameters(sample_rate, n_fft, hop_length, bands, use_mel_bands, n_mels, band_method)
 
         self.sample_rate = int(sample_rate)
         self.n_fft = int(n_fft)
@@ -120,6 +126,14 @@ class BandEnergyExtractor(BaseExtractor):
         self.enable_dynamics = bool(enable_dynamics)
         self.enable_balance_metrics = bool(enable_balance_metrics)
 
+        # Audit v3 (band_energy): we keep only minimal + optional segment-aligned sequences.
+        # Stats/dynamics are removed from the audited contract (fail-fast if enabled).
+        if self.enable_basic_stats or self.enable_extended_stats or self.enable_dynamics:
+            raise RuntimeError(
+                "band_energy | Audit v3: basic/extended stats and dynamics are not supported in audited contract. "
+                "Disable enable_basic_stats/enable_extended_stats/enable_dynamics."
+            )
+
         # Optional audio normalization
         self.enable_audio_normalization = bool(enable_audio_normalization)
 
@@ -130,6 +144,26 @@ class BandEnergyExtractor(BaseExtractor):
         self.artifacts_dir = artifacts_dir
 
         self.audio_utils = AudioUtils(device=device, sample_rate=sample_rate)
+        # Cache band masks for per-segment speed (avoid rebuilding per window).
+        self._mask_cache_key: Optional[Tuple[int, int]] = None  # (sr, n_fft)
+        self._mask_cache_matrix: Optional[np.ndarray] = None
+
+    def _mask_matrix_for_freqs(self, freqs: np.ndarray, sr: int) -> np.ndarray:
+        """
+        Cached band mask matrix for (sr, n_fft).
+
+        Audit v3 for this extractor uses fixed 3 bands; caching is safe and speeds up run_segments().
+        """
+        key = (int(sr), int(self.n_fft))
+        if self._mask_cache_key == key and self._mask_cache_matrix is not None:
+            if int(self._mask_cache_matrix.shape[0]) == int(freqs.shape[0]):
+                return self._mask_cache_matrix
+
+        masks = [((freqs >= float(lo)) & (freqs < float(hi))).astype(np.float32) for lo, hi in self.bands]
+        mask_matrix = np.stack(masks, axis=1)  # (freq_bins, 3)
+        self._mask_cache_key = key
+        self._mask_cache_matrix = mask_matrix
+        return mask_matrix
 
     def _validate_parameters(
         self,
@@ -137,6 +171,7 @@ class BandEnergyExtractor(BaseExtractor):
         n_fft: int,
         hop_length: int,
         bands: Optional[List[Tuple[float, float]]],
+        use_mel_bands: bool,
         n_mels: int,
         band_method: str,
     ) -> None:
@@ -147,12 +182,18 @@ class BandEnergyExtractor(BaseExtractor):
             raise ValueError(f"band_energy | n_fft must be > 0, got {n_fft}")
         if hop_length <= 0:
             raise ValueError(f"band_energy | hop_length must be > 0, got {hop_length}")
+        # Audit v3: librosa-only
+        if band_method != "librosa":
+            raise RuntimeError(f"band_energy | Audit v3: band_method must be 'librosa', got {band_method!r}")
+        # Audit v3: fixed bands only
+        if use_mel_bands:
+            raise RuntimeError("band_energy | Audit v3: mel bands are not supported (use fixed 3 bands)")
         if n_mels < 3:
             raise ValueError(f"band_energy | n_mels must be >= 3, got {n_mels}")
-        if band_method not in ("essentia", "librosa", "auto"):
-            raise ValueError(f"band_energy | band_method must be 'essentia', 'librosa', or 'auto', got {band_method}")
 
         if bands is not None:
+            if len(bands) != 3:
+                raise RuntimeError(f"band_energy | Audit v3: bands must have length 3 (low/mid/high), got {len(bands)}")
             nyquist = sample_rate / 2.0
             for i, (lo, hi) in enumerate(bands):
                 if lo < 0 or hi > nyquist:
@@ -206,7 +247,7 @@ class BandEnergyExtractor(BaseExtractor):
             stft_magnitude = shared_features.get("stft_magnitude")
             if stft_magnitude is not None:
                 if not isinstance(stft_magnitude, np.ndarray):
-                    stft_magnitude = np.array(stft_magnitude)
+                    stft_magnitude = np.asarray(stft_magnitude)
                 if stft_magnitude.ndim != 2:
                     logger.warning(f"band_energy | Invalid stft_magnitude shape in shared_features: {stft_magnitude.shape}, recomputing")
                     stft_magnitude = None
@@ -215,78 +256,37 @@ class BandEnergyExtractor(BaseExtractor):
             freqs = shared_features.get("frequencies")
             if freqs is not None:
                 if not isinstance(freqs, np.ndarray):
-                    freqs = np.array(freqs)
+                    freqs = np.asarray(freqs)
                 if freqs.ndim != 1:
                     logger.warning(f"band_energy | Invalid frequencies shape in shared_features: {freqs.shape}, recomputing")
                     freqs = None
 
+            # Best-effort guard: ignore shared STFT if it looks unrelated to current window.
+            if stft_magnitude is not None and freqs is not None:
+                try:
+                    exp_bins = int(self.n_fft // 2 + 1)
+                    if int(stft_magnitude.shape[0]) != exp_bins or int(freqs.shape[0]) != exp_bins:
+                        stft_magnitude = None
+                        freqs = None
+                    else:
+                        approx_frames = max(1, int(np.ceil(float(len(y)) / float(self.hop_length))))
+                        shared_frames = int(stft_magnitude.shape[1])
+                        if shared_frames > int(approx_frames * 3.0) or shared_frames < int(max(1, approx_frames // 3)):
+                            stft_magnitude = None
+                            freqs = None
+                except Exception:
+                    stft_magnitude = None
+                    freqs = None
+
         # If no shared STFT — compute it here
         if stft_magnitude is None:
-            stft_magnitude = np.abs(librosa.stft(y, n_fft=self.n_fft, hop_length=self.hop_length)).astype(np.float32) ** 2
+            stft_c = librosa.stft(y, n_fft=self.n_fft, hop_length=self.hop_length)
+            mag = np.abs(stft_c).astype(np.float32)
+            mag *= mag  # power; avoids **2 temp
+            stft_magnitude = mag
             freqs = librosa.fft_frequencies(sr=sr, n_fft=self.n_fft).astype(np.float32)
 
         return stft_magnitude, freqs
-
-    def _compute_band_energies_essentia(
-        self,
-        y: np.ndarray,
-        sr: int,
-    ) -> Tuple[List[Tuple[float, float]], np.ndarray, np.ndarray]:
-        """Вычисление энергий по полосам через Essentia."""
-        if not importlib.util.find_spec("essentia"):
-            raise RuntimeError("band_energy | Essentia is not available (essentia package not found)")
-
-        try:
-            import essentia.standard as es  # type: ignore
-            audio = y.astype(np.float32)
-            frame_cutter = es.FrameCutter(frameSize=self.n_fft, hopSize=self.hop_length, startFromZero=True)
-            window = es.Windowing(type='hann')
-            spectrum = es.Spectrum()
-
-            num_bins = int(self.n_fft // 2 + 1)
-            freqs = np.linspace(0.0, sr / 2.0, num=num_bins, dtype=np.float32)
-
-            # Полосы: фиксированные или мел-шкала
-            bands_to_use = self.bands
-            if self.use_mel_bands:
-                mel_edges = librosa.mel_frequencies(n_mels=self.n_mels, fmin=0.0, fmax=sr / 2.0)
-                bands_to_use = list(zip(mel_edges[:-1], mel_edges[1:]))
-
-            band_masks = [(freqs >= lo) & (freqs < hi) for (lo, hi) in bands_to_use]
-
-            total_energy = 0.0
-            accum_energies = [0.0 for _ in band_masks]
-            per_frame: List[List[float]] = []
-
-            while True:
-                frame = frame_cutter(audio)
-                if frame.size == 0:
-                    break
-                win = window(frame)
-                spec = spectrum(win)  # magnitude
-                pwr = np.asarray(spec, dtype=np.float32) ** 2
-                total_energy += float(np.sum(pwr))
-                frame_energies = []
-                for i, mask in enumerate(band_masks):
-                    e = float(np.sum(pwr[mask]))
-                    accum_energies[i] += e
-                    frame_energies.append(e)
-                if self.enable_time_series:
-                    per_frame.append(frame_energies)
-
-            if total_energy == 0.0:
-                total_energy = float(np.sum(audio.astype(np.float32) ** 2) + 1e-12)
-
-            energies = np.array(accum_energies, dtype=np.float32)
-            band_energy_ts = np.array(per_frame, dtype=np.float32).T if per_frame else np.zeros((len(bands_to_use), 0), dtype=np.float32)
-
-            return bands_to_use, energies, band_energy_ts
-
-        except Exception as e:
-            if self.band_method == "essentia":
-                error_code = self._classify_error(e, "essentia_unavailable")
-                raise RuntimeError(f"band_energy | Essentia method failed (error_code={error_code}): {e}") from e
-            raise
 
     def _compute_band_energies_librosa(
         self,
@@ -304,11 +304,8 @@ class BandEnergyExtractor(BaseExtractor):
             mel_edges = librosa.mel_frequencies(n_mels=self.n_mels, fmin=0.0, fmax=sr / 2.0)
             bands_to_use = list(zip(mel_edges[:-1], mel_edges[1:]))
 
-        # Векторизованный биннинг: матрица масок (freq_bins, num_bands)
-        masks = []
-        for lo, hi in bands_to_use:
-            masks.append(((freqs >= float(lo)) & (freqs < float(hi))).astype(np.float32))
-        mask_matrix = np.stack(masks, axis=1)  # (freq_bins, num_bands)
+        # Векторизованный биннинг: матрица масок (freq_bins, 3) — кэшируется по (sr, n_fft)
+        mask_matrix = self._mask_matrix_for_freqs(freqs, sr)
 
         # Пер-кадровые энергии по полосам: (num_bands, frames)
         band_energy_ts = mask_matrix.T @ S  # матричное умножение
@@ -317,23 +314,6 @@ class BandEnergyExtractor(BaseExtractor):
         energies = band_energy_ts.sum(axis=1).astype(np.float32)
 
         return bands_to_use, energies, band_energy_ts
-
-    def _compute_statistics(self, band_energy_ts: np.ndarray) -> Dict[str, np.ndarray]:
-        """Вычисление статистик по временным рядам."""
-        stats: Dict[str, np.ndarray] = {}
-
-        if self.enable_basic_stats:
-            stats["mean"] = band_energy_ts.mean(axis=1)
-            stats["std"] = band_energy_ts.std(axis=1)
-            stats["median"] = np.median(band_energy_ts, axis=1)
-
-        if self.enable_extended_stats:
-            stats["min"] = band_energy_ts.min(axis=1)
-            stats["max"] = band_energy_ts.max(axis=1)
-            stats["p25"] = np.percentile(band_energy_ts, 25, axis=1)
-            stats["p75"] = np.percentile(band_energy_ts, 75, axis=1)
-
-        return stats
 
     def _compute_balance_metrics(self, shares: np.ndarray) -> Dict[str, float]:
         """Вычисление метрик баланса."""
@@ -363,19 +343,14 @@ class BandEnergyExtractor(BaseExtractor):
         # Validate basic fields
         if "band_edges" not in result:
             raise ValueError("band_energy | Missing band_edges in output")
-        if "band_energies" not in result:
-            raise ValueError("band_energy | Missing band_energies in output")
         if "band_energy_shares" not in result:
             raise ValueError("band_energy | Missing band_energy_shares in output")
 
         band_edges = result["band_edges"]
-        band_energies = result["band_energies"]
         band_shares = result["band_energy_shares"]
 
-        if not isinstance(band_edges, list) or len(band_edges) == 0:
-            raise ValueError(f"band_energy | Invalid band_edges: must be non-empty list, got {type(band_edges)}")
-        if not isinstance(band_energies, list) or len(band_energies) != len(band_edges):
-            raise ValueError(f"band_energy | Invalid band_energies: must be list of length {len(band_edges)}, got {len(band_energies) if isinstance(band_energies, list) else 'N/A'}")
+        if not isinstance(band_edges, list) or len(band_edges) != 3:
+            raise ValueError(f"band_energy | Invalid band_edges: must be list of length 3, got {type(band_edges)} len={len(band_edges) if isinstance(band_edges, list) else 'N/A'}")
         if not isinstance(band_shares, list) or len(band_shares) != len(band_edges):
             raise ValueError(f"band_energy | Invalid band_energy_shares: must be list of length {len(band_edges)}, got {len(band_shares) if isinstance(band_shares, list) else 'N/A'}")
 
@@ -383,11 +358,10 @@ class BandEnergyExtractor(BaseExtractor):
         shares_sum = sum(band_shares)
         if not (0.99 <= shares_sum <= 1.01):
             raise ValueError(f"band_energy | Invalid band_energy_shares: sum must be ~1.0, got {shares_sum}")
-
-        # Validate energies are non-negative
-        for i, energy in enumerate(band_energies):
-            if not isinstance(energy, (int, float)) or energy < 0:
-                raise ValueError(f"band_energy | Invalid band_energies[{i}]: must be non-negative float, got {energy}")
+        # Validate shares are finite non-negative
+        for i, s in enumerate(band_shares):
+            if not isinstance(s, (int, float)) or (float(s) < 0) or (not np.isfinite(float(s))):
+                raise ValueError(f"band_energy | Invalid band_energy_shares[{i}]: must be finite non-negative float, got {s}")
 
     def _report_progress(self, stage: str, current: int, total: int, message: str = "") -> None:
         """Отчет о прогрессе."""
@@ -410,6 +384,11 @@ class BandEnergyExtractor(BaseExtractor):
             ExtractorResult с результатами извлечения энергий по полосам
         """
         start_time = time.time()
+        t0 = time.perf_counter()
+        stage_ms: Dict[str, float] = {}
+        res_prof: Optional[Dict[str, Any]] = None
+        if resource_profile_enabled():
+            res_prof = {"at_start": snapshot_process_resources()}
         try:
             if not self._validate_input(input_uri):
                 error_code = self._classify_error(ValueError("Invalid input"), "audio_load_failed")
@@ -423,6 +402,7 @@ class BandEnergyExtractor(BaseExtractor):
             self._report_progress("load_audio", 0, 1, "Loading audio")
 
             # Load audio
+            t_load0 = time.perf_counter()
             y_t, sr = self.audio_utils.load_audio(input_uri, self.sample_rate)
             y = self.audio_utils.to_numpy(y_t)
             if y.ndim == 2:
@@ -434,6 +414,7 @@ class BandEnergyExtractor(BaseExtractor):
             y = y.astype(np.float32)
             if y.size == 0:
                 raise ValueError("band_energy | Пустой аудиосигнал (audio_too_short)")
+            stage_ms["load_audio_ms"] = float((time.perf_counter() - t_load0) * 1000.0)
 
             # Check minimum duration (at least 1 second)
             duration = len(y) / sr
@@ -443,64 +424,38 @@ class BandEnergyExtractor(BaseExtractor):
             # Normalize audio if enabled
             if self.enable_audio_normalization:
                 self._report_progress("normalize_audio", 0, 1, "Normalizing audio")
+                t_norm0 = time.perf_counter()
                 y = self._normalize_audio(y)
+                stage_ms["normalize_audio_ms"] = float((time.perf_counter() - t_norm0) * 1000.0)
 
             # Compute band energies
             self._report_progress("compute_bands", 0, 1, "Computing band energies")
-            bands_to_use, energies, band_energy_ts = None, None, None
-
-            if self.band_method == "essentia":
-                bands_to_use, energies, band_energy_ts = self._compute_band_energies_essentia(y, sr)
-            elif self.band_method == "librosa":
-                bands_to_use, energies, band_energy_ts = self._compute_band_energies_librosa(y, sr, shared_features)
-            else:  # auto
-                # Try Essentia first, fallback to librosa
-                try:
-                    bands_to_use, energies, band_energy_ts = self._compute_band_energies_essentia(y, sr)
-                except Exception as e:
-                    logger.info(f"band_energy | Essentia failed, using librosa fallback: {e}")
-                    bands_to_use, energies, band_energy_ts = self._compute_band_energies_librosa(y, sr, shared_features)
-
-            # Compute statistics
-            self._report_progress("compute_stats", 0, 1, "Computing statistics")
-            stats = self._compute_statistics(band_energy_ts)
+            t_bands0 = time.perf_counter()
+            bands_to_use, energies, _band_energy_ts = self._compute_band_energies_librosa(y, sr, shared_features)
+            stage_ms["compute_bands_ms"] = float((time.perf_counter() - t_bands0) * 1000.0)
 
             # Compute shares
+            t_sh0 = time.perf_counter()
             total_energy = float(np.sum(energies) + 1e-12)
             shares = (energies / total_energy).astype(np.float32)
+            stage_ms["compute_shares_ms"] = float((time.perf_counter() - t_sh0) * 1000.0)
 
             # Compute balance metrics
+            t_bal0 = time.perf_counter()
             balance_metrics = self._compute_balance_metrics(shares)
+            stage_ms["balance_metrics_ms"] = float((time.perf_counter() - t_bal0) * 1000.0)
 
             # Build payload
             payload: Dict[str, Any] = {
                 "band_edges": [(float(lo), float(hi)) for lo, hi in bands_to_use],
-                "band_energies": [float(e) for e in energies.tolist()],
                 "band_energy_shares": [float(s) for s in shares.tolist()],
-                "total_energy": total_energy,
                 "sample_rate": sr,
                 "n_fft": self.n_fft,
                 "hop_length": self.hop_length,
                 "duration": duration,
                 "device_used": self.device,
-                "method": "essentia" if self.band_method == "essentia" or (self.band_method == "auto" and importlib.util.find_spec("essentia") is not None) else "librosa",
+                "method": "librosa",
             }
-
-            # Add statistics if enabled
-            if self.enable_basic_stats:
-                payload["band_energy_mean"] = [float(m) for m in stats["mean"].tolist()]
-                payload["band_energy_std"] = [float(s) for s in stats["std"].tolist()]
-                payload["band_energy_median"] = [float(med) for med in stats["median"].tolist()]
-
-            if self.enable_extended_stats:
-                payload["band_energy_min"] = [float(m) for m in stats["min"].tolist()]
-                payload["band_energy_max"] = [float(m) for m in stats["max"].tolist()]
-                payload["band_energy_p25"] = [float(p) for p in stats["p25"].tolist()]
-                payload["band_energy_p75"] = [float(p) for p in stats["p75"].tolist()]
-
-            # Add time series if enabled
-            if self.enable_time_series:
-                payload["band_energy_ts"] = band_energy_ts.astype(np.float32).tolist()
 
             # Add balance metrics if enabled
             if self.enable_balance_metrics:
@@ -508,22 +463,27 @@ class BandEnergyExtractor(BaseExtractor):
 
             # Track enabled features for meta
             enabled_features = []
-            if self.enable_basic_stats:
-                enabled_features.append("basic_stats")
-            if self.enable_extended_stats:
-                enabled_features.append("extended_stats")
             if self.enable_time_series:
                 enabled_features.append("time_series")
-            if self.enable_dynamics:
-                enabled_features.append("dynamics")
             if self.enable_balance_metrics:
                 enabled_features.append("balance_metrics")
 
             payload["band_energy_contract_version"] = BAND_ENERGY_CONTRACT_VERSION
             payload["_features_enabled"] = enabled_features
+            payload["stage_timings_ms"] = {**stage_ms, "total_ms": float((time.perf_counter() - t0) * 1000.0)}
+            if res_prof is not None:
+                res_prof["at_end"] = snapshot_process_resources()
+                payload["band_energy_resource_profile"] = {
+                    **prefix_snapshot("at_start", res_prof.get("at_start", {})),
+                    **prefix_snapshot("at_end", res_prof.get("at_end", {})),
+                }
 
             # Validate output
+            t_val0 = time.perf_counter()
             self._validate_output(payload)
+            stage_ms["validate_output_ms"] = float((time.perf_counter() - t_val0) * 1000.0)
+            payload["stage_timings_ms"]["validate_output_ms"] = stage_ms["validate_output_ms"]
+            payload["stage_timings_ms"]["total_ms"] = float((time.perf_counter() - t0) * 1000.0)
 
             dt = time.time() - start_time
             self._log_extraction_success(input_uri, dt)
@@ -559,6 +519,11 @@ class BandEnergyExtractor(BaseExtractor):
             ExtractorResult с результатами извлечения энергий по полосам по сегментам
         """
         start_time = time.time()
+        t0 = time.perf_counter()
+        stage_ms: Dict[str, float] = {}
+        res_prof: Optional[Dict[str, Any]] = None
+        if resource_profile_enabled():
+            res_prof = {"at_start": snapshot_process_resources()}
         try:
             if not self._validate_input(input_uri):
                 error_code = self._classify_error(ValueError("Invalid input"), "audio_load_failed")
@@ -576,15 +541,19 @@ class BandEnergyExtractor(BaseExtractor):
             progress_report_interval = max(1, total_segments // 10) if total_segments >= 10 else 1
             last_reported_pct = -1
 
-            # Process segments
-            band_energies_all: List[List[float]] = []
-            band_shares_all: List[List[float]] = []
-            band_energy_ts_all: List[np.ndarray] = []
-            segment_centers: List[float] = []
-            segment_durations: List[float] = []
+            t_segmeta0 = time.perf_counter()
+            # Pre-collect segment timing for strict alignment.
+            segment_centers = [float(seg.get("center_sec", 0.0)) for seg in segments]
+            segment_durations = [float(seg.get("end_sec", 0.0) - seg.get("start_sec", 0.0)) for seg in segments]
+            stage_ms["load_segments_ms"] = float((time.perf_counter() - t_segmeta0) * 1000.0)
+            # Always compute per-segment shares for aggregation; optionally expose it as a sequence.
+            band_shares_by_segment = np.full((total_segments, 3), np.nan, dtype=np.float32)
+            segment_mask = np.zeros((total_segments,), dtype=bool)
 
             self._report_progress("load_segments", 0, total_segments, "Loading segments")
 
+            t_proc0 = time.perf_counter()
+            n_masked_short = 0
             for seg_idx, seg in enumerate(segments):
                 # Progress reporting
                 current_pct = (seg_idx * 100) // total_segments
@@ -595,8 +564,7 @@ class BandEnergyExtractor(BaseExtractor):
                 # Extract segment info
                 start_sample = int(seg.get("start_sample", 0))
                 end_sample = int(seg.get("end_sample", 0))
-                center_sec = float(seg.get("center_sec", 0.0))
-                duration_sec = float(seg.get("end_sec", 0.0) - seg.get("start_sec", 0.0))
+                duration_sec = segment_durations[seg_idx]
 
                 # Load segment audio
                 try:
@@ -616,54 +584,41 @@ class BandEnergyExtractor(BaseExtractor):
                     y = y.astype(np.float32)
 
                     if y.size == 0 or duration_sec < 0.5:
-                        # Skip very short segments
-                        logger.debug(f"band_energy | Skipping segment {seg_idx}: too short ({duration_sec:.2f}s)")
+                        # Audit v3: do not drop indices. Keep alignment; mark as invalid in mask.
+                        logger.debug(f"band_energy | Segment {seg_idx} too short ({duration_sec:.2f}s): masked out")
+                        n_masked_short += 1
                         continue
 
                     # Normalize audio if enabled
                     if self.enable_audio_normalization:
                         y = self._normalize_audio(y)
 
-                    # Compute band energies for segment
-                    bands_to_use, energies, band_energy_ts = None, None, None
-                    if self.band_method == "essentia":
-                        try:
-                            bands_to_use, energies, band_energy_ts = self._compute_band_energies_essentia(y, sr)
-                        except Exception:
-                            bands_to_use, energies, band_energy_ts = self._compute_band_energies_librosa(y, sr, shared_features)
-                    elif self.band_method == "librosa":
-                        bands_to_use, energies, band_energy_ts = self._compute_band_energies_librosa(y, sr, shared_features)
-                    else:  # auto
-                        try:
-                            bands_to_use, energies, band_energy_ts = self._compute_band_energies_essentia(y, sr)
-                        except Exception:
-                            bands_to_use, energies, band_energy_ts = self._compute_band_energies_librosa(y, sr, shared_features)
+                    # Compute band energies for segment (audit v3: librosa-only)
+                    bands_to_use, energies, _band_energy_ts = self._compute_band_energies_librosa(y, sr, shared_features)
 
                     # Compute shares
                     total_energy = float(np.sum(energies) + 1e-12)
                     shares = (energies / total_energy).astype(np.float32)
 
-                    # Store results
-                    band_energies_all.append(energies.tolist())
-                    band_shares_all.append(shares.tolist())
-                    if self.enable_time_series:
-                        band_energy_ts_all.append(band_energy_ts)
-                    segment_centers.append(center_sec)
-                    segment_durations.append(duration_sec)
+                    # Store results (aligned)
+                    band_shares_by_segment[seg_idx, :] = shares.astype(np.float32)
+                    segment_mask[seg_idx] = True
 
                 except Exception as e:
                     logger.warning(f"band_energy | Failed to process segment {seg_idx}: {e}")
                     continue
+            stage_ms["process_segments_ms"] = float((time.perf_counter() - t_proc0) * 1000.0)
 
-            if not band_energies_all:
+            if not bool(np.any(segment_mask)):
                 raise ValueError("band_energy | No valid segments processed (all segments too short or failed)")
 
             # Aggregate results
             self._report_progress("aggregate", total_segments, total_segments, "Aggregating results")
 
-            # Average energies and shares
-            avg_energies = np.mean([np.array(e) for e in band_energies_all], axis=0)
-            avg_shares = np.mean([np.array(s) for s in band_shares_all], axis=0)
+            # Aggregate shares (ignore masked rows)
+            t_ag0 = time.perf_counter()
+            avg_shares = np.nanmean(band_shares_by_segment, axis=0).astype(np.float32)
+            stage_ms["aggregate_results_ms"] = float((time.perf_counter() - t_ag0) * 1000.0)
 
             # Use first segment's band_edges (should be consistent)
             bands_to_use = self.bands
@@ -672,72 +627,31 @@ class BandEnergyExtractor(BaseExtractor):
                 bands_to_use = list(zip(mel_edges[:-1], mel_edges[1:]))
 
             # Build payload
+            span_sec: Optional[float] = None
+            try:
+                starts = [float(seg.get("start_sec", 0.0)) for seg in segments]
+                ends = [float(seg.get("end_sec", 0.0)) for seg in segments]
+                if starts and ends:
+                    span_sec = float(max(ends) - min(starts))
+            except Exception:
+                span_sec = None
             payload: Dict[str, Any] = {
                 "band_edges": [(float(lo), float(hi)) for lo, hi in bands_to_use],
-                "band_energies": [float(e) for e in avg_energies.tolist()],
                 "band_energy_shares": [float(s) for s in avg_shares.tolist()],
-                "total_energy": float(np.sum(avg_energies)),
                 "sample_rate": self.sample_rate,
                 "n_fft": self.n_fft,
                 "hop_length": self.hop_length,
+                "duration": span_sec,
                 "device_used": self.device,
-                "method": "librosa" if self.band_method == "librosa" or (self.band_method == "auto" and not importlib.util.find_spec("essentia")) else "essentia",
+                "method": "librosa",
             }
 
-            # Compute statistics from aggregated data
-            if band_energy_ts_all:
-                combined_ts = np.concatenate(band_energy_ts_all, axis=1)
-                stats = self._compute_statistics(combined_ts)
-
-                if self.enable_basic_stats:
-                    payload["band_energy_mean"] = [float(m) for m in stats["mean"].tolist()]
-                    payload["band_energy_std"] = [float(s) for s in stats["std"].tolist()]
-                    payload["band_energy_median"] = [float(med) for med in stats["median"].tolist()]
-
-                if self.enable_extended_stats:
-                    payload["band_energy_min"] = [float(m) for m in stats["min"].tolist()]
-                    payload["band_energy_max"] = [float(m) for m in stats["max"].tolist()]
-                    payload["band_energy_p25"] = [float(p) for p in stats["p25"].tolist()]
-                    payload["band_energy_p75"] = [float(p) for p in stats["p75"].tolist()]
-
-            # Add time series if enabled
-            if self.enable_time_series and band_energy_ts_all:
-                # Concatenate all time series
-                combined_ts = np.concatenate(band_energy_ts_all, axis=1)
-                payload["band_energy_ts"] = combined_ts.astype(np.float32).tolist()
+            # Optional segment-aligned sequence (Audit v3): expose shares_by_segment + mask.
+            if self.enable_time_series:
                 payload["segment_centers_sec"] = segment_centers
                 payload["segment_durations"] = segment_durations
-
-            # Add dynamics metrics if enabled
-            if self.enable_dynamics:
-                # Compute stability (variance of shares over segments)
-                shares_array = np.array(band_shares_all)
-                payload["band_energy_stability"] = float(1.0 / (1.0 + np.mean(np.std(shares_array, axis=0))))
-
-                # Compute transitions (significant changes in dominant band)
-                dominant_bands = [int(np.argmax(shares)) for shares in band_shares_all]
-                transitions = []
-                for i in range(1, len(dominant_bands)):
-                    if dominant_bands[i] != dominant_bands[i - 1]:
-                        transitions.append({
-                            "transition_index": i,
-                            "from_band": dominant_bands[i - 1],
-                            "to_band": dominant_bands[i],
-                            "transition_time_sec": segment_centers[i],
-                        })
-                payload["band_transitions"] = transitions
-                payload["band_transitions_count"] = len(transitions)
-                payload["band_transitions_rate"] = len(transitions) / max(segment_centers[-1] - segment_centers[0], 1e-6) if segment_centers else 0.0
-
-                # Distribution of dominant bands
-                band_distribution: Dict[int, float] = {}
-                for band_idx, dur in zip(dominant_bands, segment_durations):
-                    band_distribution[band_idx] = band_distribution.get(band_idx, 0.0) + dur
-                total_dur = sum(band_distribution.values())
-                if total_dur > 0:
-                    band_distribution = {k: v / total_dur for k, v in band_distribution.items()}
-                payload["band_distribution"] = band_distribution
-                payload["band_diversity"] = len(band_distribution)
+                payload["segment_mask"] = segment_mask.astype(bool).tolist()
+                payload["band_shares_by_segment"] = band_shares_by_segment.astype(np.float32).tolist()
 
             # Compute balance metrics
             balance_metrics = self._compute_balance_metrics(avg_shares)
@@ -746,22 +660,33 @@ class BandEnergyExtractor(BaseExtractor):
 
             # Track enabled features for meta
             enabled_features = []
-            if self.enable_basic_stats:
-                enabled_features.append("basic_stats")
-            if self.enable_extended_stats:
-                enabled_features.append("extended_stats")
             if self.enable_time_series:
                 enabled_features.append("time_series")
-            if self.enable_dynamics:
-                enabled_features.append("dynamics")
             if self.enable_balance_metrics:
                 enabled_features.append("balance_metrics")
 
             payload["band_energy_contract_version"] = BAND_ENERGY_CONTRACT_VERSION
             payload["_features_enabled"] = enabled_features
+            payload["stage_timings_ms"] = {
+                **stage_ms,
+                "segments_count": int(total_segments),
+                "segments_valid": int(np.sum(segment_mask)),
+                "segments_masked_short": int(n_masked_short),
+                "total_ms": float((time.perf_counter() - t0) * 1000.0),
+            }
+            if res_prof is not None:
+                res_prof["at_end"] = snapshot_process_resources()
+                payload["band_energy_resource_profile"] = {
+                    **prefix_snapshot("at_start", res_prof.get("at_start", {})),
+                    **prefix_snapshot("at_end", res_prof.get("at_end", {})),
+                }
 
             # Validate output
+            t_val0 = time.perf_counter()
             self._validate_output(payload)
+            stage_ms["validate_output_ms"] = float((time.perf_counter() - t_val0) * 1000.0)
+            payload["stage_timings_ms"]["validate_output_ms"] = stage_ms["validate_output_ms"]
+            payload["stage_timings_ms"]["total_ms"] = float((time.perf_counter() - t0) * 1000.0)
 
             dt = time.time() - start_time
             self._log_extraction_success(input_uri, dt)

@@ -10,6 +10,7 @@ Stage 3: GPU batching для core_object_detections с гибридным под
 
 from __future__ import annotations
 
+import json
 import os
 import sys
 import time
@@ -58,6 +59,9 @@ if _core_object_detections_main.exists():
         NAME = getattr(core_object_detections_module, "NAME", "core_object_detections")
         VERSION = getattr(core_object_detections_module, "VERSION", "2.1")
         SCHEMA_VERSION = getattr(core_object_detections_module, "SCHEMA_VERSION", "core_object_detections_npz_v1")
+        _PERSON_CLASS_ID = getattr(core_object_detections_module, "_PERSON_CLASS_ID", 0)
+        _LOGO_REGION_CLASS_ID = getattr(core_object_detections_module, "_LOGO_REGION_CLASS_ID", 33)
+        _TEXT_REGION_CLASS_ID = getattr(core_object_detections_module, "_TEXT_REGION_CLASS_ID", 34)
         ARTIFACT_FILENAME = "detections.npz"
     else:
         raise ImportError("Failed to load core_object_detections module")
@@ -132,6 +136,15 @@ def process_core_object_detections_batch(
     )
     
     start_time = time.perf_counter()
+
+    def _sha256_file(path: str) -> str:
+        import hashlib
+
+        h = hashlib.sha256()
+        with open(path, "rb") as f:
+            for chunk in iter(lambda: f.read(1024 * 1024), b""):
+                h.update(chunk)
+        return h.hexdigest()
     
     # Этап 1: Сбор всех кадров с привязкой к видео
     frames_by_video: List[Dict[str, Any]] = []
@@ -338,6 +351,12 @@ def process_core_object_detections_batch(
         device = pick_device(config.get("device", "auto"))
         box_threshold = float(config.get("box_threshold", 0.6))
         iou_threshold = float(config.get("iou_threshold", 0.3))
+
+        # Stable taxonomy (v1.0, 41 classes). We always emit full id->name mapping in NPZ.
+        if callable(_load_final_taxonomy_v1_classes):
+            base_taxonomy: Dict[int, str] = _load_final_taxonomy_v1_classes()
+        else:
+            base_taxonomy = {i: f"class_{i}" for i in range(41)}
         
         # Определяем размер батча
         effective_batch_size = max_frames_per_batch if max_frames_per_batch else batch_size
@@ -347,7 +366,8 @@ def process_core_object_detections_batch(
         scores_out = np.zeros((n_frames, MAX_DETECTIONS), dtype=np.float32)
         class_ids_out = np.zeros((n_frames, MAX_DETECTIONS), dtype=np.int32)
         valid_mask_out = np.zeros((n_frames, MAX_DETECTIONS), dtype=bool)
-        class_names: Dict[int, str] = {}
+        # start from stable mapping, then allow model-provided names to override.
+        class_names: Dict[int, str] = dict(base_taxonomy)
         raw_per_frame: List[np.ndarray] = [np.zeros((0, 5), dtype=np.float32) for _ in range(n_frames)]
         
         if runtime == "triton":
@@ -534,51 +554,44 @@ def process_core_object_detections_batch(
                     if res.boxes is None or len(res.boxes) == 0:
                         continue
                     
-                    # Оптимизация: используем data напрямую для batch операций
+                    # Contract (Audit v3): threshold affects ONLY valid_mask and derived curves;
+                    # boxes/scores/class_ids must keep top-MAX detections (after NMS), even if score<threshold.
                     try:
-                        # Пытаемся получить все данные сразу
                         boxes_data = res.boxes.data.cpu().numpy()  # (N, 6) [x1,y1,x2,y2,conf,cls]
                         if boxes_data.shape[0] == 0:
                             continue
-                        
-                        # Фильтруем по threshold векторизованно
-                        valid_mask_data = boxes_data[:, 4] >= box_threshold
-                        if not np.any(valid_mask_data):
-                            continue
-                        
-                        boxes_filtered = boxes_data[valid_mask_data]
-                        n_valid = min(len(boxes_filtered), MAX_DETECTIONS)
-                        boxes_filtered = boxes_filtered[:n_valid]
-                        
-                        # Заполняем выходные массивы векторизованно
-                        for j in range(n_valid):
-                            box = boxes_filtered[j]
-                            xyxy = box[:4].astype(np.float32)
-                            conf = float(box[4])
-                            cls_id = int(box[5]) if box.shape[0] > 5 else 0
-                            
-                            boxes_out[global_idx, j] = xyxy
-                            scores_out[global_idx, j] = conf
-                            class_ids_out[global_idx, j] = cls_id
-                            valid_mask_out[global_idx, j] = True
-                            
-                            if cls_id not in class_names:
-                                try:
-                                    class_names[cls_id] = res.names.get(cls_id, f"class_{cls_id}")
-                                except Exception:
-                                    class_names[cls_id] = f"class_{cls_id}"
-                        
-                        # Создаем raw_per_frame
-                        raw_per_frame[global_idx] = boxes_filtered[:, [0, 1, 2, 3, 4]].astype(np.float32)
-                        
+                        # Prefer sorting by confidence desc (stable for downstream/debug).
+                        order = np.argsort(boxes_data[:, 4])[::-1]
+                        boxes_sorted = boxes_data[order]
+                        n_take = int(min(boxes_sorted.shape[0], MAX_DETECTIONS))
+                        take = boxes_sorted[:n_take]
+
+                        # Fill fixed tensors
+                        boxes_out[global_idx, :n_take] = take[:, :4].astype(np.float32)
+                        scores_out[global_idx, :n_take] = take[:, 4].astype(np.float32)
+                        cls = take[:, 5].astype(np.int32) if take.shape[1] > 5 else np.zeros((n_take,), dtype=np.int32)
+                        class_ids_out[global_idx, :n_take] = cls
+                        valid_mask_out[global_idx, :n_take] = take[:, 4] >= float(box_threshold)
+
+                        # raw_per_frame = only valid detections (above threshold)
+                        vm = (take[:, 4] >= float(box_threshold))
+                        raw_per_frame[global_idx] = take[vm][:, [0, 1, 2, 3, 4]].astype(np.float32) if np.any(vm) else np.zeros((0, 5), dtype=np.float32)
+
+                        # Update class names from model if available
+                        try:
+                            names_map = getattr(res, "names", None)
+                            if isinstance(names_map, dict) and names_map:
+                                for cid in np.unique(cls).tolist():
+                                    if int(cid) in names_map:
+                                        class_names[int(cid)] = str(names_map[int(cid)])
+                        except Exception:
+                            pass
                     except Exception:
-                        # Fallback на поэлементную обработку если API изменился
+                        # Defensive fallback: per-element extraction
                         detections = []
                         for j in range(min(len(res.boxes), MAX_DETECTIONS)):
                             try:
                                 conf = float(res.boxes.conf[j].item())
-                                if conf < box_threshold:
-                                    continue
                                 xyxy = res.boxes.xyxy[j].cpu().numpy().astype(np.float32)
                                 cls_id = int(res.boxes.cls[j].item())
                             except Exception:
@@ -587,24 +600,17 @@ def process_core_object_detections_batch(
                                     xyxy = box[:4].astype(np.float32)
                                     conf = float(box[4])
                                     cls_id = int(box[5]) if box.shape[0] > 5 else 0
-                                    if conf < box_threshold:
-                                        continue
                                 except Exception:
                                     continue
-                            
+
                             boxes_out[global_idx, j] = xyxy
                             scores_out[global_idx, j] = conf
-                            class_ids_out[global_idx, j] = cls_id
-                            valid_mask_out[global_idx, j] = True
-                            detections.append([xyxy[0], xyxy[1], xyxy[2], xyxy[3], conf])
-                            
-                            if cls_id not in class_names:
-                                try:
-                                    class_names[cls_id] = res.names.get(cls_id, f"class_{cls_id}")
-                                except Exception:
-                                    class_names[cls_id] = f"class_{cls_id}"
-                        
-                        raw_per_frame[global_idx] = np.array(detections, dtype=np.float32) if detections else np.zeros((0, 5), dtype=np.float32)
+                            class_ids_out[global_idx, j] = int(cls_id)
+                            valid_mask_out[global_idx, j] = bool(conf >= float(box_threshold))
+                            if conf >= float(box_threshold):
+                                detections.append([float(xyxy[0]), float(xyxy[1]), float(xyxy[2]), float(xyxy[3]), float(conf)])
+
+                        raw_per_frame[global_idx] = np.asarray(detections, dtype=np.float32) if detections else np.zeros((0, 5), dtype=np.float32)
                 
                 if start % (effective_batch_size * 10) == 0:
                     logger.info(f"core_object_detections | batch | processed {batch_end}/{n_frames} frames")
@@ -643,8 +649,8 @@ def process_core_object_detections_batch(
             if frame_start_idx >= frame_end_idx or frame_start_idx >= len(boxes_out):
                 results.append({
                     "video_id": video_ctx.video_id,
-                    "status": "empty",
-                    "empty_reason": "no frames processed",
+                    "status": "error",
+                    "error": "no frames processed (all frames failed to load)",
                 })
                 continue
             
@@ -689,8 +695,66 @@ def process_core_object_detections_batch(
                 status = "ok"
                 empty_reason = None
             
-            class_names_arr = np.array([f"{k}:{v}" for k, v in sorted(class_names.items())], dtype="U")
+            # Emit full stable mapping 0..40 even if only a subset of classes was seen.
+            class_names_full = {i: str(class_names.get(i, base_taxonomy.get(i, f"class_{i}"))) for i in range(41)}
+            class_names_arr = np.array([f"{k}:{v}" for k, v in sorted(class_names_full.items())], dtype="U")
             
+            # Compute per-frame derived arrays (same contract as single-video provider).
+            analysis_w = int(metadata.get("analysis_width") or 0)
+            analysis_h = int(metadata.get("analysis_height") or 0)
+            if analysis_w <= 0 or analysis_h <= 0:
+                # Best-effort fallback: infer from first loaded frame for this video.
+                try:
+                    fr0 = all_frames[frame_start_idx][2]
+                    analysis_h, analysis_w = int(fr0.shape[0]), int(fr0.shape[1])
+                except Exception:
+                    analysis_w, analysis_h = 1, 1
+
+            denom_x = float(max(analysis_w - 1, 1))
+            denom_y = float(max(analysis_h - 1, 1))
+            boxes_norm = video_boxes.astype(np.float32).copy()
+            boxes_norm[..., 0] /= denom_x
+            boxes_norm[..., 2] /= denom_x
+            boxes_norm[..., 1] /= denom_y
+            boxes_norm[..., 3] /= denom_y
+            boxes_norm = np.clip(boxes_norm, 0.0, 1.0).astype(np.float32)
+
+            centers_norm = np.zeros((video_boxes.shape[0], video_boxes.shape[1], 2), dtype=np.float32)
+            centers_norm[..., 0] = ((video_boxes[..., 0] + video_boxes[..., 2]) / 2.0) / denom_x
+            centers_norm[..., 1] = ((video_boxes[..., 1] + video_boxes[..., 3]) / 2.0) / denom_y
+            centers_norm = np.clip(centers_norm, 0.0, 1.0).astype(np.float32)
+
+            w_box = np.clip(video_boxes[..., 2] - video_boxes[..., 0], 0.0, None).astype(np.float32)
+            h_box = np.clip(video_boxes[..., 3] - video_boxes[..., 1], 0.0, None).astype(np.float32)
+            denom_area = float(max(int(analysis_w) * int(analysis_h), 1))
+            areas_frac = (w_box * h_box / denom_area).astype(np.float32)
+
+            det_count = np.sum(video_valid_mask, axis=1).astype(np.int32)
+            person_mask = video_valid_mask & (video_class_ids == int(_PERSON_CLASS_ID))
+            text_mask = video_valid_mask & (video_class_ids == int(_TEXT_REGION_CLASS_ID))
+            logo_mask = video_valid_mask & (video_class_ids == int(_LOGO_REGION_CLASS_ID))
+
+            person_count = np.sum(person_mask, axis=1).astype(np.int32)
+            text_region_count = np.sum(text_mask, axis=1).astype(np.int32)
+            logo_region_count = np.sum(logo_mask, axis=1).astype(np.int32)
+
+            person_areas = np.where(person_mask, areas_frac, 0.0).astype(np.float32)
+            text_areas = np.where(text_mask, areas_frac, 0.0).astype(np.float32)
+            logo_areas = np.where(logo_mask, areas_frac, 0.0).astype(np.float32)
+
+            sum_person_area_frac = np.sum(person_areas, axis=1).astype(np.float32)
+            sum_text_area_frac = np.sum(text_areas, axis=1).astype(np.float32)
+            sum_logo_area_frac = np.sum(logo_areas, axis=1).astype(np.float32)
+            max_person_area_frac = np.max(person_areas, axis=1).astype(np.float32)
+            max_text_area_frac = np.max(text_areas, axis=1).astype(np.float32)
+            max_logo_area_frac = np.max(logo_areas, axis=1).astype(np.float32)
+
+            impl = f"{runtime}:{config.get('triton_model_name', config.get('model', 'unknown'))}"
+            if runtime == "triton":
+                impl = f"triton:{config.get('triton_model_name', 'triton')}"
+            else:
+                impl = "yolo"
+
             save_metadata = {
                 "producer": NAME,
                 "producer_version": VERSION,
@@ -698,7 +762,7 @@ def process_core_object_detections_batch(
                 "created_at": datetime.utcnow().isoformat() + "Z",
                 "status": status,
                 "empty_reason": empty_reason,
-                "impl": f"{runtime}:{config.get('triton_model_name', config.get('model', 'unknown'))}",
+                "impl": impl,
                 "model": config.get("model", ""),
                 "box_threshold": box_threshold,
                 "batch_size": int(batch_size),
@@ -730,11 +794,24 @@ def process_core_object_detections_batch(
             else:
                 model_name = str(config.get("model", ""))
                 engine = "ultralytics"
+                weights_digest = "unknown"
+                try:
+                    resolved = str(config.get("model", "") or "")
+                    if resolved and not os.path.exists(resolved):
+                        mr = os.environ.get("DP_MODELS_ROOT")
+                        if mr and not os.path.isabs(resolved):
+                            cand = os.path.join(str(mr), str(resolved))
+                            if os.path.exists(cand):
+                                resolved = cand
+                    if resolved and os.path.exists(resolved):
+                        weights_digest = _sha256_file(resolved)
+                except Exception:
+                    weights_digest = "unknown"
                 models_used = [
                     model_used(
                         model_name=model_name,
                         model_version="unknown",
-                        weights_digest="unknown",
+                        weights_digest=str(weights_digest),
                         runtime="inprocess",
                         engine=engine,
                         precision="fp32",
@@ -757,15 +834,30 @@ def process_core_object_detections_batch(
             save_metadata["stage_timings_ms"] = stage_timings_ms
             
             # Сохранение NPZ
+            meta_json_str = json.dumps(save_metadata, ensure_ascii=False, default=str)
             npz_dict = {
                 "meta": np.asarray(save_metadata, dtype=object),
+                "meta_json": np.array(meta_json_str, dtype="U"),
                 "frame_indices": np.asarray(video_frame_indices, dtype=np.int32),
                 "times_s": video_times_s.astype(np.float32),
                 "boxes": video_boxes.astype(np.float32),
+                "boxes_norm": boxes_norm,
+                "centers_norm": centers_norm,
+                "areas_frac": areas_frac,
                 "scores": video_scores.astype(np.float32),
                 "class_ids": video_class_ids.astype(np.int32),
                 "valid_mask": video_valid_mask,
                 "class_names": class_names_arr,
+                "det_count": det_count,
+                "person_count": person_count,
+                "text_region_count": text_region_count,
+                "logo_region_count": logo_region_count,
+                "sum_person_area_frac": sum_person_area_frac,
+                "max_person_area_frac": max_person_area_frac,
+                "sum_text_area_frac": sum_text_area_frac,
+                "max_text_area_frac": max_text_area_frac,
+                "sum_logo_area_frac": sum_logo_area_frac,
+                "max_logo_area_frac": max_logo_area_frac,
             }
             
             _atomic_save_npz(npz_path, **npz_dict)

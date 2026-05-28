@@ -13,8 +13,9 @@ class Comment:
 class VideoDocument:
     title: str
     description: str
-    # Hashtags extracted from title/description by TagsExtractor (casefolded, without '#').
-    # This is an in-memory intra-run field used by downstream extractors (e.g., HashtagEmbedder).
+    # Hashtags: loaded from JSON if present; after TagsExtractor with mutate_doc_hashtags, replaced by
+    # merged list (inline #tags from title/description + optional JSON entries, deduped casefold).
+    # Downstream (e.g. HashtagEmbedder) reads this field in-process.
     hashtags: List[str] = field(default_factory=list)
     transcripts: Dict[str, str] = field(default_factory=dict)
     # Optional: tokenized transcripts (shared tokenizer under dp_models).

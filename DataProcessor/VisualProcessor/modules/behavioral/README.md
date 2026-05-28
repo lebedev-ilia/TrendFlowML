@@ -155,6 +155,15 @@ finally:
 
 Артефакт: `result_store/<platform_id>/<video_id>/<run_id>/behavioral/behavioral_features.npz`
 
+- **Сводка ключей, meta → CSV, melt/QA:** `docs/FEATURE_DESCRIPTION.md`
+
+### Schema (Audit v3)
+
+- **schema_version**: `behavioral_npz_v1`
+- **producer_version**: `2.0.1`
+- **Human schema**: [SCHEMA.md](./SCHEMA.md)
+- **Machine schema**: `DataProcessor/VisualProcessor/schemas/behavioral_npz_v1.json`
+
 ### Обязательные поля
 
 - `frame_indices (N,) int32` — индексы кадров (union‑domain).
@@ -345,7 +354,13 @@ results = {
 
 ## Параметры конфигурации
 
-Модуль не требует параметров конфигурации (использует пустой `config={}`). Все настройки заложены в алгоритмах анализа.
+Модуль имеет один параметр, влияющий на “вес” артефакта (без изменения схемы):
+
+- **`store_debug_objects`** (`bool`, default: `true`):
+  - `true`: сохраняет полный `frame_results` и `hand_gestures` (удобно для QA/аудита).
+  - `false`: сохраняет `frame_results` как пустые dict’ы и `hand_gestures` как пустые списки (существенно меньше NPZ по размеру; для production).
+  
+Остальные настройки заложены в алгоритмах анализа.
 
 ### Внутренние параметры
 
@@ -572,7 +587,7 @@ Render-context может быть использован:
 
 **HTML debug страница** (опционально):
 - Путь: `result_store/.../behavioral/_render/render.html`
-- Содержит интерактивные графики (Chart.js):
+- Содержит offline SVG графики (без CDN):
   - Timeline: speech_activity, arm_openness, body_lean_angle по времени
   - Distributions: статистики по ключевым признакам
   - Summary metrics: ключевые показатели в удобном формате

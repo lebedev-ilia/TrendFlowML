@@ -1,0 +1,15 @@
+# Опциональные зависимости для централизованного логирования
+# Установите только те, которые нужны для вашего backend'а
+
+# Для Loki и Elasticsearch
+httpx>=0.24.0
+
+# Для AWS CloudWatch
+boto3>=1.28.0
+
+# Для GCP Cloud Logging (TODO: добавить поддержку)
+# google-cloud-logging>=3.5.0
+
+# Для Azure Monitor (TODO: добавить поддержку)
+# azure-monitor-opentelemetry>=1.0.0
+

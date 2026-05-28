@@ -11,6 +11,7 @@ from .emotion_diarization import save_emotion_diarization_npz
 from .source_separation import save_source_separation_npz
 from .speech_analysis import save_speech_analysis_npz
 from .onset import save_onset_npz
+from .pitch import save_pitch_npz
 from .rhythmic import save_rhythmic_npz
 from .chroma import save_chroma_npz
 from .key import save_key_npz
@@ -33,6 +34,7 @@ __all__ = [
     "save_source_separation_npz",
     "save_speech_analysis_npz",
     "save_onset_npz",
+    "save_pitch_npz",
     "save_rhythmic_npz",
     "save_chroma_npz",
     "save_key_npz",

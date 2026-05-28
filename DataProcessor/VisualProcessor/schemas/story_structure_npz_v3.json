@@ -1,0 +1,73 @@
+{
+  "schema_system_version": "vp_schema_v1",
+  "schema_version": "story_structure_npz_v3",
+  "producer": "story_structure",
+  "artifact_kind": "npz",
+  "allow_extra_keys": false,
+  "meta": {
+    "required_keys": [
+      "producer",
+      "producer_version",
+      "schema_version",
+      "created_at",
+      "platform_id",
+      "video_id",
+      "run_id",
+      "config_hash",
+      "sampling_policy_version",
+      "dataprocessor_version",
+      "status",
+      "empty_reason",
+      "models_used",
+      "model_signature",
+      "stage_timings_ms"
+    ],
+    "optional_keys": [
+      "total_frames",
+      "processed_frames",
+      "frames_dir",
+      "analysis_fps",
+      "analysis_width",
+      "analysis_height",
+      "ui_payload",
+      "min_frames",
+      "max_frames",
+      "energy_smoothing_sigma",
+      "text_mode",
+      "clip_text_model_spec",
+      "clip_text_batch_size",
+      "ocr_max_chars_per_frame",
+      "triton_http_url",
+      "min_energy_peak_sep_sec"
+    ]
+  },
+  "fields": {
+    "frame_indices": { "required": true, "tier": "model_facing", "dtype": "int32", "shape": ["N"] },
+    "times_s": { "required": true, "tier": "model_facing", "dtype": "float32", "shape": ["N"] },
+
+    "story_energy_curve": { "required": true, "tier": "model_facing", "dtype": "float32", "shape": ["N"] },
+    "frame_feature_present_ratio": { "required": true, "tier": "model_facing", "dtype": "float32", "shape": ["N"] },
+    "motion_norm_per_sec_mean": { "required": true, "tier": "model_facing", "dtype": "float32", "shape": ["N"] },
+    "embedding_change_rate_per_sec": { "required": true, "tier": "model_facing", "dtype": "float32", "shape": ["N"] },
+    "any_face_present": { "required": true, "tier": "model_facing", "dtype": "bool", "shape": ["N"] },
+
+    "topic_shift_curve": { "required": true, "tier": "model_facing", "dtype": "float32", "shape": ["N"] },
+    "topic_shift_curve_present": { "required": true, "tier": "model_facing", "dtype": "bool", "shape": [] },
+    "topic_shift_peaks_idx": { "required": true, "tier": "analytics", "dtype": "int32", "shape": ["T"] },
+
+    "embedding_sim_next": { "required": true, "tier": "analytics", "dtype": "float32", "shape": ["N-1"] },
+    "embedding_diff_next": { "required": true, "tier": "analytics", "dtype": "float32", "shape": ["N-1"] },
+
+    "story_energy_curve_downsampled_128": { "required": true, "tier": "analytics", "dtype": "float32", "shape": [128] },
+    "story_energy_peaks_idx": { "required": true, "tier": "analytics", "dtype": "int32", "shape": ["P"] },
+    "story_energy_peaks_times_s": { "required": true, "tier": "analytics", "dtype": "float32", "shape": ["P"] },
+    "story_energy_peaks_values_z": { "required": true, "tier": "analytics", "dtype": "float32", "shape": ["P"] },
+
+    "feature_names": { "required": true, "tier": "model_facing", "dtype": "object", "shape": ["F"] },
+    "feature_values": { "required": true, "tier": "model_facing", "dtype": "float32", "shape": ["F"] },
+
+    "meta": { "required": true, "tier": "debug", "dtype": "object", "shape": [] }
+  }
+}
+
+

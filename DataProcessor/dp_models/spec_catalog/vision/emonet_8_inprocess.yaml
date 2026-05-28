@@ -14,8 +14,9 @@ runtime_params:
   factory_kwargs:
     n_expression: 8
   checkpoint_relpath: bundled_models/visual/emonet/emonet_8.pth
-  # EmoNet checkpoints in this repo are raw state_dict dicts (no nested key). Provider will handle it.
-  state_dict_key: state_dict
+  # EmoNet checkpoints are raw state_dict dicts (no nested key).
+  # Provider will check for state_dict_key, and if not found, use entire checkpoint as state_dict.
+  state_dict_key: state_dict  # Provider handles raw state_dict if key not found
   strict: false
   strip_prefix: "module."
 

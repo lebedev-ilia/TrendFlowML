@@ -32,8 +32,6 @@ def load_and_validate_segments(
     audio_path = os.path.join(frames_dir, "audio", "audio.wav")
     segments_json = os.path.join(frames_dir, "audio", "segments.json")
     
-    if not os.path.exists(audio_path):
-        raise RuntimeError(f"AudioProcessor | missing required audio file: {audio_path}")
     if not os.path.exists(segments_json):
         raise RuntimeError(f"AudioProcessor | missing required segments.json: {segments_json}")
     
@@ -42,6 +40,14 @@ def load_and_validate_segments(
 
     if str(segments_payload.get("schema_version")) != "audio_segments_v1":
         raise RuntimeError(f"AudioProcessor | unsupported segments.json schema: {segments_payload.get('schema_version')}")
+
+    # Valid empty: video has no audio stream. Segmenter writes segments.json with audio_present=false.
+    # In this case AudioProcessor must NOT require audio.wav and must NOT validate segment families.
+    if segments_payload.get("audio_present") is False:
+        return None, segments_payload
+
+    if not os.path.exists(audio_path):
+        raise RuntimeError(f"AudioProcessor | missing required audio file: {audio_path}")
 
     families = segments_payload.get("families") or {}
     primary = ((families.get("primary") or {}) if isinstance(families, dict) else {}) or {}
@@ -59,8 +65,15 @@ def load_and_validate_segments(
     diar_segments = diar_f.get("segments") or []
     emo_segments = emo_f.get("segments") or []
     sep_segments = sep_f.get("segments") or []
-    pitch_f = families.get("pitch", {})
-    pitch_segments = pitch_f.get("segments") or []
+    # NOTE(Audit v3): unified sampling policy. Some extractors intentionally share a family.
+    # We treat `spectral` as the required family for:
+    # - pitch
+    # - band_energy
+    # - spectral_entropy
+    #
+    # This is NOT a runtime fallback: it is the declared sampling requirement.
+    # Segmenter remains the single owner of sampling (Segmenter-only policy).
+    pitch_segments: List[Any] = []
     spectral_f = families.get("spectral", {})
     spectral_segments = spectral_f.get("segments") or []
     quality_f = families.get("quality", {})
@@ -81,28 +94,10 @@ def load_and_validate_segments(
     hpss_segments = hpss_f.get("segments") or []
     key_f = families.get("key", {})
     key_segments = key_f.get("segments") or []
-    band_energy_f = families.get("band_energy", {})
-    band_energy_segments = band_energy_f.get("segments") or []
-    # Fallback для band_energy: если family отсутствует, используем spectral или primary segments
-    if not band_energy_segments:
-        if spectral_segments:
-            band_energy_segments = spectral_segments
-        elif primary_segments:
-            band_energy_segments = primary_segments
-    spectral_entropy_f = families.get("spectral_entropy", {})
-    spectral_entropy_segments = spectral_entropy_f.get("segments") or []
-    # Fallback для spectral_entropy: если family отсутствует, используем spectral или primary segments
-    if not spectral_entropy_segments:
-        if spectral_segments:
-            spectral_entropy_segments = spectral_segments
-        elif primary_segments:
-            spectral_entropy_segments = primary_segments
-    # Fallback для pitch: если family отсутствует, используем spectral или primary segments
-    if not pitch_segments:
-        if spectral_segments:
-            pitch_segments = spectral_segments
-        elif primary_segments:
-            pitch_segments = primary_segments
+    # Shared-family extractors (Audit v3): require spectral family
+    band_energy_segments = spectral_segments
+    spectral_entropy_segments = spectral_segments
+    pitch_segments = spectral_segments
     # Validate required segments for each extractor
     if ("loudness" in extractor_keys) and (not isinstance(primary_segments, list) or not primary_segments):
         raise RuntimeError("AudioProcessor | segments.json missing families.primary.segments (no-fallback)")
@@ -118,11 +113,11 @@ def load_and_validate_segments(
         raise RuntimeError("AudioProcessor | segments.json missing families.emotion.segments (no-fallback)")
     if ("source_separation" in extractor_keys) and (not isinstance(sep_segments, list) or not sep_segments):
         raise RuntimeError("AudioProcessor | segments.json missing families.source_separation.segments (no-fallback)")
-    if ("pitch" in extractor_keys) and (not isinstance(pitch_segments, list) or not pitch_segments):
-        # pitch может использовать spectral или primary segments как fallback
-        # Если и они отсутствуют, тогда ошибка
-        if not spectral_segments and not primary_segments:
-            raise RuntimeError("AudioProcessor | segments.json missing families.pitch.segments and no fallback (spectral/primary) available (no-fallback)")
+    # Shared-family extractors must have spectral segments present.
+    if (("pitch" in extractor_keys) or ("band_energy" in extractor_keys) or ("spectral_entropy" in extractor_keys)) and (
+        not isinstance(spectral_segments, list) or not spectral_segments
+    ):
+        raise RuntimeError("AudioProcessor | segments.json missing families.spectral.segments (required for pitch/band_energy/spectral_entropy)")
     if ("spectral" in extractor_keys) and (not isinstance(spectral_segments, list) or not spectral_segments):
         raise RuntimeError("AudioProcessor | segments.json missing families.spectral.segments (no-fallback)")
     if ("quality" in extractor_keys) and (not isinstance(quality_segments, list) or not quality_segments):
@@ -135,24 +130,20 @@ def load_and_validate_segments(
         raise RuntimeError("AudioProcessor | segments.json missing families.onset.segments (no-fallback)")
     if ("chroma" in extractor_keys) and (not isinstance(chroma_segments, list) or not chroma_segments):
         raise RuntimeError("AudioProcessor | segments.json missing families.chroma.segments (no-fallback)")
-    if ("rhythmic" in extractor_keys) and (not isinstance(rhythmic_segments, list) or not rhythmic_segments):
-        raise RuntimeError("AudioProcessor | segments.json missing families.rhythmic.segments (no-fallback)")
+    # Audit v3 (rhythmic): unified sampling policy — rhythmic_extractor requires `families.tempo`.
+    # Migration support: accept legacy `families.rhythmic` if tempo is absent (explicitly documented).
+    if "rhythmic" in extractor_keys:
+        tempo_ok = isinstance(tempo_segments, list) and bool(tempo_segments)
+        rhythmic_ok = isinstance(rhythmic_segments, list) and bool(rhythmic_segments)
+        if not tempo_ok and not rhythmic_ok:
+            raise RuntimeError("AudioProcessor | segments.json missing families.tempo.segments (required for rhythmic_extractor)")
     if ("voice_quality" in extractor_keys) and (not isinstance(voice_quality_segments, list) or not voice_quality_segments):
         raise RuntimeError("AudioProcessor | segments.json missing families.voice_quality.segments (no-fallback)")
     if ("hpss" in extractor_keys) and (not isinstance(hpss_segments, list) or not hpss_segments):
         raise RuntimeError("AudioProcessor | segments.json missing families.hpss.segments (no-fallback)")
     if ("key" in extractor_keys) and (not isinstance(key_segments, list) or not key_segments):
         raise RuntimeError("AudioProcessor | segments.json missing families.key.segments (no-fallback)")
-    if ("band_energy" in extractor_keys) and (not isinstance(band_energy_segments, list) or not band_energy_segments):
-        # band_energy может использовать spectral или primary segments как fallback
-        # Если и они отсутствуют, тогда ошибка
-        if not spectral_segments and not primary_segments:
-            raise RuntimeError("AudioProcessor | segments.json missing families.band_energy.segments and no fallback (spectral/primary) available (no-fallback)")
-    if ("spectral_entropy" in extractor_keys) and (not isinstance(spectral_entropy_segments, list) or not spectral_entropy_segments):
-        # spectral_entropy может использовать spectral или primary segments как fallback
-        # Если и они отсутствуют, тогда ошибка
-        if not spectral_segments and not primary_segments:
-            raise RuntimeError("AudioProcessor | segments.json missing families.spectral_entropy.segments and no fallback (spectral/primary) available (no-fallback)")
+    # NOTE: band_energy/spectral_entropy are shared-family extractors validated above via spectral family.
     
     return audio_path, segments_payload
 

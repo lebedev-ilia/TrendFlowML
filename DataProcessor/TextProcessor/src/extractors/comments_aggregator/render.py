@@ -51,8 +51,15 @@ def render_comments_aggregator(
     # Extract aggregation features (use canonical prefix, but also check legacy)
     aggregation = {}
     for key, value in extractor_features.items():
-        if key in ["tp_commentsagg_present", "tp_commentsagg_count", "tp_commentsagg_dim", 
-                   "tp_commentsagg_mean_std", "tp_commentsagg_median_std"]:
+        if key in [
+            "tp_commentsagg_present",
+            "tp_commentsagg_count",
+            "tp_commentsagg_dim",
+            "tp_commentsagg_mean_std",
+            "tp_commentsagg_median_std",
+            "tp_commentsagg_agg_mean_ms",
+            "tp_commentsagg_agg_median_ms",
+        ]:
             feature_name = key.replace("tp_commentsagg_", "")
             aggregation[feature_name] = _clean_value(value)
         # Also check legacy prefixes
@@ -90,8 +97,9 @@ def render_comments_aggregator(
     for key, value in extractor_features.items():
         if key.startswith("tp_commentsagg_") and not any(key.startswith(prefix) for prefix in [
             "tp_commentsagg_present", "tp_commentsagg_count", "tp_commentsagg_dim",
-            "tp_commentsagg_mean_std", "tp_commentsagg_median_std", "tp_commentsagg_weights_",
-            "tp_commentsagg_artifact_", "tp_commentsagg_unsafe_", "tp_commentsagg_dim_mismatch"
+            "tp_commentsagg_mean_std", "tp_commentsagg_median_std", "tp_commentsagg_agg_",
+            "tp_commentsagg_weights_", "tp_commentsagg_artifact_", "tp_commentsagg_unsafe_",
+            "tp_commentsagg_dim_mismatch",
         ]):
             feature_name = key.replace("tp_commentsagg_", "")
             configuration[feature_name] = _clean_value(value)

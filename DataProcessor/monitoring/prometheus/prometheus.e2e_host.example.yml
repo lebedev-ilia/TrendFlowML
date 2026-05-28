@@ -1,0 +1,38 @@
+# Пример: Prometheus в Docker, DataProcessor API + Worker на хосте (E2E / ручной стек).
+# Скопируйте в prometheus.e2e_host.yml, поправьте порты и:
+#   docker compose -f ../docker-compose.yml -f monitoring/docker-compose.prometheus-override-e2e.yml
+# (override добавляет host.docker.internal в Prometheus) — см. README раздел «Пилот 15».
+#
+# Типичные порты (backend/scripts/e2e_env.sh): DataProcessor API :8002, worker metrics :8003
+# (8001 — Backend API в полном E2E; DP_WORKER_METRICS_PORT по умолчанию 8003).
+
+global:
+  scrape_interval: 15s
+  evaluation_interval: 15s
+  external_labels:
+    cluster: 'dataprocessor-e2e'
+    environment: 'dev'
+
+# Для пилота без Alertmanager в Docker уберите/закомментируйте alerting или поднимите alertmanager.
+# alerting: ...
+
+# rule_files: []  # при необходимости подключите alerts.yml (путь внутри контейнера)
+
+scrape_configs:
+  - job_name: 'dataprocessor-api-e2e-host'
+    scrape_interval: 10s
+    metrics_path: '/api/v1/metrics'
+    static_configs:
+      - targets:
+          - 'host.docker.internal:8002'
+
+  - job_name: 'dataprocessor-worker-e2e-host'
+    scrape_interval: 10s
+    metrics_path: '/metrics'
+    static_configs:
+      - targets:
+          - 'host.docker.internal:8003'
+
+  - job_name: 'prometheus'
+    static_configs:
+      - targets: ['localhost:9090']

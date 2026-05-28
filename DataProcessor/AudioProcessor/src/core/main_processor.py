@@ -19,6 +19,7 @@ from concurrent.futures import ThreadPoolExecutor, ProcessPoolExecutor
 from .base_extractor import BaseExtractor, ExtractorResult
 from .audio_utils import AudioUtils
 from .audio_file_context import AudioFileContext
+from .orchestrator_telemetry import OrchestratorTelemetryCollector
 
 logger = logging.getLogger(__name__)
 
@@ -79,11 +80,11 @@ class MainProcessor:
         emotion_silence_peak_threshold: float = 1e-3,
         emotion_silence_rms_threshold: float = 1e-4,
         emotion_enable_probs: bool = False,
-        emotion_enable_ids: bool = False,
-        emotion_enable_confidence: bool = False,
+        emotion_enable_ids: bool = True,
+        emotion_enable_confidence: bool = True,
         emotion_enable_mean_probs: bool = False,
-        emotion_enable_entropy: bool = False,
-        emotion_enable_dominant: bool = False,
+        emotion_enable_entropy: bool = True,
+        emotion_enable_dominant: bool = True,
         emotion_enable_quality_metrics: bool = False,
         emotion_enable_silence_detection: bool = True,
         emotion_process_full_audio: bool = False,
@@ -97,6 +98,8 @@ class MainProcessor:
         sep_enable_share_std: bool = False,
         sep_enable_quality_metrics: bool = False,
         sep_enable_silence_detection: bool = True,
+        # Override device for source separation only (None = same as ``device``).
+        source_separation_device: Optional[str] = None,
         speech_analysis_pitch_enabled: bool = False,
         speech_silence_peak_threshold: float = 1e-3,
         speech_silence_rms_threshold: float = 1e-4,
@@ -113,7 +116,7 @@ class MainProcessor:
         pitch_backend: str = "classic",
         pitch_channel_mode: str = "first",
         pitch_torchcrepe_batch_size: int = 1,
-        pitch_enable_basic_stats: bool = False,
+        pitch_enable_basic_stats: bool = True,
         pitch_enable_stability_metrics: bool = False,
         pitch_enable_delta_features: bool = False,
         pitch_enable_method_stats: bool = False,
@@ -125,7 +128,7 @@ class MainProcessor:
         spectral_average_channels: bool = True,
         spectral_keep_contrast_bands: bool = True,
         spectral_enable_normalization: bool = False,
-        spectral_enable_basic_features: bool = False,
+        spectral_enable_basic_features: bool = True,
         spectral_enable_contrast: bool = False,
         spectral_enable_advanced_features: bool = False,
         spectral_enable_time_series: bool = False,
@@ -151,7 +154,7 @@ class MainProcessor:
         mfcc_enable_audio_normalization: bool = True,
         mfcc_min_gpu_duration_sec: float = 3.0,
         mfcc_min_gpu_file_size_mb: float = 5.0,
-        mfcc_enable_basic_features: bool = False,
+        mfcc_enable_basic_features: bool = True,
         mfcc_enable_deltas: bool = False,
         mfcc_enable_time_series: bool = False,
         mfcc_enable_normalization: bool = False,
@@ -184,7 +187,7 @@ class MainProcessor:
         onset_energy: bool = False,
         onset_normalize: bool = False,
         onset_enable_audio_normalization: bool = False,
-        onset_enable_basic_features: bool = False,
+        onset_enable_basic_features: bool = True,
         onset_enable_interval_stats: bool = False,
         onset_enable_rhythmic_metrics: bool = False,
         onset_enable_time_series: bool = False,
@@ -234,11 +237,14 @@ class MainProcessor:
         band_energy_sample_rate: int = 22050,
         band_energy_n_fft: int = 2048,
         band_energy_hop_length: int = 512,
-        band_energy_use_mel_bands: bool = True,
+        # Audit v3: canonical output uses fixed 3 bands (low/mid/high).
+        band_energy_use_mel_bands: bool = False,
         band_energy_n_mels: int = 3,
-        band_energy_method: str = "auto",
+        # Audit v3: only librosa is allowed (no Essentia/auto fallback).
+        band_energy_method: str = "librosa",
         band_energy_average_channels: bool = True,
-        band_energy_enable_audio_normalization: bool = False,
+        # Audit v3: enabled by default (scale-invariant shares; keeps behavior stable if energies are ever added back).
+        band_energy_enable_audio_normalization: bool = True,
         band_energy_enable_basic_stats: bool = False,
         band_energy_enable_extended_stats: bool = False,
         band_energy_enable_time_series: bool = False,
@@ -253,7 +259,7 @@ class MainProcessor:
         spectral_entropy_use_mel: bool = False,
         spectral_entropy_n_mels: int = 128,
         spectral_entropy_enable_audio_normalization: bool = False,
-        spectral_entropy_enable_basic_stats: bool = False,
+        spectral_entropy_enable_basic_stats: bool = True,
         spectral_entropy_enable_flatness: bool = False,
         spectral_entropy_enable_spread: bool = False,
         spectral_entropy_enable_time_series: bool = False,
@@ -268,9 +274,9 @@ class MainProcessor:
         voice_quality_f0_method: str = "yin",
         voice_quality_average_channels: bool = True,
         voice_quality_enable_audio_normalization: bool = False,
-        voice_quality_enable_jitter: bool = False,
-        voice_quality_enable_shimmer: bool = False,
-        voice_quality_enable_hnr: bool = False,
+        voice_quality_enable_jitter: bool = True,
+        voice_quality_enable_shimmer: bool = True,
+        voice_quality_enable_hnr: bool = True,
         voice_quality_enable_f0_stats: bool = False,
         voice_quality_enable_time_series: bool = False,
         # HPSS extractor parameters
@@ -282,7 +288,7 @@ class MainProcessor:
         hpss_margin: float = 1.0,
         hpss_power: float = 2.0,
         hpss_enable_audio_normalization: bool = False,
-        hpss_enable_energy_metrics: bool = False,
+        hpss_enable_energy_metrics: bool = True,
         hpss_enable_waveforms: bool = False,
         hpss_enable_spectral_features: bool = False,
         hpss_enable_time_series: bool = False,
@@ -362,6 +368,10 @@ class MainProcessor:
         self.sep_enable_share_std = bool(sep_enable_share_std)
         self.sep_enable_quality_metrics = bool(sep_enable_quality_metrics)
         self.sep_enable_silence_detection = bool(sep_enable_silence_detection)
+        _sd = source_separation_device
+        self.source_separation_device: Optional[str] = (
+            str(_sd).strip() if _sd is not None and str(_sd).strip() else None
+        )
         self.speech_analysis_pitch_enabled = bool(speech_analysis_pitch_enabled)
         self.speech_silence_peak_threshold = float(speech_silence_peak_threshold)
         self.speech_silence_rms_threshold = float(speech_silence_rms_threshold)
@@ -569,11 +579,13 @@ class MainProcessor:
         # Progress callback (will be set later in extractor_runner)
         self._progress_callback = None
         
-        # Реестр экстракторов
+        # Реестр экстракторов (будет заполняться по требованию)
         self.extractors: Dict[str, BaseExtractor] = {}
+        # Фабрики экстракторов (сохраняем для ленивой инициализации)
+        self.extractor_factories: Dict[str, Any] = {}
         
-        # Инициализируем только запрошенные экстракторы (или все по умолчанию)
-        self._initialize_extractors(enabled_extractors)
+        # Сохраняем фабрики экстракторов (не создаем экстракторы сразу)
+        self._initialize_extractor_factories(enabled_extractors)
 
     # -------------------- System Monitor --------------------
     class _SystemMonitor:
@@ -680,8 +692,8 @@ class MainProcessor:
                 except Exception:
                     pass
     
-    def _initialize_extractors(self, enabled_extractors: Optional[List[str]] = None):
-        """Инициализация только выбранных экстракторов (ленивая загрузка модулей)."""
+    def _initialize_extractor_factories(self, enabled_extractors: Optional[List[str]] = None):
+        """Сохраняет фабрики экстракторов для ленивой инициализации (не создает экстракторы сразу)."""
         try:
             # Фабрики экстракторов: импорт внутри, чтобы не грузить лишние зависимости
             extractor_factories: Dict[str, Any] = {
@@ -982,7 +994,7 @@ class MainProcessor:
                 "source_separation": lambda: __import__(
                     "src.extractors.source_separation_extractor", fromlist=["SourceSeparationExtractor"]
                 ).SourceSeparationExtractor(
-                    device=self.device,
+                    device=(self.source_separation_device or self.device),
                     model_size=self.source_separation_model_size,
                     batch_size=self.sep_batch_size,
                     silence_peak_threshold=self.sep_silence_peak_threshold,
@@ -1068,54 +1080,44 @@ class MainProcessor:
                 # If an extractor exists as a real factory (e.g., asr / speaker_diarization / pitch), do NOT treat it as virtual.
                 requested = [n for n in requested if not (n in virtuals and n not in extractor_factories)]
 
-            self.extractors = {}
-            total_extractors = len([n for n in requested if extractor_factories.get(n) is not None])
-            init_start_time = time.time()
-            
-            for idx, name in enumerate(requested, 1):
+            # Сохраняем фабрики вместо создания экстракторов
+            self.extractor_factories = {}
+            for name in requested:
                 factory = extractor_factories.get(name)
-                if factory is None:
-                    # Тихо пропускаем отсутствующие фабрики (например, виртуальные, уже обработанные)
-                    continue
-                try:
-                    from ..utils.progress import Colors  # type: ignore
-                    use_colors = Colors.supports_color()
-                    
-                    t0 = time.time()
-                    if use_colors:
-                        audio_processor_prefix = f"{Colors.BLUE}{Colors.BOLD}AudioProcessor{Colors.RESET} {Colors.GRAY}|{Colors.RESET}"
-                        idx_str = f"{Colors.CYAN}[{idx}/{total_extractors}]{Colors.RESET}"
-                        name_str = f"{Colors.YELLOW}{name}{Colors.RESET}"
-                        print(f"{audio_processor_prefix} {idx_str} Initializing extractor: {name_str}...", file=sys.stderr, flush=True)
-                    else:
-                        print(f"AudioProcessor | [{idx}/{total_extractors}] Initializing extractor: {name}...", file=sys.stderr, flush=True)
-                    
-                    self.extractors[name] = factory()
-                    t1 = time.time()
-                    elapsed = t1 - t0
-                    total_elapsed = t1 - init_start_time
-                    
-                    if use_colors:
-                        idx_str = f"{Colors.CYAN}[{idx}/{total_extractors}]{Colors.RESET}"
-                        name_str = f"{Colors.YELLOW}{name}{Colors.RESET}"
-                        elapsed_str = f"{Colors.GREEN}{elapsed:.2f}s{Colors.RESET}"
-                        total_elapsed_str = f"{Colors.GREEN}{total_elapsed:.2f}s{Colors.RESET}"
-                        print(f"{audio_processor_prefix} {idx_str} Extractor {name_str} initialized {Colors.GRAY}({Colors.RESET}{elapsed_str}{Colors.GRAY}, total: {Colors.RESET}{total_elapsed_str}{Colors.GRAY}){Colors.RESET}", file=sys.stderr, flush=True)
-                    else:
-                        print(f"AudioProcessor | [{idx}/{total_extractors}] Extractor {name} initialized ({elapsed:.2f}s, total: {total_elapsed:.2f}s)", file=sys.stderr, flush=True)
-                except Exception as err:
-                    self.logger.error(f"Не удалось инициализировать экстрактор {name}: {err}")
+                if factory is not None:
+                    self.extractor_factories[name] = factory
             
         except Exception as e:
             self.logger.error(f"Ошибка инициализации экстракторов: {e}")
             raise
+    
+    def _get_extractor(self, extractor_name: str) -> Optional[Any]:
+        """Получить экстрактор с ленивой инициализацией (создает из фабрики при первом обращении)."""
+        # Если экстрактор уже создан, возвращаем его
+        if extractor_name in self.extractors:
+            return self.extractors[extractor_name]
+        
+        # Если есть фабрика, создаем экстрактор
+        factory = self.extractor_factories.get(extractor_name)
+        if factory is not None:
+            try:
+                extractor = factory()
+                self.extractors[extractor_name] = extractor
+                return extractor
+            except Exception as e:
+                self.logger.error(f"Failed to create extractor '{extractor_name}' from factory: {e}")
+                return None
+        
+        return None
     
     def process_video(
         self,
         video_path: str,
         output_dir: str,
         extractor_names: Optional[List[str]] = None,
-        extract_audio: bool = False
+        extract_audio: bool = False,
+        telemetry: Optional[OrchestratorTelemetryCollector] = None,
+        telemetry_scope_suffix: Optional[str] = None,
     ) -> Dict[str, Any]:
         """
         Обработка видео файла с извлечением аудио и признаков.
@@ -1125,6 +1127,8 @@ class MainProcessor:
             output_dir: Директория для сохранения результатов
             extractor_names: Список экстракторов для запуска
             extract_audio: (DEPRECATED) AudioProcessor не извлекает аудио из видео. Должно быть False.
+            telemetry: Опциональная телеметрия оркестратора (события на каждый extractor.run).
+            telemetry_scope_suffix: Уникальный суффикс ключа события (например file_id при параллельном batch).
             
         Returns:
             Словарь с результатами обработки
@@ -1178,8 +1182,8 @@ class MainProcessor:
             
             # Шаг 2: Запуск экстракторов
             if extractor_names is None:
-                # Запускаем все доступные экстракторы
-                extractor_names = list(self.extractors.keys())
+                # Запускаем все доступные экстракторы (из фабрик)
+                extractor_names = list(self.extractor_factories.keys())
             
             # NOTE: 'asr', 'speaker_diarization' и 'pitch' теперь являются реальными extractors, не виртуальными
             requested_names = list(extractor_names)
@@ -1191,12 +1195,21 @@ class MainProcessor:
             # Запускаем экстракторы последовательно (можно распараллелить)
             extractor_times = {}
             for extractor_name in requested_names:
-                if extractor_name not in self.extractors:
+                extractor = self._get_extractor(extractor_name)
+                if extractor is None:
                     self.logger.warning(f"Экстрактор {extractor_name} пропущен (не доступен)")
                     continue
                 
+                tel_key = (
+                    extractor_name
+                    if not telemetry_scope_suffix
+                    else f"{extractor_name}::{telemetry_scope_suffix}"
+                )
+                if telemetry:
+                    telemetry.mark_extractor_start(tel_key)
+                t_wall0 = time.perf_counter()
+                ok = False
                 try:
-                    extractor = self.extractors[extractor_name]
                     
                     # Все экстракторы используют аудио файл от Segmenter
                     input_path = audio_path
@@ -1223,6 +1236,7 @@ class MainProcessor:
                         self.logger.error(error_msg)
                         results["errors"].append(error_msg)
                     
+                    ok = bool(extractor_result.success)
                     # Виртуальные результаты из speech_analysis
                     if extractor_name == "speech_analysis" and extractor_result.success:
                         payload = extractor_result.payload or {}
@@ -1317,6 +1331,7 @@ class MainProcessor:
                                 pass
                         
                 except Exception as e:
+                    ok = False
                     error_msg = f"Ошибка в экстракторе {extractor_name}: {e}"
                     self.logger.error(error_msg)
                     results["errors"].append(error_msg)
@@ -1329,6 +1344,18 @@ class MainProcessor:
                         "device_used": "unknown"
                     }
                     extractor_times[extractor_name] = 0.0
+                finally:
+                    if telemetry:
+                        wall_ms = float((time.perf_counter() - t_wall0) * 1000.0)
+                        ctx = {"source": "process_video", "audio_path": audio_path}
+                        if telemetry_scope_suffix:
+                            ctx["scope_suffix"] = telemetry_scope_suffix
+                        telemetry.mark_extractor_end(
+                            tel_key,
+                            wall_ms,
+                            ok,
+                            context=ctx,
+                        )
 
             # Fallback: гарантируем публикацию виртуального ASR, если он присутствует в speech_analysis
             try:
@@ -1695,13 +1722,12 @@ class MainProcessor:
 
 
         elif extractor_name == "quality":
-            # Для Quality экстрактора
+            # Audit v3: snr_db removed (was duplicate of dynamic_range_db)
             flat_payload.update({
                 "quality_dc_offset": float(payload.get("dc_offset", 0.0) or 0.0),
                 "quality_clipping_ratio": float(payload.get("clipping_ratio", 0.0) or 0.0),
                 "quality_crest_factor_db": float(payload.get("crest_factor_db", 0.0) or 0.0),
                 "quality_dynamic_range_db": float(payload.get("dynamic_range_db", 0.0) or 0.0),
-                "quality_snr_db": float(payload.get("snr_db", 0.0) or 0.0),
             })
 
         elif extractor_name == "rhythmic":
@@ -1716,11 +1742,18 @@ class MainProcessor:
             })
 
         elif extractor_name == "voice_quality":
-            # Для VoiceQuality экстрактора
+            # VoiceQuality (Audit v3: NaN for missing, no zero-stubs)
+            def _vq_float(v):
+                if v is None:
+                    return float("nan")
+                try:
+                    return float(v)
+                except (TypeError, ValueError):
+                    return float("nan")
             flat_payload.update({
-                "vq_jitter": float(payload.get("vq_jitter", 0.0) or 0.0),
-                "vq_shimmer": float(payload.get("vq_shimmer", 0.0) or 0.0),
-                "vq_hnr_like_db": float(payload.get("vq_hnr_like_db", 0.0) or 0.0),
+                "vq_jitter": _vq_float(payload.get("vq_jitter")),
+                "vq_shimmer": _vq_float(payload.get("vq_shimmer")),
+                "vq_hnr_like_db": _vq_float(payload.get("vq_hnr_like_db")),
             })
 
         elif extractor_name == "hpss":
@@ -1732,11 +1765,12 @@ class MainProcessor:
             })
 
         elif extractor_name == "key":
-            # Для Key экстрактора
+            # Для Key экстрактора (Audit v3: key_id 0-23 model-facing)
             flat_payload.update({
                 "music_key": payload.get("key_name", "unknown") or "unknown",
                 "music_mode": payload.get("key_mode", "unknown") or "unknown",
                 "music_key_confidence": float(payload.get("key_confidence", 0.0) or 0.0),
+                "music_key_id": int(payload.get("key_id", -1)) if payload.get("key_id") is not None else -1,
             })
 
         elif extractor_name == "band_energy":
@@ -1765,21 +1799,18 @@ class MainProcessor:
 
         elif extractor_name == "emotion_diarization":
             # Для эмоциональной диаризации SpeechBrain
-            flat_payload.update({
-                "speaker_count": int(payload.get("speaker_count", 0) or 0),
-                "duration": float(payload.get("duration", 0.0) or 0.0),
-            })
-            # Краткие агрегаты по эмоциям
-            if isinstance(payload.get("emotion_statistics"), dict):
-                flat_payload["emotion_statistics"] = payload.get("emotion_statistics")
-            # Сегменты (оставим в полном виде — обычно их не слишком много)
-            if payload.get("emotion_segments") is not None:
-                flat_payload["emotion_segments"] = payload.get("emotion_segments")
-            if payload.get("speaker_segments") is not None:
-                flat_payload["speaker_segments"] = payload.get("speaker_segments")
-            # Маппинг эмоций к спикерам
-            if payload.get("emotion_speaker_mapping") is not None:
-                flat_payload["emotion_speaker_mapping"] = payload.get("emotion_speaker_mapping")
+            flat_payload.update(
+                {
+                    "segments_count": int(payload.get("segments_count", 0) or 0),
+                    "segments_total": int(payload.get("segments_total", 0) or 0),
+                    "emotion_entropy": float(payload.get("emotion_entropy", 0.0) or 0.0),
+                    "dominant_emotion_id": int(payload.get("dominant_emotion_id", -1) if payload.get("dominant_emotion_id") is not None else -1),
+                    "dominant_emotion_prob": float(payload.get("dominant_emotion_prob", 0.0) or 0.0),
+                    "emotion_transitions_count": int(payload.get("emotion_transitions_count", 0) or 0),
+                    "emotion_stability_score": float(payload.get("emotion_stability_score", 0.0) or 0.0),
+                    "emotion_diversity_score": float(payload.get("emotion_diversity_score", 0.0) or 0.0),
+                }
+            )
 
         elif extractor_name == "pitch":
             # Для Pitch экстрактора (без CREPE)
@@ -1834,12 +1865,23 @@ class MainProcessor:
 
         elif extractor_name == "speaker_diarization":
             # Для диаризационного экстрактора
+            _turn_n = payload.get("turn_start_sec")
+            _n_turns = (
+                int(len(_turn_n))
+                if _turn_n is not None and hasattr(_turn_n, "__len__") and not isinstance(_turn_n, (str, bytes))
+                else 0
+            )
             flat_payload.update({
                 "speaker_count": payload.get("speaker_count", 0) or 0,
                 "segment_duration": float(payload.get("segment_duration", 0.0) or 0.0),
                 "clustering_method": payload.get("clustering_method", "unknown") or "unknown",
                 "duration": float(payload.get("duration", 0.0) or 0.0),
-                "segments_count": len(payload.get("speaker_segments", []) or []),
+                "segments_count": int(
+                    payload.get("segments_count")
+                    or payload.get("speaker_turns_count")
+                    or _n_turns
+                    or len(payload.get("speaker_segments", []) or [])
+                ),
                 "device_used": payload.get("device_used", "unknown") or "unknown",
                 "sample_rate": payload.get("sample_rate", 0) or 0
             })
@@ -1972,9 +2014,9 @@ class MainProcessor:
         cpu_extractors: List[str] = []  # Остальные extractors
         
         for extractor_name in extractor_names:
-            if extractor_name not in self.extractors:
+            extractor = self._get_extractor(extractor_name)
+            if extractor is None:
                 continue
-            extractor = self.extractors[extractor_name]
             if effective_enable_gpu_batching and getattr(extractor, 'supports_batch', False):
                 # Проверяем, поддерживает ли extractor run_segments (нужно для extract_batch_segments)
                 if hasattr(extractor, 'run_segments'):
@@ -2016,7 +2058,9 @@ class MainProcessor:
         # Stage 4: Обработка GPU extractors с батчингом (если включено)
         if gpu_batch_extractors and effective_enable_gpu_batching:
             for extractor_name in gpu_batch_extractors:
-                extractor = self.extractors[extractor_name]
+                extractor = self._get_extractor(extractor_name)
+                if extractor is None:
+                    continue
                 
                 # Определяем family для этого extractor'а
                 # Маппинг extractor -> family (из документации и README)
@@ -2068,6 +2112,10 @@ class MainProcessor:
                         original_artifacts_dirs[file_ctx.file_id] = getattr(extractor, 'artifacts_dir', None)
                         extractor.artifacts_dir = per_file_artifacts_dir
                 
+                if telemetry:
+                    telemetry.mark_extractor_start(extractor_name)
+                t_gpu0 = time.perf_counter()
+                batch_ok = False
                 try:
                     # Вызываем extract_batch_segments для батчинга
                     batch_results = extractor.extract_batch_segments(
@@ -2092,8 +2140,24 @@ class MainProcessor:
                                 results[result_idx]["errors"].append(
                                     f"{extractor_name}: {batch_result.error}"
                                 )
-                
+                    batch_ok = bool(batch_results) and all(
+                        br.success for br in batch_results
+                    )
+                except Exception:
+                    batch_ok = False
+                    raise
                 finally:
+                    if telemetry:
+                        telemetry.mark_extractor_end(
+                            extractor_name,
+                            float((time.perf_counter() - t_gpu0) * 1000.0),
+                            batch_ok,
+                            context={
+                                "batch_kind": "gpu_segments",
+                                "n_files": len(audio_files_with_segments),
+                                "family": family_name,
+                            },
+                        )
                     # Восстанавливаем оригинальные artifacts_dir
                     if original_artifacts_dirs:
                         # Восстанавливаем для последнего файла (так как artifacts_dir общий)
@@ -2111,8 +2175,8 @@ class MainProcessor:
                     original_artifacts_dirs: Dict[str, Optional[str]] = {}
                     
                     for extractor_name in cpu_extractors:
-                        if extractor_name in self.extractors:
-                            extractor = self.extractors[extractor_name]
+                        extractor = self._get_extractor(extractor_name)
+                        if extractor is not None:
                             original_artifacts_dirs[extractor_name] = getattr(extractor, 'artifacts_dir', None)
                             per_file_artifacts_dir = os.path.join(file_ctx.artifacts_dir, extractor_name, "_artifacts")
                             os.makedirs(per_file_artifacts_dir, exist_ok=True)
@@ -2125,14 +2189,17 @@ class MainProcessor:
                             output_dir=file_ctx.artifacts_dir,
                             extractor_names=cpu_extractors,
                             extract_audio=False,
+                            telemetry=telemetry,
+                            telemetry_scope_suffix=file_ctx.file_id,
                         )
                         result["file_id"] = file_ctx.file_id
                         return result
                     finally:
                         # Восстанавливаем оригинальные artifacts_dir
                         for extractor_name, original_dir in original_artifacts_dirs.items():
-                            if extractor_name in self.extractors:
-                                self.extractors[extractor_name].artifacts_dir = original_dir
+                            extractor = self._get_extractor(extractor_name)
+                            if extractor is not None:
+                                extractor.artifacts_dir = original_dir
                 
                 except Exception as e:
                     self.logger.error(f"Error processing file_id={file_ctx.file_id}: {e}")

@@ -174,96 +174,13 @@ def render_text_processor(npz_path: str, output_dir: Optional[str] = None) -> Di
     if not isinstance(payload, dict):
         payload = {}
     
-    # Extract feature names and values
-    feature_names = npz_data.get("feature_names", [])
-    feature_values = npz_data.get("feature_values", [])
-    if isinstance(feature_names, np.ndarray):
-        feature_names = feature_names.tolist()
-    if isinstance(feature_values, np.ndarray):
-        feature_values = feature_values.tolist()
-    
-    # Build feature dict (clean NaN values)
-    features = {}
-    for i, name in enumerate(feature_names):
-        if i < len(feature_values):
-            value = feature_values[i]
-            # Convert NaN to None for JSON compatibility
-            if isinstance(value, (float, np.floating)) and (math.isnan(value) or math.isinf(value)):
-                features[name] = None
-            else:
-                features[name] = value
-    
-    # Group features by extractor (based on naming convention)
-    # TextProcessor extractors use prefixes: tp_<extractor>_<feature>
-    # Examples: tp_lex_*, tp_tags_*, tp_asr_*, tp_title_*, etc.
-    extractor_features: Dict[str, Dict[str, Any]] = {}
-    
-    # Handle legacy aliases that don't follow the standard pattern
-    # Legacy aliases: tp_title_hashtag_cosine_* -> title_to_hashtag_cosine_extractor
-    for name, value in features.items():
-        if name.startswith("tp_title_hashtag_cosine"):
-            extractor_name = "title_to_hashtag_cosine_extractor"
-            if extractor_name not in extractor_features:
-                extractor_features[extractor_name] = {}
-            extractor_features[extractor_name][name] = value
-    
-    # Main grouping loop
-    for name, value in features.items():
-        # Try to determine extractor from feature name
-        # Pattern: tp_<extractor>_<feature>
-        if name.startswith("tp_"):
-            parts = name.split("_", 2)  # Split into ["tp", "<extractor>", "<feature>"]
-            if len(parts) >= 3:
-                extractor_hint = parts[1]  # Second part is extractor hint
-                # Map common prefixes to extractor names
-                extractor_map = {
-                    "lex": "lexico_static_features",
-                    "tags": "tags_extractor",
-                    "asr": "asr_text_proxy_audio_features",
-                    "asrproxy": "asr_text_proxy_audio_features",  # tp_asrproxy_* features
-                    "title": "title_embedder",
-                    "titleemb": "title_embedder",  # tp_titleemb_* features
-                    "desc": "description_embedder",
-                    "descemb": "description_embedder",  # tp_descemb_* features
-                    "hashtag": "hashtag_embedder",
-                    "hashemb": "hashtag_embedder",  # tp_hashemb_* features
-                    "transcript": "transcript_chunk_embedder",
-                    "tchunk": "transcript_chunk_embedder",  # tp_tchunk_* features
-                    "comments": "comments_embedder",
-                    "commentsemb": "comments_embedder",  # tp_commentsemb_* features
-                    "tragg": "transcript_aggregator",  # tp_tragg_* features
-                    "commentsagg": "comments_aggregator",  # tp_commentsagg_* features
-                    "cos": "cosine_metrics_extractor",  # tp_cos_* features
-                    "cosine": "cosine_metrics_extractor",
-                    "embpair": "embedding_pair_topk_extractor",  # tp_embpair_* features
-                    "pairtopk": "embedding_pair_topk_extractor",  # tp_pairtopk_* features (legacy)
-                    "embstats": "embedding_stats_extractor",  # tp_embstats_* features
-                    "embshift": "embedding_shift_indicator_extractor",  # tp_embshift_* features
-                    "embid": "embedding_source_id_extractor",  # tp_embid_* features
-                    "spkemb": "speaker_turn_embeddings_aggregator",  # tp_spkemb_* features
-                    "embedding": "embedding_stats_extractor",
-                    "qa": "qa_embedding_pairs_extractor",  # tp_qa_* features
-                    "topics": "semantics_topics_keyphrases",  # tp_topics_* features
-                    "semantic": "semantics_topics_keyphrases",  # tp_semantic_* features (legacy)
-                    "semclust": "semantic_cluster_extractor",  # tp_semclust_* features
-                    "titlehashcos": "title_to_hashtag_cosine_extractor",  # tp_titlehashcos_* features
-                    "topktitles": "topk_similar_titles_extractor",  # tp_topktitles_* features
-                    "titleclent": "title_embedding_cluster_entropy_extractor",  # tp_titleclent_* features
-                }
-                extractor_name = extractor_map.get(extractor_hint, extractor_hint)
-                if extractor_name not in extractor_features:
-                    extractor_features[extractor_name] = {}
-                extractor_features[extractor_name][name] = value
-            else:
-                # Unclassified features
-                if "unclassified" not in extractor_features:
-                    extractor_features["unclassified"] = {}
-                extractor_features["unclassified"][name] = value
-        else:
-            # Features without tp_ prefix
-            if "unclassified" not in extractor_features:
-                extractor_features["unclassified"] = {}
-            extractor_features["unclassified"][name] = value
+    from core.text_feature_grouping import (
+        build_feature_dict_from_npz_data,
+        group_text_features_by_extractor,
+    )
+
+    features = build_feature_dict_from_npz_data(npz_data)
+    extractor_features = group_text_features_by_extractor(features)
     
     # Generate per-extractor renders (if renderers exist)
     extractor_renders: Dict[str, Dict[str, Any]] = {}
@@ -281,7 +198,15 @@ def render_text_processor(npz_path: str, output_dir: Optional[str] = None) -> Di
                 if isinstance(extractor_render, dict):
                     extractor_renders[extractor_name] = extractor_render
             except Exception as e:
-                logger.warning(f"Failed to render {extractor_name}: {e}")
+                import traceback
+                tb_str = ''.join(traceback.format_exception(type(e), e, e.__traceback__))
+                logger.error(
+                    f"Failed to render {extractor_name}:\n"
+                    f"  Error: {str(e)}\n"
+                    f"  Type: {type(e).__name__}\n"
+                    f"  Traceback:\n{tb_str}",
+                    exc_info=False
+                )
                 continue
         else:
             logger.debug(f"No JSON renderer found for {extractor_name}")
@@ -357,15 +282,15 @@ def render_text_processor(npz_path: str, output_dir: Optional[str] = None) -> Di
                         if "missing" in error_msg and "required positional argument" in error_msg:
                             # Try Pattern 2: (npz_path, output_path) - fallback
                             try:
-                            html_path_result = html_renderer(npz_path, html_path)
-                            if html_path_result:
-                                html_paths.append(html_path_result)
+                                html_path_result = html_renderer(npz_path, html_path)
+                                if html_path_result:
+                                    html_paths.append(html_path_result)
                             except Exception as e2:
                                 logger.warning(f"Failed to generate HTML for {extractor_name} with pattern 2: {e2}")
                         else:
                             # Other TypeError (e.g., wrong argument types) - log and continue
                             logger.warning(f"Failed to generate HTML for {extractor_name} with pattern 1: {e}")
-                        except Exception as e:
+                    except Exception as e:
                         logger.warning(f"Failed to generate HTML for {extractor_name}: {e}")
             except Exception as e:
                 logger.warning(f"Failed to generate HTML report for {extractor_name}: {e}")

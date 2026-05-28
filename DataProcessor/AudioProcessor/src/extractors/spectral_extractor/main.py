@@ -29,6 +29,8 @@ import librosa
 from src.core.base_extractor import BaseExtractor, ExtractorResult
 from src.core.audio_utils import AudioUtils
 
+from .utils.resource_profile import capture_spectral_resource_profile, is_spectral_resource_profile_enabled
+
 logger = logging.getLogger(__name__)
 
 # Contract version for downstream extractors compatibility validation
@@ -39,7 +41,7 @@ class SpectralExtractor(BaseExtractor):
     """Извлекает базовые спектральные признаки и их статистики."""
 
     name = "spectral"
-    version = "2.0.0"
+    version = "2.0.1"
     description = "Спектральные признаки: centroid, bandwidth, flatness, rolloff, ZCR, contrast, slope"
     category = "spectral"
     dependencies = ["librosa", "numpy"]
@@ -57,8 +59,8 @@ class SpectralExtractor(BaseExtractor):
         n_fft: int = 2048,
         average_channels: bool = True,
         keep_contrast_bands: bool = True,
-        # Feature gating flags (per-feature control, default: all False)
-        enable_basic_features: bool = False,
+        # Feature gating flags (Audit v3: basic_features enabled by default)
+        enable_basic_features: bool = True,
         enable_contrast: bool = False,
         enable_advanced_features: bool = False,
         enable_time_series: bool = False,
@@ -289,6 +291,14 @@ class SpectralExtractor(BaseExtractor):
         Progress reporting: обновление прогресса для каждого признака.
         """
         start_time = time.time()
+        t0_total = time.perf_counter()
+        stage_timings_ms: Dict[str, float] = {}
+
+        spectral_resource_profile: Optional[Dict[str, Any]] = None
+        if is_spectral_resource_profile_enabled():
+            spectral_resource_profile = {
+                "at_start": capture_spectral_resource_profile(stage="at_start"),
+            }
         try:
             if not self._validate_input(input_uri):
                 error_code = self._classify_error(ValueError("Invalid input"), "audio_load_failed")
@@ -303,28 +313,70 @@ class SpectralExtractor(BaseExtractor):
             # Загружаем аудио
             if self.progress_callback:
                 self.progress_callback("spectral", 0, 8, "Loading audio")
+            t0 = time.perf_counter()
             y_t, sr = self.audio_utils.load_audio(input_uri, target_sr=self.sample_rate)
+            stage_timings_ms["load_audio_ms"] = (time.perf_counter() - t0) * 1000.0
             
             # Опциональная нормализация
             if self.enable_normalization:
+                t0 = time.perf_counter()
                 y_t = self.audio_utils.normalize_audio(y_t)
+                stage_timings_ms["normalize_audio_ms"] = (time.perf_counter() - t0) * 1000.0
             
             y = self.audio_utils.to_numpy(y_t)
             if y.ndim == 2:
                 y = np.mean(y, axis=0) if self.average_channels else y[0]
 
+            duration = float(y.shape[-1] / sr)
+            if duration < 1.0:
+                nan_f = float("nan")
+                payload_empty = {
+                    "status": "empty",
+                    "empty_reason": "audio_too_short",
+                    "device_used": self.device,
+                    "sample_rate": sr,
+                    "hop_length": self.hop_length,
+                    "n_fft": self.n_fft,
+                    "duration": duration,
+                    "segments_count": 0,
+                    "spectral_contract_version": SPECTRAL_CONTRACT_VERSION,
+                    "segment_start_sec": [0.0],
+                    "segment_end_sec": [duration],
+                    "segment_center_sec": [0.5 * duration],
+                    "segment_mask": [False],
+                    "_features_enabled": ["basic_features"] if self.enable_basic_features else [],
+                }
+                if self.enable_basic_features:
+                    payload_empty["centroid_mean_by_segment"] = [nan_f]
+                    payload_empty["bandwidth_mean_by_segment"] = [nan_f]
+                    payload_empty["flatness_mean_by_segment"] = [nan_f]
+                    payload_empty["rolloff_mean_by_segment"] = [nan_f]
+                    payload_empty["zcr_mean_by_segment"] = [nan_f]
+                stage_timings_ms["total_ms"] = (time.perf_counter() - t0_total) * 1000.0
+                payload_empty["stage_timings_ms"] = stage_timings_ms
+                if spectral_resource_profile is not None:
+                    spectral_resource_profile["at_end"] = capture_spectral_resource_profile(stage="at_end")
+                    payload_empty["spectral_resource_profile"] = spectral_resource_profile
+                return self._create_result(success=True, payload=payload_empty, processing_time=time.time() - start_time)
+
             # Извлекаем признаки
+            t0 = time.perf_counter()
             features = self._extract_spectral_features(y, sr)
+            stage_timings_ms["extract_features_ms"] = (time.perf_counter() - t0) * 1000.0
             
             # Сохраняем большие временные серии в .npy (per-run storage)
             if self.progress_callback:
                 self.progress_callback("spectral", 7, 8, "Saving artifacts")
+            t0 = time.perf_counter()
             features = self._save_time_series_artifacts(features, input_uri, tmp_path)
+            stage_timings_ms["save_artifacts_ms"] = (time.perf_counter() - t0) * 1000.0
             
             # Валидация выходных данных
             if self.progress_callback:
                 self.progress_callback("spectral", 8, 8, "Validating output")
+            t0 = time.perf_counter()
             is_valid, error_msg = self._validate_output(features)
+            stage_timings_ms["validate_output_ms"] = (time.perf_counter() - t0) * 1000.0
             if not is_valid:
                 error_code = self._classify_error(ValueError(error_msg), "validation_failed")
                 raise ValueError(f"spectral | {error_msg} (error_code={error_code})")
@@ -346,13 +398,11 @@ class SpectralExtractor(BaseExtractor):
             
             # Add stage timings to payload (for meta/stage_timings_ms)
             processing_time = time.time() - start_time
-            features["stage_timings_ms"] = {
-                "load_audio_ms": 0.0,  # Audio loading is part of extraction
-                "extract_features_ms": float(processing_time * 1000.0),
-                "save_artifacts_ms": 0.0,  # Artifact saving is done separately
-                "validate_output_ms": 0.0,  # Validation is part of extraction
-                "total_ms": float(processing_time * 1000.0),
-            }
+            stage_timings_ms["total_ms"] = (time.perf_counter() - t0_total) * 1000.0
+            features["stage_timings_ms"] = stage_timings_ms
+            if spectral_resource_profile is not None:
+                spectral_resource_profile["at_end"] = capture_spectral_resource_profile(stage="at_end")
+                features["spectral_resource_profile"] = spectral_resource_profile
 
             self._log_extraction_success(input_uri, processing_time)
             return self._create_result(success=True, payload=features, processing_time=processing_time)
@@ -372,10 +422,18 @@ class SpectralExtractor(BaseExtractor):
     ) -> ExtractorResult:
         """
         Segmenter-driven spectral extraction: compute spectral features on provided windows (families.spectral).
-        
-        Progress reporting: каждые 10% сегментов (если progress_callback установлен).
+        Audit v3: strict alignment, canonical axis (segment_start_sec/end/center/mask), per-segment arrays.
         """
         start_time = time.time()
+        t0_total = time.perf_counter()
+        stage_timings_ms: Dict[str, float] = {}
+
+        spectral_resource_profile: Optional[Dict[str, Any]] = None
+        if is_spectral_resource_profile_enabled():
+            spectral_resource_profile = {
+                "at_start": capture_spectral_resource_profile(stage="at_start"),
+            }
+        nan_f = float("nan")
         try:
             if not self._validate_input(input_uri):
                 error_code = self._classify_error(ValueError("Invalid input"), "audio_load_failed")
@@ -387,163 +445,186 @@ class SpectralExtractor(BaseExtractor):
             if not isinstance(segments, list) or not segments:
                 raise ValueError("spectral | segments is empty (no-fallback)")
 
+            has_any_features_enabled = (
+                self.enable_basic_features or self.enable_contrast or self.enable_advanced_features
+            )
+            if not has_any_features_enabled:
+                error_code = self._classify_error(RuntimeError("No features enabled"), "validation_failed")
+                raise RuntimeError(
+                    f"spectral | no features enabled (error_code={error_code}). "
+                    f"Enable at least one: enable_basic_features, enable_contrast, enable_advanced_features"
+                )
+
             total_segments = len(segments)
-            
-            # Progress reporting: каждые 10%
+            t0_process = time.perf_counter()
             progress_report_interval = max(1, total_segments // 10) if total_segments >= 10 else 1
             last_reported_pct = -1
 
-            # Process segments
-            centroid_series_all: List[float] = []
-            bandwidth_series_all: List[float] = []
-            flatness_series_all: List[float] = []
-            rolloff_series_all: List[float] = []
-            zcr_series_all: List[float] = []
-            contrast_series_all: List[float] = []
-            slope_series_all: List[float] = []
-            segment_centers: List[float] = []
-            segment_durations: List[float] = []
-            
+            # Canonical axis (strict alignment)
+            segment_start_sec: List[float] = [0.0] * total_segments
+            segment_end_sec: List[float] = [0.0] * total_segments
+            segment_center_sec: List[float] = [0.0] * total_segments
+            segment_mask: List[bool] = [False] * total_segments
+
+            # Per-segment arrays (NaN for failed)
+            centroid_by_seg: List[float] = [nan_f] * total_segments
+            bandwidth_by_seg: List[float] = [nan_f] * total_segments
+            flatness_by_seg: List[float] = [nan_f] * total_segments
+            rolloff_by_seg: List[float] = [nan_f] * total_segments
+            zcr_by_seg: List[float] = [nan_f] * total_segments
+            contrast_by_seg: List[float] = [nan_f] * total_segments
+            slope_by_seg: List[float] = [nan_f] * total_segments
+
             for seg_idx, seg in enumerate(segments):
-                # Progress reporting
                 if self.progress_callback and seg_idx % progress_report_interval == 0:
                     pct = int((seg_idx / total_segments) * 100)
                     if pct != last_reported_pct:
                         self.progress_callback("spectral", seg_idx, total_segments, f"Processing segment {seg_idx+1}/{total_segments}")
                         last_reported_pct = pct
-                
-                # Load segment
+
                 start_sample = int(seg.get("start_sample", 0))
                 end_sample = int(seg.get("end_sample", 0))
-                center_sec = float(seg.get("center_sec", 0.0))
-                
-                wav_t, _sr = self.audio_utils.load_audio_segment(
-                    input_uri,
-                    start_sample=start_sample,
-                    end_sample=end_sample,
-                    target_sr=self.sample_rate,
-                )
-                
-                # Опциональная нормализация
-                if self.enable_normalization:
-                    wav_t = self.audio_utils.normalize_audio(wav_t)
-                
-                wav = self.audio_utils.to_numpy(wav_t)
-                wav = wav[0] if wav.ndim == 2 else wav.reshape(-1)
-                
-                # Extract spectral features for segment
-                seg_features = self._extract_spectral_features(wav, self.sample_rate)
-                
-                # Aggregate mean values from segment (only if features are enabled)
-                has_features = False
-                if self.enable_basic_features and seg_features.get("spectral_centroid_stats") and seg_features.get("spectral_centroid_stats").get("mean"):
-                    centroid_series_all.append(float(seg_features.get("spectral_centroid_stats").get("mean")))
-                    bandwidth_series_all.append(float(seg_features.get("spectral_bandwidth_stats", {}).get("mean", 0.0)))
-                    flatness_series_all.append(float(seg_features.get("spectral_flatness_stats", {}).get("mean", 0.0)))
-                    rolloff_series_all.append(float(seg_features.get("spectral_rolloff_stats", {}).get("mean", 0.0)))
-                    zcr_series_all.append(float(seg_features.get("zcr_stats", {}).get("mean", 0.0)))
-                    has_features = True
-                
-                if self.enable_contrast and seg_features.get("spectral_contrast_stats"):
-                    contrast_series_all.append(float(seg_features.get("spectral_contrast_stats").get("mean", 0.0)))
-                    has_features = True
-                
-                if self.enable_advanced_features and seg_features.get("spectral_slope_stats"):
-                    slope_series_all.append(float(seg_features.get("spectral_slope_stats").get("mean", 0.0)))
-                    has_features = True
-                
-                # Always track segment centers and durations for metadata
-                if has_features:
-                    segment_centers.append(center_sec)
-                    segment_durations.append(float((end_sample - start_sample) / self.sample_rate))
-            
-            # Final progress report
+                start_sec = float(seg.get("start_sec", start_sample / self.sample_rate))
+                end_sec = float(seg.get("end_sec", end_sample / self.sample_rate))
+                center_sec = float(seg.get("center_sec", 0.5 * (start_sec + end_sec) if end_sec > start_sec else start_sec))
+
+                segment_start_sec[seg_idx] = start_sec
+                segment_end_sec[seg_idx] = end_sec
+                segment_center_sec[seg_idx] = center_sec
+
+                try:
+                    wav_t, _sr = self.audio_utils.load_audio_segment(
+                        input_uri, start_sample=start_sample, end_sample=end_sample, target_sr=self.sample_rate
+                    )
+                    if self.enable_normalization:
+                        wav_t = self.audio_utils.normalize_audio(wav_t)
+                    wav = self.audio_utils.to_numpy(wav_t)
+                    wav = wav[0] if wav.ndim == 2 else wav.reshape(-1)
+
+                    seg_features = self._extract_spectral_features(wav, self.sample_rate)
+                    segment_mask[seg_idx] = True
+
+                    if self.enable_basic_features:
+                        s = seg_features.get("spectral_centroid_stats") or {}
+                        centroid_by_seg[seg_idx] = float(s.get("mean", nan_f))
+                        s = seg_features.get("spectral_bandwidth_stats") or {}
+                        bandwidth_by_seg[seg_idx] = float(s.get("mean", nan_f))
+                        s = seg_features.get("spectral_flatness_stats") or {}
+                        flatness_by_seg[seg_idx] = float(s.get("mean", nan_f))
+                        s = seg_features.get("spectral_rolloff_stats") or {}
+                        rolloff_by_seg[seg_idx] = float(s.get("mean", nan_f))
+                        s = seg_features.get("zcr_stats") or {}
+                        zcr_by_seg[seg_idx] = float(s.get("mean", nan_f))
+                    if self.enable_contrast:
+                        s = seg_features.get("spectral_contrast_stats") or {}
+                        contrast_by_seg[seg_idx] = float(s.get("mean", nan_f))
+                    if self.enable_advanced_features:
+                        s = seg_features.get("spectral_slope_stats") or {}
+                        slope_by_seg[seg_idx] = float(s.get("mean", nan_f))
+                except Exception:
+                    segment_mask[seg_idx] = False
+
             if self.progress_callback:
                 self.progress_callback("spectral", total_segments, total_segments, "Completed")
-            
-            # Check if any features were enabled
-            has_any_features_enabled = (
-                self.enable_basic_features or
-                self.enable_contrast or
-                self.enable_advanced_features
-            )
-            
-            if not has_any_features_enabled:
-                error_code = self._classify_error(RuntimeError("No features enabled"), "validation_failed")
-                raise RuntimeError(
-                    f"spectral | no features enabled (error_code={error_code}). "
-                    f"Please enable at least one feature flag: enable_basic_features, enable_contrast, or enable_advanced_features"
+
+            n_valid = sum(1 for m in segment_mask if m)
+            if n_valid == 0:
+                _span = (
+                    float(max(segment_end_sec) - min(segment_start_sec))
+                    if segment_end_sec and segment_start_sec
+                    else 0.0
                 )
-            
-            # Check if any features were actually produced
-            has_any_features_produced = (
-                (self.enable_basic_features and len(centroid_series_all) > 0) or
-                (self.enable_contrast and len(contrast_series_all) > 0) or
-                (self.enable_advanced_features and len(slope_series_all) > 0)
+                payload_empty: Dict[str, Any] = {
+                    "status": "empty",
+                    "empty_reason": "spectral_all_segments_failed",
+                    "device_used": self.device,
+                    "sample_rate": self.sample_rate,
+                    "hop_length": self.hop_length,
+                    "n_fft": self.n_fft,
+                    "duration": _span,
+                    "segments_count": total_segments,
+                    "spectral_contract_version": SPECTRAL_CONTRACT_VERSION,
+                    "segment_start_sec": segment_start_sec,
+                    "segment_end_sec": segment_end_sec,
+                    "segment_center_sec": segment_center_sec,
+                    "segment_mask": segment_mask,
+                    "_features_enabled": ["basic_features"] if self.enable_basic_features else [],
+                }
+                if self.enable_basic_features:
+                    payload_empty["centroid_mean_by_segment"] = centroid_by_seg
+                    payload_empty["bandwidth_mean_by_segment"] = bandwidth_by_seg
+                    payload_empty["flatness_mean_by_segment"] = flatness_by_seg
+                    payload_empty["rolloff_mean_by_segment"] = rolloff_by_seg
+                    payload_empty["zcr_mean_by_segment"] = zcr_by_seg
+                if self.enable_contrast:
+                    payload_empty["contrast_mean_by_segment"] = contrast_by_seg
+                if self.enable_advanced_features:
+                    payload_empty["slope_mean_by_segment"] = slope_by_seg
+                stage_timings_ms["process_segments_ms"] = (time.perf_counter() - t0_process) * 1000.0
+                stage_timings_ms["total_ms"] = (time.perf_counter() - t0_total) * 1000.0
+                payload_empty["stage_timings_ms"] = stage_timings_ms
+                if spectral_resource_profile is not None:
+                    spectral_resource_profile["at_end"] = capture_spectral_resource_profile(stage="at_end")
+                    payload_empty["spectral_resource_profile"] = spectral_resource_profile
+                return self._create_result(success=True, payload=payload_empty, processing_time=time.time() - start_time)
+
+            # Aggregate stats from valid segments only
+            stage_timings_ms["process_segments_ms"] = (time.perf_counter() - t0_process) * 1000.0
+            t0_agg = time.perf_counter()
+            valid_centroid = np.asarray([v for i, v in enumerate(centroid_by_seg) if segment_mask[i]], dtype=np.float32)
+            valid_bandwidth = np.asarray([v for i, v in enumerate(bandwidth_by_seg) if segment_mask[i]], dtype=np.float32)
+            valid_flatness = np.asarray([v for i, v in enumerate(flatness_by_seg) if segment_mask[i]], dtype=np.float32)
+            valid_rolloff = np.asarray([v for i, v in enumerate(rolloff_by_seg) if segment_mask[i]], dtype=np.float32)
+            valid_zcr = np.asarray([v for i, v in enumerate(zcr_by_seg) if segment_mask[i]], dtype=np.float32)
+            valid_contrast = np.asarray([v for i, v in enumerate(contrast_by_seg) if segment_mask[i]], dtype=np.float32)
+            valid_slope = np.asarray([v for i, v in enumerate(slope_by_seg) if segment_mask[i]], dtype=np.float32)
+
+            _span_ok = (
+                float(max(segment_end_sec) - min(segment_start_sec))
+                if segment_end_sec and segment_start_sec
+                else 0.0
             )
-            
-            if not has_any_features_produced:
-                error_code = self._classify_error(RuntimeError("All segments produced empty features"), "validation_failed")
-                raise RuntimeError(
-                    f"spectral | all segments produced empty features (error_code={error_code}). "
-                    f"Enabled features: basic_features={self.enable_basic_features}, "
-                    f"contrast={self.enable_contrast}, advanced_features={self.enable_advanced_features}"
-                )
-            
-            # Build payload (feature-gated)
             features: Dict[str, Any] = {
+                "status": "ok",
+                "empty_reason": None,
                 "device_used": self.device,
                 "sample_rate": self.sample_rate,
+                "hop_length": self.hop_length,
+                "n_fft": self.n_fft,
+                "duration": _span_ok,
                 "segments_count": int(total_segments),
                 "spectral_contract_version": SPECTRAL_CONTRACT_VERSION,
+                "segment_start_sec": segment_start_sec,
+                "segment_end_sec": segment_end_sec,
+                "segment_center_sec": segment_center_sec,
+                "segment_mask": segment_mask,
             }
-            
-            # Aggregate stats from all segments
+
             if self.enable_basic_features:
-                centroid_arr = np.asarray(centroid_series_all, dtype=np.float32)
-                bandwidth_arr = np.asarray(bandwidth_series_all, dtype=np.float32)
-                flatness_arr = np.asarray(flatness_series_all, dtype=np.float32)
-                rolloff_arr = np.asarray(rolloff_series_all, dtype=np.float32)
-                zcr_arr = np.asarray(zcr_series_all, dtype=np.float32)
-                
-                features.update({
-                    "spectral_centroid_stats": self._calc_stats(centroid_arr),
-                    "spectral_bandwidth_stats": self._calc_stats(bandwidth_arr),
-                    "spectral_flatness_stats": self._calc_stats(flatness_arr),
-                    "spectral_rolloff_stats": self._calc_stats(rolloff_arr),
-                    "zcr_stats": self._calc_stats(zcr_arr),
-                })
-                
-                # Additional ML/analytics metrics
-                features.update(self._calc_additional_metrics(centroid_arr, bandwidth_arr, flatness_arr, rolloff_arr, zcr_arr))
-            
-            if self.enable_contrast and len(contrast_series_all) > 0:
-                contrast_arr = np.asarray(contrast_series_all, dtype=np.float32)
-                features["spectral_contrast_stats"] = self._calc_stats(contrast_arr)
-                # Additional metrics
-                features["spectral_contrast_variance"] = float(np.var(contrast_arr))
-            
-            if self.enable_advanced_features and len(slope_series_all) > 0:
-                slope_arr = np.asarray(slope_series_all, dtype=np.float32)
-                features["spectral_slope_stats"] = self._calc_stats(slope_arr)
-                # Additional metrics
-                features["spectral_slope_stability"] = float(1.0 / (1.0 + np.std(slope_arr)))
-            
-            # Time series (feature-gated)
-            if self.enable_time_series:
-                features["centroid_series"] = centroid_series_all
-                features["bandwidth_series"] = bandwidth_series_all
-                features["flatness_series"] = flatness_series_all
-                features["rolloff_series"] = rolloff_series_all
-                features["zcr_series"] = zcr_series_all
-                if len(contrast_series_all) > 0:
-                    features["contrast_series"] = contrast_series_all
-                if len(slope_series_all) > 0:
-                    features["slope_series"] = slope_series_all
-                features["segment_centers_sec"] = segment_centers
-                features["segment_durations_sec"] = segment_durations
-            
-            # Track enabled features for meta
+                features["spectral_centroid_stats"] = self._calc_stats(valid_centroid)
+                features["spectral_bandwidth_stats"] = self._calc_stats(valid_bandwidth)
+                features["spectral_flatness_stats"] = self._calc_stats(valid_flatness)
+                features["spectral_rolloff_stats"] = self._calc_stats(valid_rolloff)
+                features["zcr_stats"] = self._calc_stats(valid_zcr)
+                features["centroid_mean_by_segment"] = centroid_by_seg
+                features["bandwidth_mean_by_segment"] = bandwidth_by_seg
+                features["flatness_mean_by_segment"] = flatness_by_seg
+                features["rolloff_mean_by_segment"] = rolloff_by_seg
+                features["zcr_mean_by_segment"] = zcr_by_seg
+                features.update(self._calc_additional_metrics(valid_centroid, valid_bandwidth, valid_flatness, valid_rolloff, valid_zcr))
+
+            if self.enable_contrast:
+                features["contrast_mean_by_segment"] = contrast_by_seg
+                if valid_contrast.size > 0:
+                    features["spectral_contrast_stats"] = self._calc_stats(valid_contrast)
+                    features["spectral_contrast_variance"] = float(np.var(valid_contrast))
+
+            if self.enable_advanced_features:
+                features["slope_mean_by_segment"] = slope_by_seg
+                if valid_slope.size > 0:
+                    features["spectral_slope_stats"] = self._calc_stats(valid_slope)
+                    features["spectral_slope_stability"] = float(1.0 / (1.0 + np.std(valid_slope)))
+
             enabled_features = []
             if self.enable_basic_features:
                 enabled_features.append("basic_features")
@@ -554,23 +635,22 @@ class SpectralExtractor(BaseExtractor):
             if self.enable_time_series:
                 enabled_features.append("time_series")
             features["_features_enabled"] = enabled_features
-            
-            # Валидация выходных данных
+
+            processing_time = time.time() - start_time
+            stage_timings_ms["aggregate_results_ms"] = (time.perf_counter() - t0_agg) * 1000.0
+            t0_val = time.perf_counter()
+
             is_valid, error_msg = self._validate_output(features)
+            stage_timings_ms["validate_output_ms"] = (time.perf_counter() - t0_val) * 1000.0
             if not is_valid:
                 error_code = self._classify_error(ValueError(error_msg), "validation_failed")
                 raise ValueError(f"spectral | {error_msg} (error_code={error_code})")
-            
-            # Add stage timings to payload (for meta/stage_timings_ms)
-            processing_time = time.time() - start_time
-            features["stage_timings_ms"] = {
-                "load_segments_ms": 0.0,  # Segment loading is part of extraction
-                "process_segments_ms": float(processing_time * 1000.0),
-                "aggregate_results_ms": 0.0,  # Aggregation is part of processing
-                "validate_output_ms": 0.0,  # Validation is part of processing
-                "total_ms": float(processing_time * 1000.0),
-            }
 
+            stage_timings_ms["total_ms"] = (time.perf_counter() - t0_total) * 1000.0
+            features["stage_timings_ms"] = stage_timings_ms
+            if spectral_resource_profile is not None:
+                spectral_resource_profile["at_end"] = capture_spectral_resource_profile(stage="at_end")
+                features["spectral_resource_profile"] = spectral_resource_profile
             self._log_extraction_success(input_uri, processing_time)
             return self._create_result(success=True, payload=features, processing_time=processing_time)
 
@@ -785,6 +865,7 @@ class SpectralExtractor(BaseExtractor):
     def _calc_stats(self, x: np.ndarray) -> Dict[str, float]:
         """
         Вычислить статистики для массива.
+        Audit v3: NaN для пустого массива (no zero placeholders).
         
         Args:
             x: Массив значений
@@ -792,13 +873,14 @@ class SpectralExtractor(BaseExtractor):
         Returns:
             Словарь со статистиками (mean, std, min, max, median)
         """
+        nan_f = float("nan")
         if x.size == 0:
             return {
-                "mean": 0.0,
-                "std": 0.0,
-                "min": 0.0,
-                "max": 0.0,
-                "median": 0.0,
+                "mean": nan_f,
+                "std": nan_f,
+                "min": nan_f,
+                "max": nan_f,
+                "median": nan_f,
             }
         return {
             "mean": float(np.mean(x)),
@@ -830,13 +912,13 @@ class SpectralExtractor(BaseExtractor):
             Словарь с дополнительными метриками
         """
         metrics: Dict[str, Any] = {}
-        
+        nan_f = float("nan")
         if centroid.size == 0:
             return {
-                "spectral_centroid_median": 0.0,
-                "spectral_bandwidth_ratio": 0.0,
-                "spectral_rolloff_ratio": 0.0,
-                "spectral_flatness_entropy": 0.0,
+                "spectral_centroid_median": nan_f,
+                "spectral_bandwidth_ratio": nan_f,
+                "spectral_rolloff_ratio": nan_f,
+                "spectral_flatness_entropy": nan_f,
                 "spectral_features_correlation": {},
             }
         

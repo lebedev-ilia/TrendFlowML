@@ -1,0 +1,62 @@
+{
+  "schema_system_version": "vp_schema_v1",
+  "schema_version": "mel_extractor_npz_v2",
+  "producer": "mel_extractor",
+  "artifact_kind": "npz",
+  "allow_extra_keys": false,
+  "meta": {
+    "required_keys": [
+      "producer",
+      "producer_version",
+      "schema_version",
+      "created_at",
+      "platform_id",
+      "video_id",
+      "run_id",
+      "config_hash",
+      "sampling_policy_version",
+      "dataprocessor_version",
+      "status",
+      "empty_reason",
+      "models_used",
+      "model_signature",
+      "stage_timings_ms"
+    ],
+    "optional_keys": [
+      "device_used",
+      "scheduler_knobs",
+      "resource_metrics",
+      "error",
+      "mel_contract_version",
+      "features_enabled",
+      "mel_spectrogram_npy",
+      "mel_series_npy"
+    ]
+  },
+  "fields": {
+    "feature_names": { "required": true, "tier": "model_facing", "dtype": "object", "shape": ["F"] },
+    "feature_values": { "required": true, "tier": "model_facing", "dtype": "float32", "shape": ["F"] },
+
+    "segment_start_sec": { "required": true, "tier": "analytics", "dtype": "float32", "shape": ["N"] },
+    "segment_end_sec": { "required": true, "tier": "analytics", "dtype": "float32", "shape": ["N"] },
+    "segment_center_sec": { "required": true, "tier": "analytics", "dtype": "float32", "shape": ["N"] },
+    "segment_mask": { "required": true, "tier": "analytics", "dtype": "bool", "shape": ["N"] },
+
+    "mel_mean": { "required": false, "tier": "analytics", "dtype": "float32", "shape": ["M"] },
+    "mel_std": { "required": false, "tier": "analytics", "dtype": "float32", "shape": ["M"] },
+    "mel_min": { "required": false, "tier": "analytics", "dtype": "float32", "shape": ["M"] },
+    "mel_max": { "required": false, "tier": "analytics", "dtype": "float32", "shape": ["M"] },
+    "mel_stats_vector": { "required": false, "tier": "model_facing", "dtype": "float32", "shape": ["V"] },
+
+    "spectral_centroid": { "required": false, "tier": "analytics", "dtype": "float32", "shape": ["T"] },
+    "spectral_bandwidth": { "required": false, "tier": "analytics", "dtype": "float32", "shape": ["T"] },
+
+    "mel_mean_by_segment": { "required": false, "tier": "model_facing", "dtype": "float32", "shape": ["N", "M"] },
+    "mel_energy_by_segment": { "required": false, "tier": "model_facing", "dtype": "float32", "shape": ["N"] },
+    "mel_centroid_mean_by_segment": { "required": false, "tier": "model_facing", "dtype": "float32", "shape": ["N"] },
+    "mel_bandwidth_mean_by_segment": { "required": false, "tier": "model_facing", "dtype": "float32", "shape": ["N"] },
+
+    "meta": { "required": true, "tier": "debug", "dtype": "object", "shape": [] }
+  }
+}
+

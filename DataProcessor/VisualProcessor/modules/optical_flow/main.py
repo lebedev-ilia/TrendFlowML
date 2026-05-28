@@ -13,7 +13,7 @@ from typing import Optional, List, Dict, Any
 
 sys.path.append(os.path.dirname(os.path.dirname(os.path.dirname(__file__))))
 
-from modules.optical_flow.optical_flow import OpticalFlowModule
+from modules.optical_flow.utils.optical_flow import OpticalFlowModule
 from utils.logger import get_logger
 
 MODULE_NAME = "optical_flow"

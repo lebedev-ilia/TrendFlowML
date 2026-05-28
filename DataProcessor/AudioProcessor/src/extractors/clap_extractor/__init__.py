@@ -28,6 +28,12 @@ warnings.filterwarnings("ignore", message="torchaudio._backend.set_audio_backend
 from src.core.base_extractor import BaseExtractor, ExtractorResult
 from src.core.audio_utils import AudioUtils
 
+from .utils.resource_profile import (
+    prefix_snapshot,
+    resource_profile_enabled,
+    snapshot_process_resources,
+)
+
 logger = logging.getLogger(__name__)
 
 # Try to import CLAP, fallback to stub if not available
@@ -54,7 +60,7 @@ class CLAPExtractor(BaseExtractor):
     """CLAP экстрактор для семантических аудио эмбеддингов."""
     
     name: str = "clap_extractor"
-    version: str = "1.0.0"
+    version: str = "1.1.1"
     description: str = "CLAP семантические аудио эмбеддинги"
     category: str = "advanced"
     dependencies: list = ["laion_clap", "torch", "torchaudio"]
@@ -75,6 +81,9 @@ class CLAPExtractor(BaseExtractor):
         # CLAP параметры
         self.max_audio_length = 10.0  # секунд
         self.batch_size = 1
+        # Robust aggregation knobs (Audit v3)
+        self._trim_norm_low_q = 0.05
+        self._trim_norm_high_q = 0.95
         
         # Скрываем шумные инфо-логи инициализации экстрактора
         # # self.logger.debug(f"CLAP Extractor initialized on {self.device} | target_sr={self.sample_rate}")
@@ -181,9 +190,11 @@ class CLAPExtractor(BaseExtractor):
                                 self.model.load_ckpt(path=ckpt_path)  # type: ignore[misc]
                             else:
                                 self.model.load_ckpt(ckpt_path)  # type: ignore[misc]
-                        except TypeError:
-                            # last resort: call without args (may still work if env cache points to local bundle)
-                            self.model.load_ckpt()  # type: ignore[misc]
+                        except TypeError as e:
+                            # Audit v3: no implicit / no-network weight loading. We require an explicit local path.
+                            raise RuntimeError(
+                                "CLAP | load_ckpt signature mismatch; audited mode requires explicit local ckpt_path via ModelManager"
+                            ) from e
                         except Exception as load_error:
                             # Обертываем ошибки загрузки с более детальной информацией
                             error_msg = str(load_error)
@@ -235,6 +246,42 @@ class CLAPExtractor(BaseExtractor):
             self.model = None
             raise
 
+    def _robust_aggregate(self, seq: np.ndarray, mask: np.ndarray) -> np.ndarray:
+        """
+        Robust aggregation of per-segment embeddings into a single vector.
+        Strategy: compute per-segment L2 norms and trim extreme segments by quantiles,
+        then take mean of the remaining valid embeddings.
+        """
+        if seq.ndim != 2 or seq.size == 0:
+            return np.zeros((self.embedding_dim,), dtype=np.float32)
+        if mask.ndim != 1 or mask.shape[0] != seq.shape[0]:
+            valid = np.ones((seq.shape[0],), dtype=bool)
+        else:
+            valid = mask.astype(bool)
+        if not np.any(valid):
+            return np.zeros((seq.shape[1],), dtype=np.float32)
+
+        valid_seq = seq[valid]
+        # Remove rows containing NaN/Inf defensively (should already be excluded by mask).
+        finite_rows = np.isfinite(valid_seq).all(axis=1)
+        valid_seq = valid_seq[finite_rows]
+        if valid_seq.size == 0:
+            return np.zeros((seq.shape[1],), dtype=np.float32)
+
+        norms = np.linalg.norm(valid_seq, axis=1)
+        norms = np.asarray(norms, dtype=np.float32)
+        if norms.size >= 4:
+            lo = float(np.quantile(norms, self._trim_norm_low_q))
+            hi = float(np.quantile(norms, self._trim_norm_high_q))
+            keep = (norms >= lo) & (norms <= hi)
+            if np.any(keep):
+                valid_seq = valid_seq[keep]
+
+        emb = np.mean(valid_seq, axis=0).astype(np.float32)
+        # Ensure finite
+        emb = np.nan_to_num(emb, nan=0.0, posinf=0.0, neginf=0.0).astype(np.float32)
+        return emb.reshape(-1)
+
     def run_segments(
         self,
         input_uri: str,
@@ -250,9 +297,12 @@ class CLAPExtractor(BaseExtractor):
         Produces:
           - embedding (mean over segments) shape [D]
           - embedding_sequence shape [N, D]
-          - segment_centers_sec shape [N]
+          - segment_center_sec shape [N] (+ start/end + segment_mask)
         """
         start_time = time.time()
+        t_total0 = time.perf_counter()
+        stage_timings_ms: Dict[str, float] = {}
+        clap_resource_profile: Optional[Dict[str, Any]] = None
         try:
             if not CLAP_AVAILABLE:
                 raise RuntimeError("CLAP Python package is not available (required)")
@@ -265,11 +315,22 @@ class CLAPExtractor(BaseExtractor):
             if not isinstance(segments, list) or not segments:
                 raise ValueError("segments is empty (no-fallback)")
 
+            if resource_profile_enabled():
+                try:
+                    clap_resource_profile = {
+                        **prefix_snapshot("at_start", snapshot_process_resources()),
+                    }
+                except Exception:
+                    clap_resource_profile = None
+
             # Scheduler-controlled: only batching is supported here (segment_parallelism is unsafe for CLAP inference).
             # However, segment_parallelism can be used for parallel loading/preprocessing of segments.
             self.batch_size = max(1, int(model_batch_size or 1))
 
-            centers: list[float] = [float(seg.get("center_sec")) for seg in segments]
+            # Time axis (strict alignment with Segmenter windows)
+            starts: list[float] = [float(seg.get("start_sec", 0.0) or 0.0) for seg in segments]
+            ends: list[float] = [float(seg.get("end_sec", 0.0) or 0.0) for seg in segments]
+            centers: list[float] = [float(seg.get("center_sec", 0.0) or 0.0) for seg in segments]
             total_segments = len(segments)
             
             # Начальное сообщение о начале обработки
@@ -282,14 +343,23 @@ class CLAPExtractor(BaseExtractor):
             # Limit workers to avoid excessive parallelism for small batches
             preprocess_workers = min(preprocess_workers, len(segments), 8)
             
-            processed_list: list[torch.Tensor] = []
+            processed_list: list[Optional[torch.Tensor]] = []
+            trimmed_flags: list[bool] = []
             last_reported_pct = -1
+
+            t_pre0 = time.perf_counter()
             
             if len(segments) == 1 or preprocess_workers == 1:
                 # Sequential processing for single segment or when parallelism disabled
                 for seg_idx, seg in enumerate(segments):
-                    processed = self._load_and_preprocess_segment(seg, input_uri)
-                    processed_list.append(processed)
+                    try:
+                        processed, was_trimmed = self._load_and_preprocess_segment(seg, input_uri)
+                        processed_list.append(processed)
+                        trimmed_flags.append(bool(was_trimmed))
+                    except Exception:
+                        # Mask failed segment, keep strict alignment.
+                        processed_list.append(None)
+                        trimmed_flags.append(False)
                     
                     # Progress reporting: каждые 10% сегментов или на первом/последнем
                     if self.progress_callback and total_segments > 0:
@@ -312,7 +382,7 @@ class CLAPExtractor(BaseExtractor):
                     }
                     
                     # Collect results in order
-                    results = [None] * len(segments)
+                    results: list[Optional[Tuple[torch.Tensor, bool]]] = [None] * len(segments)
                     for future in as_completed(future_to_index):
                         idx = future_to_index[future]
                         try:
@@ -327,9 +397,18 @@ class CLAPExtractor(BaseExtractor):
                                     last_reported_pct = pct
                         except Exception as e:
                             self.logger.error(f"Error loading/preprocessing segment {idx}: {e}")
-                            raise
+                            results[idx] = None
                     
-                    processed_list = results
+                    for r in results:
+                        if r is None:
+                            processed_list.append(None)
+                            trimmed_flags.append(False)
+                        else:
+                            t, was_trimmed = r
+                            processed_list.append(t)
+                            trimmed_flags.append(bool(was_trimmed))
+
+            stage_timings_ms["preprocess_segments_ms"] = (time.perf_counter() - t_pre0) * 1000.0
 
             def _infer_batch(wavs_1d: list[torch.Tensor]) -> list[np.ndarray]:
                 # Try batched inference. If CLAP impl doesn't support batching, fall back to per-item.
@@ -378,14 +457,23 @@ class CLAPExtractor(BaseExtractor):
                         out.append(np.asarray(e, dtype=np.float32).reshape(-1))
                     return out
 
-            emb_list: list[np.ndarray] = []
+            emb_list: list[Optional[np.ndarray]] = []
             bs = int(self.batch_size)
-            total_batches = (len(processed_list) + bs - 1) // bs
+            # Inference only for valid (non-masked) segments, but preserve alignment.
+            valid_indices = [i for i, t in enumerate(processed_list) if isinstance(t, torch.Tensor)]
+            total_batches = (len(valid_indices) + bs - 1) // bs if valid_indices else 0
             last_infer_pct = -1
             
-            for batch_idx, i in enumerate(range(0, len(processed_list), bs)):
-                chunk = processed_list[i : i + bs]
-                emb_list.extend(_infer_batch(chunk))
+            # Pre-fill with None to preserve strict alignment
+            emb_list = [None] * len(processed_list)
+            t_inf0 = time.perf_counter()
+            for batch_idx, i0 in enumerate(range(0, len(valid_indices), bs)):
+                idxs = valid_indices[i0 : i0 + bs]
+                chunk = [processed_list[j] for j in idxs]  # type: ignore[list-item]
+                chunk_t = [t for t in chunk if isinstance(t, torch.Tensor)]
+                out = _infer_batch(chunk_t)
+                for j, e in zip(idxs, out):
+                    emb_list[j] = e
                 
                 # Progress reporting: каждые 10% батчей или на первом/последнем
                 if self.progress_callback and total_batches > 0:
@@ -395,30 +483,77 @@ class CLAPExtractor(BaseExtractor):
                         self.progress_callback("clap", current, total_batches, f"Running inference: {current}/{total_batches} batches ({pct}%)")
                         last_infer_pct = pct
 
-            seq = np.stack(emb_list, axis=0).astype(np.float32)  # [N, D]
-            emb_mean = np.mean(seq, axis=0).astype(np.float32)  # [D]
+            stage_timings_ms["inference_ms"] = (time.perf_counter() - t_inf0) * 1000.0
+
+            # Build strict-aligned arrays
+            t_build0 = time.perf_counter()
+            N = len(processed_list)
+            D = int(self.embedding_dim)
+            seq = np.full((N, D), np.nan, dtype=np.float32)
+            seg_mask = np.zeros((N,), dtype=np.bool_)
+            seg_norm = np.full((N,), np.nan, dtype=np.float32)
+            for i, e in enumerate(emb_list):
+                if e is None:
+                    continue
+                v = np.asarray(e, dtype=np.float32).reshape(-1)
+                if v.size != D or (not np.isfinite(v).all()):
+                    continue
+                seq[i, :] = v
+                seg_mask[i] = True
+                seg_norm[i] = float(np.linalg.norm(v))
+
+            if not np.any(seg_mask):
+                raise RuntimeError("CLAP | all segments failed (segment_mask all false)")
+
+            stage_timings_ms["build_outputs_ms"] = (time.perf_counter() - t_build0) * 1000.0
+
+            t_agg0 = time.perf_counter()
+            emb_mean = self._robust_aggregate(seq, seg_mask)
+            stage_timings_ms["robust_aggregate_ms"] = (time.perf_counter() - t_agg0) * 1000.0
 
             # extra stats
             emb_norm = float(np.linalg.norm(emb_mean))
             emb_mag_mean = float(np.mean(np.abs(emb_mean)))
             emb_mag_std = float(np.std(np.abs(emb_mean)))
             non_zero_count = int(np.count_nonzero(emb_mean))
+            trimmed_segments_count = int(sum(1 for x in trimmed_flags if x))
+            trimmed_ratio = float(trimmed_segments_count / float(len(trimmed_flags) or 1))
+
+            stage_timings_ms["total_ms"] = (time.perf_counter() - t_total0) * 1000.0
+
+            if clap_resource_profile is not None:
+                try:
+                    clap_resource_profile = {
+                        **clap_resource_profile,
+                        **prefix_snapshot("at_end", snapshot_process_resources()),
+                    }
+                except Exception:
+                    pass
 
             payload: Dict[str, Any] = {
                 "embedding": emb_mean,
                 "embedding_sequence": seq,
-                "segment_centers_sec": np.asarray(centers, dtype=np.float32),
-                "segments_count": int(seq.shape[0]),
+                "segment_start_sec": np.asarray(starts, dtype=np.float32),
+                "segment_end_sec": np.asarray(ends, dtype=np.float32),
+                "segment_center_sec": np.asarray(centers, dtype=np.float32),
+                "segment_mask": seg_mask,
+                "segment_embedding_norm": seg_norm,
+                "stage_timings_ms": stage_timings_ms,
+                "clap_resource_profile": clap_resource_profile,
+                "segments_count": int(np.sum(seg_mask)),
                 "embedding_dim": int(emb_mean.shape[0]),
                 # Report model SR (after preprocess) rather than input SR.
                 "sample_rate": int(self.sample_rate),
+                "max_audio_length_sec": float(self.max_audio_length),
+                "trimmed_segments_count": trimmed_segments_count,
+                "trimmed_ratio": trimmed_ratio,
                 "clap_norm": emb_norm,
                 "clap_magnitude_mean": emb_mag_mean,
                 "clap_magnitude_std": emb_mag_std,
                 "clap_non_zero_count": non_zero_count,
                 "device_used": self.device,
                 "scheduler_knobs": {
-                    "segment_parallelism": int(1),
+                    "segment_parallelism": int(preprocess_workers),
                     "max_inflight": int(1),
                     "model_batch_size": int(self.batch_size),
                 },
@@ -470,7 +605,7 @@ class CLAPExtractor(BaseExtractor):
         self,
         seg: Dict[str, Any],
         input_uri: str,
-    ) -> torch.Tensor:
+    ) -> Tuple[torch.Tensor, bool]:
         """
         Загрузка и предобработка одного сегмента аудио.
         Этот метод может быть вызван параллельно для разных сегментов.
@@ -480,20 +615,20 @@ class CLAPExtractor(BaseExtractor):
             input_uri: URI к входному аудио файлу
         
         Returns:
-            Предобработанный тензор аудио [T]
+            (Предобработанный тензор аудио [T], was_trimmed)
         """
         ss = int(seg.get("start_sample"))
         es = int(seg.get("end_sample"))
         wav_t, sr = self.audio_utils.load_audio_segment(input_uri, start_sample=ss, end_sample=es, target_sr=None)
         if self.device == "cuda" and torch.cuda.is_available():
             wav_t = wav_t.to(self.device, non_blocking=True)
-        processed = self._preprocess_audio(wav_t, sr)
+        processed, was_trimmed = self._preprocess_audio(wav_t, sr)
         # normalize dims to 1D [T]
         if isinstance(processed, torch.Tensor) and processed.dim() == 2 and processed.size(0) == 1:
             processed = processed[0]
-        return processed
+        return processed, bool(was_trimmed)
 
-    def _preprocess_audio(self, waveform: torch.Tensor, sr: int) -> torch.Tensor:
+    def _preprocess_audio(self, waveform: torch.Tensor, sr: int) -> Tuple[torch.Tensor, bool]:
         """Предобработка аудио для CLAP."""
         # self.logger.debug(f"Preprocess audio: input_shape={tuple(waveform.shape)}, input_sr={sr}")
         # Ресемплирование до 48kHz если необходимо
@@ -504,15 +639,17 @@ class CLAPExtractor(BaseExtractor):
         
         # Обрезка до максимальной длины
         max_samples = int(self.max_audio_length * self.sample_rate)
+        was_trimmed = False
         if waveform.shape[-1] > max_samples:
             waveform = waveform[..., :max_samples]
+            was_trimmed = True
             # self.logger.debug(f"Trimmed audio to max {self.max_audio_length}s | samples={max_samples}")
         
         # Нормализация
         waveform = waveform / (torch.max(torch.abs(waveform)) + 1e-8)
         # self.logger.debug("Normalized audio waveform")
         
-        return waveform
+        return waveform, was_trimmed
 
     def _extract_clap_embeddings(self, waveform: torch.Tensor) -> np.ndarray:
         """Извлечение CLAP эмбеддингов."""
@@ -634,289 +771,41 @@ class CLAPExtractor(BaseExtractor):
             return []
         
         try:
-            # Этап 1: Сбор всех сегментов с привязкой к файлам
-            all_segments_with_metadata: List[Dict[str, Any]] = []
-            file_segment_ranges: Dict[str, Tuple[int, int]] = {}  # file_id -> (start_idx, end_idx)
-            
+            # Audit v3 correctness-first:
+            # - Preserve per-file strict alignment + mask semantics by reusing run_segments().
+            # - Cross-video batching is intentionally not performed here.
+            results: List[ExtractorResult] = []
             for file_info in audio_files_with_segments:
-                file_id = file_info.get("file_id", "unknown")
-                segments = file_info.get("segments", [])
                 input_uri = file_info.get("input_uri")
                 tmp_path = file_info.get("tmp_path")
-                
-                if not input_uri or not tmp_path or not segments:
-                    continue
-                
-                start_idx = len(all_segments_with_metadata)
-                for seg in segments:
-                    all_segments_with_metadata.append({
-                        "segment": seg,
-                        "file_id": file_id,
-                        "input_uri": input_uri,
-                        "tmp_path": tmp_path,
-                    })
-                end_idx = len(all_segments_with_metadata)
-                file_segment_ranges[file_id] = (start_idx, end_idx)
-            
-            if not all_segments_with_metadata:
-                # Нет сегментов для обработки
-                return [
-                    self._create_result(
-                        success=False,
-                        error="No segments provided",
-                        processing_time=time.time() - start_time,
+                segments = file_info.get("segments", [])
+                if not input_uri or not tmp_path:
+                    results.append(
+                        self._create_result(
+                            success=False,
+                            error="Missing input_uri/tmp_path",
+                            processing_time=time.time() - start_time,
+                        )
                     )
-                    for _ in audio_files_with_segments
-                ]
-            
-            # Этап 2: Параллельная загрузка и предобработка всех сегментов
-            # Используем параллелизм для ускорения загрузки/предобработки
-            max_preprocess_workers = min(len(all_segments_with_metadata), 8)
-            total_segments = len(all_segments_with_metadata)
-            last_preprocess_pct = -1
-            
-            processed_list: List[Dict[str, Any]] = []
-            
-            if len(all_segments_with_metadata) == 1 or max_preprocess_workers == 1:
-                # Sequential processing for single segment
-                for seg_meta in all_segments_with_metadata:
-                    seg = seg_meta["segment"]
-                    input_uri = seg_meta["input_uri"]
-                    
-                    try:
-                        processed = self._load_and_preprocess_segment(seg, input_uri)
-                        processed_list.append({
-                            "tensor": processed,
-                            "file_id": seg_meta["file_id"],
-                            "center_sec": float(seg.get("center_sec", 0.0)),
-                        })
-                        
-                        # Progress reporting: каждые 10% сегментов или на первом/последнем
-                        current = len(processed_list)
-                        if self.progress_callback and total_segments > 0:
-                            pct = int(current * 100 / total_segments)
-                            if current == 1 or current == total_segments or (pct % 10 == 0 and pct != last_preprocess_pct):
-                                self.progress_callback("clap", current, total_segments, f"Preprocessing segments: {current}/{total_segments} ({pct}%)")
-                                last_preprocess_pct = pct
-                    except Exception as e:
-                        self.logger.error(f"Error preprocessing segment for file_id={seg_meta['file_id']}: {e}")
-                        # Продолжаем обработку остальных сегментов
-                        continue
-            else:
-                # Parallel processing for multiple segments
-                def _process_segment_meta(seg_meta: Dict[str, Any]) -> Optional[Dict[str, Any]]:
-                    """Вспомогательная функция для параллельной обработки сегмента."""
-                    try:
-                        seg = seg_meta["segment"]
-                        input_uri = seg_meta["input_uri"]
-                        processed = self._load_and_preprocess_segment(seg, input_uri)
-                        return {
-                            "tensor": processed,
-                            "file_id": seg_meta["file_id"],
-                            "center_sec": float(seg.get("center_sec", 0.0)),
-                        }
-                    except Exception as e:
-                        self.logger.error(f"Error preprocessing segment for file_id={seg_meta.get('file_id', 'unknown')}: {e}")
-                        return None
-                
-                indexed_segments = [(idx, seg_meta) for idx, seg_meta in enumerate(all_segments_with_metadata)]
-                
-                with ThreadPoolExecutor(max_workers=max_preprocess_workers) as executor:
-                    # Submit all tasks
-                    future_to_index = {
-                        executor.submit(_process_segment_meta, seg_meta): idx
-                        for idx, seg_meta in indexed_segments
-                    }
-                    
-                    # Collect results in order
-                    results = [None] * len(all_segments_with_metadata)
-                    completed_count = 0
-                    for future in as_completed(future_to_index):
-                        idx = future_to_index[future]
-                        try:
-                            results[idx] = future.result()
-                            if results[idx] is not None:
-                                completed_count += 1
-                                
-                                # Progress reporting: каждые 10% сегментов или на первом/последнем
-                                if self.progress_callback and total_segments > 0:
-                                    pct = int(completed_count * 100 / total_segments)
-                                    if completed_count == 1 or completed_count == total_segments or (pct % 10 == 0 and pct != last_preprocess_pct):
-                                        self.progress_callback("clap", completed_count, total_segments, f"Preprocessing segments: {completed_count}/{total_segments} ({pct}%)")
-                                        last_preprocess_pct = pct
-                        except Exception as e:
-                            seg_meta = indexed_segments[idx][1]
-                            self.logger.error(f"Error preprocessing segment for file_id={seg_meta['file_id']}: {e}")
-                            results[idx] = None
-                    
-                    # Filter out None results (failed segments)
-                    processed_list = [r for r in results if r is not None]
-            
-            if not processed_list:
-                return [
-                    self._create_result(
-                        success=False,
-                        error="Failed to preprocess any segments",
-                        processing_time=time.time() - start_time,
-                    )
-                    for _ in audio_files_with_segments
-                ]
-            
-            # Этап 3: Батчинг с лимитом размера (если задан)
-            self._ensure_model_loaded()
-            if not self._model_loaded or self.model is None:
-                raise RuntimeError("CLAP model is not loaded")
-            
-            def _infer_batch(wavs_1d: list[torch.Tensor]) -> list[np.ndarray]:
-                """Внутренняя функция для батчинга (используется из run_segments)."""
-                try:
-                    # Pad to max length for stacking
-                    lens = [int(w.shape[-1]) for w in wavs_1d]
-                    max_len = int(max(lens)) if lens else 0
-                    if max_len <= 0:
-                        return []
-                    batch = []
-                    for w in wavs_1d:
-                        w = w.contiguous().float()
-                        if int(w.shape[-1]) < max_len:
-                            pad = torch.zeros((max_len - int(w.shape[-1])), device=w.device, dtype=w.dtype)
-                            w = torch.cat([w, pad], dim=-1)
-                        batch.append(w)
-                    audio_tensor = torch.stack(batch, dim=0)  # [B, T]
-                    if self.device == "cuda" and torch.cuda.is_available():
-                        audio_tensor = audio_tensor.to(self.device, non_blocking=True)
-                    use_cuda = self.device == "cuda" and torch.cuda.is_available()
-                    if use_cuda:
-                        autocast_ctx = torch.amp.autocast(device_type="cuda", dtype=torch.float32)
-                    else:
-                        autocast_ctx = nullcontext()
-                    with torch.inference_mode():
-                        with autocast_ctx:
-                            with open(os.devnull, "w") as devnull:
-                                with redirect_stdout(devnull):
-                                    emb_t = self.model.get_audio_embedding_from_data(
-                                        audio_tensor,
-                                        use_tensor=True,
-                                    )
-                    emb = emb_t.detach().cpu().float().numpy()
-                    emb = np.asarray(emb)
-                    if emb.ndim == 1:
-                        return [emb.astype(np.float32).reshape(-1)]
-                    return [np.asarray(emb[i], dtype=np.float32).reshape(-1) for i in range(int(emb.shape[0]))]
-                except Exception as e:
-                    self.logger.error(f"Error in batch inference: {e}")
-                    # Fallback to per-item processing
-                    out: list[np.ndarray] = []
-                    for w in wavs_1d:
-                        try:
-                            e = self._extract_clap_embeddings(w)
-                            out.append(np.asarray(e, dtype=np.float32).reshape(-1))
-                        except Exception:
-                            # Если не удалось обработать один сегмент, добавляем нулевой эмбеддинг
-                            out.append(np.zeros(self.embedding_dim, dtype=np.float32))
-                    return out
-            
-            # Определяем размер батча
-            batch_size = max_segments_per_batch if max_segments_per_batch is not None else len(processed_list)
-            batch_size = max(1, min(batch_size, len(processed_list)))
-            
-            # Этап 4: Обработка батчей
-            all_embeddings: List[np.ndarray] = []
-            all_centers: List[float] = []
-            all_file_ids: List[str] = []
-            
-            total_batches = (len(processed_list) + batch_size - 1) // batch_size
-            last_batch_pct = -1
-            
-            # Начальное сообщение о начале инференса
-            if self.progress_callback and total_batches > 0:
-                self.progress_callback("clap", 0, total_batches, f"Starting inference: 0/{total_batches} batches (0%)")
-            
-            for batch_idx, i in enumerate(range(0, len(processed_list), batch_size)):
-                chunk = processed_list[i : i + batch_size]
-                wavs_batch = [item["tensor"] for item in chunk]
-                
-                try:
-                    emb_batch = _infer_batch(wavs_batch)
-                    
-                    # Progress reporting: каждые 10% батчей или на первом/последнем
-                    if self.progress_callback and total_batches > 0:
-                        current = batch_idx + 1
-                        pct = int(current * 100 / total_batches)
-                        if current == 1 or current == total_batches or (pct % 10 == 0 and pct != last_batch_pct):
-                            self.progress_callback("clap", current, total_batches, f"Running inference: {current}/{total_batches} batches ({pct}%)")
-                            last_batch_pct = pct
-                    all_embeddings.extend(emb_batch)
-                    all_centers.extend([item["center_sec"] for item in chunk])
-                    all_file_ids.extend([item["file_id"] for item in chunk])
-                except Exception as e:
-                    self.logger.error(f"Error processing batch {i // batch_size}: {e}")
-                    # Добавляем нулевые эмбеддинги для неудачных сегментов
-                    for item in chunk:
-                        all_embeddings.append(np.zeros(self.embedding_dim, dtype=np.float32))
-                        all_centers.append(item["center_sec"])
-                        all_file_ids.append(item["file_id"])
-            
-            # Этап 5: Распределение результатов обратно по файлам
-            results: List[ExtractorResult] = []
-            
-            for file_info in audio_files_with_segments:
-                file_id = file_info.get("file_id", "unknown")
-                file_start, file_end = file_segment_ranges.get(file_id, (0, 0))
-                
-                # Извлекаем эмбеддинги и центры для этого файла
-                file_embeddings: List[np.ndarray] = []
-                file_centers: List[float] = []
-                
-                for idx in range(len(all_embeddings)):
-                    if all_file_ids[idx] == file_id:
-                        file_embeddings.append(all_embeddings[idx])
-                        file_centers.append(all_centers[idx])
-                
-                if not file_embeddings:
-                    # Нет эмбеддингов для этого файла
-                    results.append(self._create_result(
-                        success=False,
-                        error="No embeddings generated for this file",
-                        processing_time=time.time() - start_time,
-                    ))
                     continue
-                
-                # Агрегация результатов для файла
-                seq = np.stack(file_embeddings, axis=0).astype(np.float32)  # [N, D]
-                emb_mean = np.mean(seq, axis=0).astype(np.float32)  # [D]
-                
-                # Extra stats
-                emb_norm = float(np.linalg.norm(emb_mean))
-                emb_mag_mean = float(np.mean(np.abs(emb_mean)))
-                emb_mag_std = float(np.std(np.abs(emb_mean)))
-                non_zero_count = int(np.count_nonzero(emb_mean))
-                
-                payload: Dict[str, Any] = {
-                    "embedding": emb_mean,
-                    "embedding_sequence": seq,
-                    "segment_centers_sec": np.asarray(file_centers, dtype=np.float32),
-                    "segments_count": int(seq.shape[0]),
-                    "embedding_dim": int(emb_mean.shape[0]),
-                    "sample_rate": int(self.sample_rate),
-                    "clap_norm": emb_norm,
-                    "clap_magnitude_mean": emb_mag_mean,
-                    "clap_magnitude_std": emb_mag_std,
-                    "clap_non_zero_count": non_zero_count,
-                    "device_used": self.device,
-                    "scheduler_knobs": {
-                        "segment_parallelism": int(1),
-                        "max_inflight": int(1),
-                        "model_batch_size": int(batch_size),
-                    },
-                }
-                
-                results.append(self._create_result(
-                    success=True,
-                    payload=payload,
-                    processing_time=time.time() - start_time,
-                ))
-            
+                try:
+                    r = self.run_segments(
+                        input_uri,
+                        tmp_path,
+                        segments,
+                        segment_parallelism=1,
+                        max_inflight=1,
+                        model_batch_size=1,
+                    )
+                    results.append(r)
+                except Exception as e:
+                    results.append(
+                        self._create_result(
+                            success=False,
+                            error=str(e),
+                            processing_time=time.time() - start_time,
+                        )
+                    )
             return results
             
         except Exception as e:
@@ -961,101 +850,13 @@ class CLAPExtractor(BaseExtractor):
             pass
 
     def run(self, input_uri: str, tmp_path: str) -> ExtractorResult:
-        """Запуск CLAP экстрактора."""
-        self._log_extraction_start(input_uri)
+        """Legacy full-audio mode is disabled in audited contract (Audit v3)."""
         start_time = time.time()
-
-        try:
-            if not self._validate_input(input_uri):
-                raise ValueError("Invalid input URI for CLAP extraction.")
-
-            # Загрузка аудио
-            waveform, sr = self.audio_utils.load_audio(input_uri, target_sr=self.sample_rate)
-            
-            # Предобработка
-            processed_waveform = self._preprocess_audio(waveform, sr)
-            
-            # Извлечение эмбеддингов
-            embeddings = self._extract_clap_embeddings(processed_waveform)
-            
-            # Вычисление статистик
-            clap_stats = self._compute_clap_statistics(embeddings)
-            
-            # Сохраняем embeddings и статистики в .npy файлы
-            os.makedirs(tmp_path, exist_ok=True)
-            import uuid
-            
-            # Сохраняем основные embeddings
-            embeddings_filename = f"clap_embeddings_{uuid.uuid4().hex}.npy"
-            embeddings_path = os.path.join(tmp_path, embeddings_filename)
-            
-            try:
-                np.save(embeddings_path, embeddings.astype(np.float32))
-                # # self.logger.debug(f"CLAP embeddings saved to {embeddings_path} (shape={embeddings.shape})")
-            except Exception as e:
-                self.logger.warning(f"Failed to save CLAP embeddings to {embeddings_path}: {e}")
-                embeddings_path = None
-            
-            # Сохраняем массивы статистик
-            arrays_to_save = {
-                "clap_mean": np.array(clap_stats.get("clap_mean", [])),
-                "clap_std": np.array(clap_stats.get("clap_std", [])),
-                "clap_min": np.array(clap_stats.get("clap_min", [])),
-                "clap_max": np.array(clap_stats.get("clap_max", []))
-            }
-            
-            saved_arrays = {}
-            for name, array in arrays_to_save.items():
-                if array.size > 0:
-                    fname = f"{name}_{uuid.uuid4().hex}.npy"
-                    array_path = os.path.join(tmp_path, fname)
-                    try:
-                        np.save(array_path, array.astype(np.float32))
-                        saved_arrays[name] = array_path
-                        # self.logger.debug(f"{name} saved to {array_path} (shape={array.shape})")
-                    except Exception as e:
-                        self.logger.warning(f"Failed to save {name} npy: {e}")
-                        saved_arrays[name] = None
-                else:
-                    saved_arrays[name] = None
-            
-            payload = {
-                "clap_embeddings_npy": embeddings_path,
-                "embedding_dim": self.embedding_dim,
-                "sample_rate": self.sample_rate,
-                "model_available": bool(CLAP_AVAILABLE and self._model_loaded and self.model is not None),
-                "embeddings_shape": list(embeddings.shape),
-                "embeddings_dtype": str(embeddings.dtype),
-                # Пути к .npy файлам с массивами статистик
-                "clap_mean_npy": saved_arrays["clap_mean"],
-                "clap_std_npy": saved_arrays["clap_std"],
-                "clap_min_npy": saved_arrays["clap_min"],
-                "clap_max_npy": saved_arrays["clap_max"],
-                # Размеры массивов
-                "clap_mean_shape": list(arrays_to_save["clap_mean"].shape) if arrays_to_save["clap_mean"].size > 0 else [],
-                "clap_std_shape": list(arrays_to_save["clap_std"].shape) if arrays_to_save["clap_std"].size > 0 else [],
-                "clap_min_shape": list(arrays_to_save["clap_min"].shape) if arrays_to_save["clap_min"].size > 0 else [],
-                "clap_max_shape": list(arrays_to_save["clap_max"].shape) if arrays_to_save["clap_max"].size > 0 else [],
-                # Скалярные статистики
-                "clap_norm": clap_stats.get("clap_norm", 0.0),
-                "clap_non_zero_count": clap_stats.get("clap_non_zero_count", 0),
-                "clap_magnitude_mean": clap_stats.get("clap_magnitude_mean", 0.0),
-                "clap_magnitude_std": clap_stats.get("clap_magnitude_std", 0.0),
-                "total_features": clap_stats.get("total_features", 0)
-            }
-            
-            processing_time = time.time() - start_time
-            # Доп. метрики
-            # Убираем подробные метрики выполнения, оставим итоговый лог завершения базовым механизмом
-            self._log_extraction_success(input_uri, processing_time)
-            return self._create_result(success=True, payload=payload, processing_time=processing_time)
-
-        except Exception as e:
-            processing_time = time.time() - start_time
-            error_msg = f"CLAP extraction failed: {e}"
-            self.logger.error(f"CLAP run failed | duration={processing_time:.2f}s | error={e}")
-            self._log_extraction_error(input_uri, error_msg, processing_time)
-            return self._create_result(success=False, error=error_msg, processing_time=processing_time)
+        return self._create_result(
+            success=False,
+            error="CLAPExtractor.run() is disabled in audited mode. Use run_segments() with Segmenter windows (families.clap).",
+            processing_time=time.time() - start_time,
+        )
 
     def _compute_clap_statistics(self, embeddings: np.ndarray) -> Dict[str, Any]:
         """Вычисление статистик CLAP эмбеддингов."""

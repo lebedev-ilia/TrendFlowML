@@ -28,20 +28,25 @@ import librosa
 from src.core.base_extractor import BaseExtractor, ExtractorResult
 from src.core.audio_utils import AudioUtils
 
+from .utils.resource_profile import (
+    prefix_snapshot,
+    resource_profile_enabled,
+    snapshot_process_resources,
+)
+
 logger = logging.getLogger(__name__)
 
 # Contract version for downstream extractors compatibility validation
 ONSET_CONTRACT_VERSION = "onset_contract_v1"
 
-# Threshold for saving large arrays to .npy files
-ONSET_TIMES_SAVE_THRESHOLD = 10000
+# Onset times always saved to .npy (debug-only), never in NPZ (Audit v3)
 
 
 class OnsetExtractor(BaseExtractor):
     """Экстрактор онсетов (атаки звука) с поддержкой segment-based обработки."""
 
     name = "onset"
-    version = "2.0.0"
+    version = "2.0.1"
     description = "Определение онсетов (атака звука)"
     category = "rhythm"
     dependencies = ["librosa", "numpy"]
@@ -69,8 +74,8 @@ class OnsetExtractor(BaseExtractor):
         backtrack: bool = False,
         energy: bool = False,
         normalize: bool = False,
-        # Feature gating flags (per-feature control, default: all False)
-        enable_basic_features: bool = False,
+        # Feature gating flags (Audit v3 default: basic_features=True)
+        enable_basic_features: bool = True,
         enable_interval_stats: bool = False,
         enable_rhythmic_metrics: bool = False,
         enable_time_series: bool = False,
@@ -370,7 +375,12 @@ class OnsetExtractor(BaseExtractor):
                     units=self.units,
                     **self.librosa_params,
                 )
-                onset_times = np.array(onset_frames, dtype=np.float32)
+                onset_frames = np.atleast_1d(np.asarray(onset_frames, dtype=np.float32))
+                if self.units == "frames":
+                    onset_times = librosa.frames_to_time(onset_frames, sr=sr, hop_length=self.hop_length)
+                else:
+                    onset_times = onset_frames
+                onset_times = np.asarray(onset_times, dtype=np.float32)
                 if onset_times.ndim == 0:
                     onset_times = onset_times.reshape(1)
                 return onset_times
@@ -428,7 +438,6 @@ class OnsetExtractor(BaseExtractor):
             metrics.update(
                 {
                     "onset_regularity_score": 0.0,
-                    "onset_clustering_score": 0.0,
                     "onset_tempo_estimate": 0.0,
                     "onset_syncopation_score": 0.0,
                     "onset_strength_mean": 0.0,
@@ -445,14 +454,6 @@ class OnsetExtractor(BaseExtractor):
             metrics["onset_regularity_score"] = float(1.0 / (1.0 + cv))
         else:
             metrics["onset_regularity_score"] = 0.0
-
-        # Clustering score: мера кластеризации онсетов по времени
-        # Используем стандартное отклонение интервалов, нормализованное на средний интервал
-        if intervals.size > 0 and np.mean(intervals) > 0:
-            normalized_std = np.std(intervals) / (np.mean(intervals) + 1e-9)
-            metrics["onset_clustering_score"] = float(1.0 / (1.0 + normalized_std))
-        else:
-            metrics["onset_clustering_score"] = 0.0
 
         # Tempo estimate: оценка BPM из интервалов
         if intervals.size > 0 and np.mean(intervals) > 0:
@@ -530,7 +531,7 @@ class OnsetExtractor(BaseExtractor):
         self, features: Dict[str, Any], input_uri: str, tmp_path: str
     ) -> Dict[str, Any]:
         """
-        Сохранение больших временных серий в .npy файлы (per-run storage).
+        Сохранение onset_times в .npy (debug-only). Audit v3: never in NPZ, only meta.extra.onset_times_npy.
 
         Args:
             features: Словарь с выходными данными
@@ -538,25 +539,20 @@ class OnsetExtractor(BaseExtractor):
             tmp_path: Временный путь для сохранения
 
         Returns:
-            Обновленный словарь с путями к .npy файлам (если сохранены)
+            Обновленный словарь с путём к .npy в onset_times_npy
         """
         if self.artifacts_dir is None:
             return features
 
-        # Сохраняем onset_times если размер превышает threshold
-        if "onset_times" in features and self.enable_time_series:
+        # Audit v3: always save onset_times to .npy when we have them (basic_features or time_series)
+        if "onset_times" in features and (self.enable_basic_features or self.enable_time_series):
             onset_times = features.get("onset_times")
-            if onset_times is not None and len(onset_times) > ONSET_TIMES_SAVE_THRESHOLD:
+            if onset_times is not None:
                 artifacts_path = Path(self.artifacts_dir)
                 artifacts_path.mkdir(parents=True, exist_ok=True)
-
                 npy_path = artifacts_path / "onset_times.npy"
-                np.save(str(npy_path), onset_times.astype(np.float32))
-
-                # Заменяем большой массив на путь (relpath внутри _artifacts/)
+                np.save(str(npy_path), np.asarray(onset_times, dtype=np.float32).reshape(-1))
                 features["onset_times_npy"] = "_artifacts/onset_times.npy"
-                features["onset_times_shape"] = onset_times.shape
-                features["onset_times_elements"] = int(onset_times.size)
 
         return features
 
@@ -567,6 +563,9 @@ class OnsetExtractor(BaseExtractor):
         Progress reporting: обновление прогресса для каждого этапа.
         """
         start_time = time.time()
+        t_total0 = time.perf_counter()
+        stage_timings_ms: Dict[str, float] = {}
+        onset_resource_profile: Optional[Dict[str, Any]] = None
         try:
             if not self._validate_input(input_uri):
                 error_code = self._classify_error(ValueError("Invalid input"), "audio_load_failed")
@@ -578,16 +577,30 @@ class OnsetExtractor(BaseExtractor):
 
             self._log_extraction_start(input_uri)
 
+            if resource_profile_enabled():
+                try:
+                    onset_resource_profile = {
+                        **prefix_snapshot("at_start", snapshot_process_resources()),
+                    }
+                except Exception:
+                    onset_resource_profile = None
+
             # Загружаем аудио
             if self.progress_callback:
                 self.progress_callback("onset", 0, 5, "Loading audio")
+            t0 = time.perf_counter()
             y_t, sr = self.audio_utils.load_audio(input_uri, self.sample_rate)
             y = self.audio_utils.to_numpy(y_t)
+            stage_timings_ms["load_audio_ms"] = (time.perf_counter() - t0) * 1000.0
 
             # Опциональная нормализация аудио
             if self.enable_audio_normalization:
+                t0 = time.perf_counter()
                 y = self.audio_utils.normalize_audio(y_t)
                 y = self.audio_utils.to_numpy(y)
+                stage_timings_ms["normalize_audio_ms"] = (time.perf_counter() - t0) * 1000.0
+            else:
+                stage_timings_ms["normalize_audio_ms"] = 0.0
 
             # Выбираем канал с максимальной RMS энергией для многоканального аудио
             if y.ndim == 2:
@@ -597,11 +610,14 @@ class OnsetExtractor(BaseExtractor):
             # Извлекаем онсеты
             if self.progress_callback:
                 self.progress_callback("onset", 1, 5, "Extracting onsets")
+            t0 = time.perf_counter()
             onset_times = self._extract_onsets(y, sr)
+            stage_timings_ms["extract_onsets_ms"] = (time.perf_counter() - t0) * 1000.0
 
             # Вычисляем базовые метрики
             if self.progress_callback:
                 self.progress_callback("onset", 2, 5, "Computing metrics")
+            t0 = time.perf_counter()
             duration = float(y.shape[-1] / sr)
             features: Dict[str, Any] = {}
 
@@ -632,6 +648,13 @@ class OnsetExtractor(BaseExtractor):
             # Time series
             if self.enable_time_series:
                 features["onset_times"] = onset_times.astype(np.float32)
+            stage_timings_ms["compute_metrics_ms"] = (time.perf_counter() - t0) * 1000.0
+
+            # Audit v3: canonical segment axis (empty for run())
+            features["segment_start_sec"] = np.array([], dtype=np.float32)
+            features["segment_end_sec"] = np.array([], dtype=np.float32)
+            features["segment_center_sec"] = np.array([], dtype=np.float32)
+            features["segment_mask"] = np.array([], dtype=bool)
 
             # Метаданные
             features["sample_rate"] = int(sr)
@@ -643,12 +666,16 @@ class OnsetExtractor(BaseExtractor):
             # Сохраняем большие массивы в .npy
             if self.progress_callback:
                 self.progress_callback("onset", 3, 5, "Saving artifacts")
+            t0 = time.perf_counter()
             features = self._save_time_series_artifacts(features, input_uri, tmp_path)
+            stage_timings_ms["save_artifacts_ms"] = (time.perf_counter() - t0) * 1000.0
 
             # Валидация выходных данных
             if self.progress_callback:
                 self.progress_callback("onset", 4, 5, "Validating output")
+            t0 = time.perf_counter()
             is_valid, error_msg = self._validate_output(features)
+            stage_timings_ms["validate_output_ms"] = (time.perf_counter() - t0) * 1000.0
             if not is_valid:
                 error_code = self._classify_error(ValueError(error_msg), "validation_failed")
                 raise ValueError(f"onset | {error_msg} (error_code={error_code})")
@@ -671,17 +698,20 @@ class OnsetExtractor(BaseExtractor):
                 enabled_features.append("time_series")
             features["_features_enabled"] = enabled_features
 
-            # Add stage timings to payload (for meta/stage_timings_ms)
-            processing_time = time.time() - start_time
-            features["stage_timings_ms"] = {
-                "load_audio_ms": 0.0,  # Audio loading is part of extraction
-                "extract_onsets_ms": float(processing_time * 1000.0),
-                "compute_metrics_ms": 0.0,  # Metrics computation is part of extraction
-                "save_artifacts_ms": 0.0,  # Artifact saving is part of extraction
-                "validate_output_ms": 0.0,  # Validation is part of extraction
-                "total_ms": float(processing_time * 1000.0),
-            }
+            stage_timings_ms["total_ms"] = (time.perf_counter() - t_total0) * 1000.0
+            features["stage_timings_ms"] = stage_timings_ms
 
+            if onset_resource_profile is not None:
+                try:
+                    onset_resource_profile = {
+                        **(onset_resource_profile or {}),
+                        **prefix_snapshot("at_end", snapshot_process_resources()),
+                    }
+                except Exception:
+                    pass
+            features["onset_resource_profile"] = onset_resource_profile
+
+            processing_time = time.time() - start_time
             self._log_extraction_success(input_uri, processing_time)
             if self.progress_callback:
                 self.progress_callback("onset", 5, 5, "Completed")
@@ -723,8 +753,10 @@ class OnsetExtractor(BaseExtractor):
             progress_report_interval = max(1, total_segments // 10) if total_segments >= 10 else 1
             last_reported_pct = -1
 
-            # Process segments
+            # Process segments (Audit v3: canonical segment axis)
             onset_times_all: List[float] = []
+            segment_starts: List[float] = []
+            segment_ends: List[float] = []
             segment_centers: List[float] = []
             segment_durations: List[float] = []
 
@@ -745,6 +777,8 @@ class OnsetExtractor(BaseExtractor):
                 start_sample = int(seg.get("start_sample", 0))
                 end_sample = int(seg.get("end_sample", 0))
                 center_sec = float(seg.get("center_sec", 0.0))
+                seg_start_sec = float(start_sample / self.sample_rate)
+                seg_end_sec = float(end_sample / self.sample_rate)
 
                 wav_t, _sr = self.audio_utils.load_audio_segment(
                     input_uri,
@@ -770,6 +804,8 @@ class OnsetExtractor(BaseExtractor):
 
                 # Собираем онсеты
                 onset_times_all.extend(seg_onset_times_global.tolist())
+                segment_starts.append(seg_start_sec)
+                segment_ends.append(seg_end_sec)
                 segment_centers.append(center_sec)
                 segment_durations.append(float((end_sample - start_sample) / self.sample_rate))
 
@@ -782,8 +818,11 @@ class OnsetExtractor(BaseExtractor):
             onset_times_all = np.unique(onset_times_all)  # Удаляем дубликаты на границах сегментов
             onset_times_all = np.sort(onset_times_all)  # Сортируем по времени
 
+            segment_starts = np.array(segment_starts, dtype=np.float32)
+            segment_ends = np.array(segment_ends, dtype=np.float32)
             segment_centers = np.array(segment_centers, dtype=np.float32)
             segment_durations = np.array(segment_durations, dtype=np.float32)
+            segment_mask = np.ones(total_segments, dtype=bool)
 
             # Вычисляем метрики на агрегированных данных
             total_duration = float(np.sum(segment_durations))
@@ -817,7 +856,11 @@ class OnsetExtractor(BaseExtractor):
             if self.enable_time_series:
                 features["onset_times"] = onset_times_all
 
-            # Per-segment data
+            # Audit v3: canonical segment axis
+            features["segment_start_sec"] = segment_starts
+            features["segment_end_sec"] = segment_ends
+            features["segment_center_sec"] = segment_centers
+            features["segment_mask"] = segment_mask
             features["segment_centers_sec"] = segment_centers
             features["segment_durations_sec"] = segment_durations
             features["segments_count"] = int(total_segments)

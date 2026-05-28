@@ -41,15 +41,23 @@ logger = get_logger("VisualProcessor.car_semantics_batch")
 
 # Import from car_semantics
 try:
-    from core.model_process.core_identity.car_semantics.embedding_service_client import EmbeddingServiceClient
-    from core.model_process.core_identity.car_semantics.crop_utils import crop_with_padding, select_best_crop_for_track
+    from core.model_process.core_identity.car_semantics.utils.embedding_service_client import EmbeddingServiceClient
+    from core.model_process.core_identity.car_semantics.utils.crop_utils import crop_with_padding, select_best_crop_for_track
     from core.model_process.core_identity.car_semantics.main import _extract_car_metadata
 except ImportError:
-    # Fallback: direct import
-    sys.path.insert(0, str(_car_semantics_path))
-    from embedding_service_client import EmbeddingServiceClient
-    from crop_utils import crop_with_padding, select_best_crop_for_track
-    from main import _extract_car_metadata
+    # Fallback: try utils directory, then direct import
+    try:
+        sys.path.insert(0, str(_car_semantics_path / "utils"))
+        from embedding_service_client import EmbeddingServiceClient
+        from crop_utils import crop_with_padding, select_best_crop_for_track
+        sys.path.insert(0, str(_car_semantics_path))
+        from main import _extract_car_metadata
+    except ImportError:
+        # Last fallback: direct import from root
+        sys.path.insert(0, str(_car_semantics_path))
+        from embedding_service_client import EmbeddingServiceClient
+        from crop_utils import crop_with_padding, select_best_crop_for_track
+        from main import _extract_car_metadata
 
 NAME = "car_semantics"
 VERSION = "0.1"

@@ -1,0 +1,57 @@
+{
+  "schema_system_version": "vp_schema_v1",
+  "schema_version": "video_pacing_npz_v3",
+  "producer": "video_pacing",
+  "artifact_kind": "npz",
+  "allow_extra_keys": false,
+  "meta": {
+    "required_keys": [
+      "producer",
+      "producer_version",
+      "schema_version",
+      "created_at",
+      "platform_id",
+      "video_id",
+      "run_id",
+      "config_hash",
+      "sampling_policy_version",
+      "dataprocessor_version",
+      "status",
+      "empty_reason",
+      "models_used",
+      "model_signature",
+      "stage_timings_ms"
+    ],
+    "optional_keys": [
+      "total_frames",
+      "processed_frames",
+      "frames_dir",
+      "analysis_fps",
+      "analysis_width",
+      "analysis_height",
+      "ui_payload",
+      "downscale_factor",
+      "min_shot_length_seconds",
+      "shot_detect_k",
+      "min_frames",
+      "enable_entropy_features",
+      "enable_histograms",
+      "enable_pace_curve_peaks",
+      "enable_periodicity",
+      "enable_bursts"
+    ]
+  },
+  "fields": {
+    "frame_indices": { "required": true, "tier": "model_facing", "dtype": "int32", "shape": ["N"] },
+    "times_s": { "required": true, "tier": "model_facing", "dtype": "float32", "shape": ["N"] },
+    "shot_boundary_frame_indices": { "required": true, "tier": "model_facing", "dtype": "int32", "shape": ["S"] },
+    "motion_norm_per_sec_mean": { "required": true, "tier": "model_facing", "dtype": "float32", "shape": ["N"] },
+    "semantic_change_rate_per_sec": { "required": true, "tier": "model_facing", "dtype": "float32", "shape": ["N"] },
+    "color_change_rate_per_sec": { "required": true, "tier": "model_facing", "dtype": "float32", "shape": ["N"] },
+    "feature_names": { "required": true, "tier": "model_facing", "dtype": "object", "shape": ["F"] },
+    "feature_values": { "required": true, "tier": "model_facing", "dtype": "float32", "shape": ["F"] },
+    "meta": { "required": true, "tier": "debug", "dtype": "object", "shape": [] }
+  }
+}
+
+

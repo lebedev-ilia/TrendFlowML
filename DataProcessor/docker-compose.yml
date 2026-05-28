@@ -1,0 +1,297 @@
+# docker-compose.yml для DataProcessor API (MVP вариант)
+#
+# Этот файл предназначен для разработки и тестирования API.
+# Для production рекомендуется использовать вариант с разделением API и Worker.
+#
+# Ссылка: DataProcessor/docs/DATAPROCESSOR_API_ARCHITECTURE.md (строка 1736-1766)
+#
+# Запуск:
+#   docker-compose up -d
+#
+# Остановка:
+#   docker-compose down
+#
+# Просмотр логов:
+#   docker-compose logs -f dataprocessor-api
+#
+# Пересборка:
+#   docker-compose build --no-cache
+
+version: '3.8'
+
+services:
+  dataprocessor-api:
+    build:
+      context: .
+      dockerfile: docker/api/Dockerfile
+    container_name: dataprocessor-api
+    ports:
+      - "8001:8000"  # API порт (внешний:внутренний)
+    deploy:
+      resources:
+        limits:
+          memory: 2G  # Лимит памяти для API контейнера
+          cpus: '2'   # Лимит CPU
+        reservations:
+          memory: 512M  # Резервирование памяти
+          cpus: '0.5'   # Резервирование CPU
+    environment:
+      # Storage настройки
+      - STORAGE_TYPE=fs
+      - STORAGE_ROOT=/data
+      - TREND_STORAGE_BACKEND=fs
+      - TREND_FS_ROOT=/data
+      
+      # API настройки
+      - API_HOST=0.0.0.0
+      - API_PORT=8000
+      - API_VERSION=0.1.0
+      - MAX_CONCURRENT_RUNS=4
+      
+      # Логирование
+      - LOG_LEVEL=INFO
+      - LOG_FORMAT=text  # text для разработки, json для production
+      - DEBUG=false
+      
+      # CORS (для разработки)
+      - CORS_ORIGINS=*
+      
+      # Triton (опционально, если используется)
+      - TRITON_ENDPOINT=${TRITON_ENDPOINT:-http://triton:8000}
+      
+      # Redis настройки
+      - REDIS_HOST=redis
+      - REDIS_PORT=6379
+      - REDIS_DB=0
+      - REDIS_PASSWORD=${REDIS_PASSWORD:-}
+      - REDIS_URL=redis://redis:6379/0
+    volumes:
+      # Результаты обработки
+      - ./dp_results:/data/result_store
+      # Выходные кадры
+      - ./dp_output:/data/frames_dir
+      # Профили конфигурации
+      - ./profiles:/app/profiles
+      # Конфигурации
+      - ./configs:/app/configs
+      # Кэш профилей (создается автоматически)
+      - ./_profiles_cache:/app/_profiles_cache
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:8000/api/v1/health"]
+      interval: 30s
+      timeout: 10s
+      start_period: 40s
+      retries: 3
+    restart: unless-stopped
+    depends_on:
+      redis:
+        condition: service_healthy
+    networks:
+      - dataprocessor-network
+
+  # Worker процесс для обработки задач из Redis Streams
+  dataprocessor-worker:
+    build:
+      context: .
+      dockerfile: docker/worker/Dockerfile
+    container_name: dataprocessor-worker
+    deploy:
+      resources:
+        limits:
+          memory: 16G  # Лимит памяти для worker контейнера (16G согласно требованиям)
+          cpus: '4'    # Лимит CPU
+        reservations:
+          memory: 8G  # Резервирование памяти (50% от лимита)
+          cpus: '2'   # Резервирование CPU
+    environment:
+      # Storage настройки
+      - STORAGE_TYPE=fs
+      - STORAGE_ROOT=/data
+      - TREND_STORAGE_BACKEND=fs
+      - TREND_FS_ROOT=/data
+      
+      # Worker настройки
+      - WORKER_ID=${WORKER_ID:-worker-1}  # Уникальный ID worker'а
+      - MAX_CONCURRENT_RUNS=2  # Параллельных задач на worker
+      - SUBPROCESS_MEMORY_LIMIT_MB=8000  # Лимит памяти для subprocess (8GB)
+      # HTTP /metrics в процессе worker (p95, failures) — обязателен для полного дашборда; см. monitoring/README.md «Пилот 15».
+      - DP_WORKER_METRICS_PORT=${DP_WORKER_METRICS_PORT:-8001}
+      
+      # Логирование
+      - LOG_LEVEL=INFO
+      - LOG_FORMAT=text  # text для разработки, json для production
+      - DEBUG=false
+      
+      # Triton (опционально, если используется)
+      - TRITON_ENDPOINT=${TRITON_ENDPOINT:-http://triton:8000}
+      
+      # Redis настройки
+      - REDIS_HOST=redis
+      - REDIS_PORT=6379
+      - REDIS_DB=0
+      - REDIS_PASSWORD=${REDIS_PASSWORD:-}
+      - REDIS_URL=redis://redis:6379/0
+    volumes:
+      # Результаты обработки
+      - ./dp_results:/data/result_store
+      # Выходные кадры
+      - ./dp_output:/data/frames_dir
+      # Профили конфигурации
+      - ./profiles:/app/profiles
+      # Конфигурации
+      - ./configs:/app/configs
+      # Кэш профилей (создается автоматически)
+      - ./_profiles_cache:/app/_profiles_cache
+    restart: unless-stopped
+    depends_on:
+      redis:
+        condition: service_healthy
+      dataprocessor-api:
+        condition: service_started
+    networks:
+      - dataprocessor-network
+    # Можно запустить несколько worker'ов:
+    # docker-compose up --scale dataprocessor-worker=3
+
+  # Retention cleanup cron job (ежедневная очистка старых данных)
+  # 
+  # Вариант 1: Использование cron внутри контейнера (текущий)
+  # Запускается ежедневно в 2:00 UTC
+  #
+  # Вариант 2: Запуск через внешний cron или Kubernetes CronJob (рекомендуется для production)
+  # В этом случае используйте: command: python -m api.retention_cleanup
+  # и настройте внешний scheduler для запуска раз в день
+  dataprocessor-retention-cleanup:
+    build:
+      context: .
+      dockerfile: docker/api/Dockerfile
+    container_name: dataprocessor-retention-cleanup
+    # Вариант с cron внутри контейнера (требует установки cron)
+    command: >
+      sh -c "
+        apk add --no-cache dcron &&
+        echo '0 2 * * * python -m api.retention_cleanup >> /var/log/retention-cleanup.log 2>&1' | crontab - &&
+        crond -f -l 2
+      "
+    # Альтернативный вариант: запуск через отдельный скрипт без cron
+    # command: python -m api.retention_cleanup
+    # В этом случае настройте внешний scheduler (Kubernetes CronJob, systemd timer, etc.)
+    environment:
+      # Storage настройки
+      - STORAGE_TYPE=fs
+      - STORAGE_ROOT=/data
+      - TREND_STORAGE_BACKEND=fs
+      - TREND_FS_ROOT=/data
+      
+      # Логирование
+      - LOG_LEVEL=INFO
+      - LOG_FORMAT=json  # JSON для production
+      - DEBUG=false
+      
+      # Redis настройки
+      - REDIS_HOST=redis
+      - REDIS_PORT=6379
+      - REDIS_DB=0
+      - REDIS_PASSWORD=${REDIS_PASSWORD:-}
+      - REDIS_URL=redis://redis:6379/0
+    volumes:
+      # Результаты обработки
+      - ./dp_results:/data/result_store
+      # Выходные кадры
+      - ./dp_output:/data/frames_dir
+      # Логи retention cleanup
+      - retention-cleanup-logs:/var/log
+    restart: unless-stopped
+    depends_on:
+      redis:
+        condition: service_healthy
+    networks:
+      - dataprocessor-network
+    # Альтернативный вариант: запуск через отдельный скрипт без cron
+    # command: python -m api.retention_cleanup
+    # и запуск через внешний cron или scheduler (например, Kubernetes CronJob)
+
+  # Redis для job registry и state cache
+  redis:
+    image: redis:7-alpine
+    container_name: dataprocessor-redis
+    ports:
+      - "6379:6379"
+    volumes:
+      - redis-data:/data  # Persistence
+    command: redis-server --appendonly yes
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 10s
+      timeout: 3s
+      retries: 3
+    restart: unless-stopped
+    networks:
+      - dataprocessor-network
+
+  # Prometheus для мониторинга метрик
+  prometheus:
+    image: prom/prometheus:latest
+    container_name: dataprocessor-prometheus
+    # Хостовые порты: при конфликте 9090/3000 задайте E2E_PROMETHEUS_HOST_PORT / E2E_GRAFANA_HOST_PORT
+    # (setup_e2e_infra.sh подбирает свободные, если не заданы)
+    ports:
+      - "${E2E_PROMETHEUS_HOST_PORT:-9090}:9090"
+    volumes:
+      - ./monitoring/prometheus/prometheus.yml:/etc/prometheus/prometheus.yml
+      - ./monitoring/prometheus/alerts.yml:/etc/prometheus/alerts.yml
+      - prometheus-data:/prometheus
+    command:
+      - '--config.file=/etc/prometheus/prometheus.yml'
+      - '--storage.tsdb.path=/prometheus'
+      - '--web.console.libraries=/usr/share/prometheus/console_libraries'
+      - '--web.console.templates=/usr/share/prometheus/consoles'
+    networks:
+      - dataprocessor-network
+    restart: unless-stopped
+
+  # Grafana для визуализации метрик
+  grafana:
+    image: grafana/grafana:latest
+    container_name: dataprocessor-grafana
+    ports:
+      - "${E2E_GRAFANA_HOST_PORT:-3000}:3000"
+    environment:
+      - GF_SECURITY_ADMIN_USER=admin
+      - GF_SECURITY_ADMIN_PASSWORD=admin
+      - GF_USERS_ALLOW_SIGN_UP=false
+    volumes:
+      - grafana-data:/var/lib/grafana
+      - ./monitoring/grafana/provisioning:/etc/grafana/provisioning
+      - ./monitoring/grafana/dashboards:/etc/grafana/dashboards
+    networks:
+      - dataprocessor-network
+    depends_on:
+      - prometheus
+    restart: unless-stopped
+
+  # Jaeger для distributed tracing (опционально)
+  jaeger:
+    image: jaegertracing/all-in-one:latest
+    container_name: dataprocessor-jaeger
+    ports:
+      - "16686:16686"  # Jaeger UI
+      - "6831:6831/udp"  # Jaeger agent (UDP)
+      - "4317:4317"  # OTLP gRPC
+      - "4318:4318"  # OTLP HTTP
+    environment:
+      - COLLECTOR_OTLP_ENABLED=true
+    networks:
+      - dataprocessor-network
+    restart: unless-stopped
+
+networks:
+  dataprocessor-network:
+    driver: bridge
+
+volumes:
+  redis-data:
+  retention-cleanup-logs:
+  prometheus-data:
+  grafana-data:
+

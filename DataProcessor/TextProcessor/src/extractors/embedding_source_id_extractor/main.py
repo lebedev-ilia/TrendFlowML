@@ -1,9 +1,30 @@
+from __future__ import annotations
+
+import time
 from pathlib import Path
 from typing import Any, Dict, Optional, Tuple
+
+import numpy as np
 
 from src.core.base_extractor import BaseExtractor
 from src.core.metrics import system_snapshot, process_memory_bytes
 from src.core.path_utils import default_artifacts_dir
+
+_FEATURES_FLAT_KEYS: Tuple[str, ...] = (
+    "tp_embid_present",
+    "tp_embid_strict_missing_primary_enabled",
+    "tp_embid_policy_transcript_first",
+    "tp_embid_policy_title_first",
+    "tp_embid_policy_description_first",
+    "tp_embid_policy_title_only",
+    "tp_embid_policy_transcript_only",
+    "tp_embid_primary_is_transcript",
+    "tp_embid_primary_is_title",
+    "tp_embid_primary_is_description",
+    "tp_embid_unsafe_relpath_flag",
+    "tp_embid_primary_embed_missing_flag",
+    "tp_embid_nan_inf_flag",
+)
 
 
 class EmbeddingSourceIdExtractor(BaseExtractor):
@@ -13,10 +34,10 @@ class EmbeddingSourceIdExtractor(BaseExtractor):
     - Selects a primary embedding deterministically from doc.tp_artifacts (canonical + legacy).
     - Computes a portable vector_id from float32 values (no path dependency).
     - Privacy-safe: no absolute paths in result.
-    - Output: features_flat (scalars) + embedding_source_id (strings/meta).
+    - Output: fixed features_flat (scalars) + embedding_source_id (strings/meta).
     """
 
-    VERSION = "1.2.0"
+    VERSION = "1.3.0"
 
     def __init__(
         self,
@@ -26,8 +47,11 @@ class EmbeddingSourceIdExtractor(BaseExtractor):
         strict_missing_primary: bool = True,
         artifacts_dir: str | None = None,
     ) -> None:
+        init_sys_before = system_snapshot()
+        init_mem_before = process_memory_bytes()
+
         self.vector_store_uri = vector_store_uri
-        self.model_version = model_version
+        self.model_version = str(model_version or "unknown")
         self.primary_source_policy = str(primary_source_policy or "transcript_first").strip().lower()
         self.strict_missing_primary = bool(strict_missing_primary)
         self.artifacts_dir = Path(artifacts_dir).expanduser().resolve() if artifacts_dir else default_artifacts_dir()
@@ -43,6 +67,14 @@ class EmbeddingSourceIdExtractor(BaseExtractor):
                 "transcript_first|title_first|description_first|title_only|transcript_only"
             )
 
+        init_sys_after = system_snapshot()
+        init_mem_after = process_memory_bytes()
+        self._init_metrics: Dict[str, Any] = {
+            "pre_init": init_sys_before,
+            "post_init": init_sys_after,
+            "ram_peak_bytes": max(init_mem_before, init_mem_after),
+        }
+
     @staticmethod
     def _safe_join_artifacts_dir(base_dir: Path, relpath: str) -> Path:
         base = base_dir.expanduser().resolve()
@@ -52,40 +84,122 @@ class EmbeddingSourceIdExtractor(BaseExtractor):
         return cand
 
     @staticmethod
-    def _vector_id_from_values(vec_f32: "Any") -> str:
-        """
-        Portable deterministic ID computed from vector float32 values (not from filesystem path, not from .npy bytes).
-        Output: 24 hex chars (first 12 bytes of sha256).
-        """
-        import numpy as np
-
-        v = np.asarray(vec_f32, dtype=np.float32).reshape(-1)
-        # ensure stable little-endian bytes across platforms
-        if v.dtype.byteorder not in ("<", "="):
-            v = v.byteswap().newbyteorder("<")
+    def _vector_id_from_values(vec_f32: Any) -> str:
+        """Portable deterministic ID: first 24 hex of sha256 over C-order little-endian float32 bytes."""
         import hashlib
 
+        v = np.asarray(vec_f32, dtype=np.float32).reshape(-1)
+        if v.dtype.byteorder not in ("<", "="):
+            v = v.byteswap().newbyteorder("<")
         h = hashlib.sha256(v.tobytes(order="C")).hexdigest()
         return h[:24]
 
+    def _gpu_peak_mb(self, sys_after: Any) -> int:
+        def _g(snap: Any) -> int:
+            try:
+                g = (snap or {}).get("gpu") or {}
+                arr = g.get("gpus") or []
+                return max([int(x.get("memory_used_mb", 0)) for x in arr] or [0])
+            except Exception:
+                return 0
+
+        return max(
+            _g(self._init_metrics.get("pre_init")),
+            _g(self._init_metrics.get("post_init")),
+            _g(sys_after),
+        )
+
+    @staticmethod
+    def _pack_features_flat(values: Dict[str, Any]) -> Dict[str, Any]:
+        nan = float("nan")
+        out: Dict[str, Any] = {}
+        for k in _FEATURES_FLAT_KEYS:
+            if k not in values:
+                raise KeyError(f"EmbeddingSourceIdExtractor: missing features_flat key {k!r}")
+            v = values[k]
+            if v is None:
+                out[k] = nan
+            elif isinstance(v, (bool, np.bool_)):
+                out[k] = float(bool(v))
+            else:
+                out[k] = float(v) if isinstance(v, (int, float, np.floating, np.integer)) else nan
+        return out
+
+    def _policy_block(self) -> Dict[str, float]:
+        pol = self.primary_source_policy
+        return {
+            "tp_embid_policy_transcript_first": 1.0 if pol == "transcript_first" else 0.0,
+            "tp_embid_policy_title_first": 1.0 if pol == "title_first" else 0.0,
+            "tp_embid_policy_description_first": 1.0 if pol == "description_first" else 0.0,
+            "tp_embid_policy_title_only": 1.0 if pol == "title_only" else 0.0,
+            "tp_embid_policy_transcript_only": 1.0 if pol == "transcript_only" else 0.0,
+        }
+
+    def _base_features_flat(self) -> Dict[str, Any]:
+        ff: Dict[str, Any] = {
+            "tp_embid_present": 0.0,
+            "tp_embid_strict_missing_primary_enabled": float(bool(self.strict_missing_primary)),
+            **self._policy_block(),
+            "tp_embid_primary_is_transcript": 0.0,
+            "tp_embid_primary_is_title": 0.0,
+            "tp_embid_primary_is_description": 0.0,
+            "tp_embid_unsafe_relpath_flag": 0.0,
+            "tp_embid_primary_embed_missing_flag": 0.0,
+            "tp_embid_nan_inf_flag": 0.0,
+        }
+        return ff
+
+    def _set_primary_onehots(self, ff: Dict[str, Any], primary_source: Optional[str]) -> None:
+        ps = primary_source or ""
+        ff["tp_embid_primary_is_transcript"] = float(isinstance(ps, str) and ps.startswith("transcript_"))
+        ff["tp_embid_primary_is_title"] = 1.0 if ps == "title" else 0.0
+        ff["tp_embid_primary_is_description"] = 1.0 if ps == "description" else 0.0
+
+    def _build_return(
+        self,
+        *,
+        features_flat: Dict[str, Any],
+        embedding_source_id: Dict[str, Any],
+        sys_after: Any,
+        mem_before: int,
+        mem_after: int,
+        total_s: float,
+        error: Optional[str] = None,
+    ) -> Dict[str, Any]:
+        gpu_peak_mb = self._gpu_peak_mb(sys_after)
+        ram_peak = max(int(self._init_metrics.get("ram_peak_bytes", 0)), mem_before, mem_after)
+        return {
+            "device": "cpu",
+            "version": self.VERSION,
+            "model_name": None,
+            "model_version": None,
+            "weights_digest": None,
+            "system": {
+                "pre_init": self._init_metrics.get("pre_init"),
+                "post_init": self._init_metrics.get("post_init"),
+                "post_process": sys_after,
+                "peaks": {
+                    "ram_peak_mb": int(ram_peak / 1024 / 1024),
+                    "gpu_peak_mb": int(gpu_peak_mb),
+                },
+            },
+            "timings_s": {"total": round(total_s, 3)},
+            "result": {
+                "features_flat": self._pack_features_flat(features_flat),
+                "embedding_source_id": embedding_source_id,
+            },
+            "error": error,
+        }
+
     def _pick_primary_relpath(self, doc: Any) -> Tuple[Optional[str], Optional[str], Optional[Dict[str, Any]]]:
-        """
-        Deterministic selection based on in-memory registry produced by upstream extractors.
-        Default priority: transcript combined mean -> title -> description (transcript_first).
-        """
         tp = getattr(doc, "tp_artifacts", None)
         if not isinstance(tp, dict):
             return None, None, None
-        # title/description embedders write tp_artifacts.embeddings.{title,description};
-        # transcript aggregator writes:
-        # - canonical: tp_artifacts.transcripts.{combined,whisper,youtube_auto}.agg_mean_relpath
-        # - legacy:    tp_artifacts.transcript_aggregates.{...}.agg_mean_relpath
         emb = tp.get("embeddings") if isinstance(tp.get("embeddings"), dict) else {}
         ta = tp.get("transcript_aggregates") if isinstance(tp.get("transcript_aggregates"), dict) else {}
         tr = tp.get("transcripts") if isinstance(tp.get("transcripts"), dict) else {}
 
         def pick_transcript_mean() -> Tuple[Optional[str], Optional[str], Optional[Dict[str, Any]]]:
-            # canonical first
             if isinstance(tr, dict):
                 c = tr.get("combined")
                 if isinstance(c, dict) and isinstance(c.get("agg_mean_relpath"), str) and c.get("agg_mean_relpath"):
@@ -96,7 +210,6 @@ class EmbeddingSourceIdExtractor(BaseExtractor):
                 y = tr.get("youtube_auto")
                 if isinstance(y, dict) and isinstance(y.get("agg_mean_relpath"), str) and y.get("agg_mean_relpath"):
                     return str(y.get("agg_mean_relpath")), "transcript_youtube_auto_mean", None
-            # legacy fallback
             if isinstance(ta, dict):
                 c = ta.get("combined")
                 if isinstance(c, dict) and isinstance(c.get("agg_mean_relpath"), str) and c.get("agg_mean_relpath"):
@@ -142,117 +255,111 @@ class EmbeddingSourceIdExtractor(BaseExtractor):
                     return rel, src, meta
             return None, None, None
 
-        # default: transcript_first
         for fn in (pick_transcript_mean, pick_title, pick_description):
             rel, src, meta = fn()
             if rel:
                 return rel, src, meta
         return None, None, None
 
-    def extract(self, doc: Any) -> Dict[str, Any]:
-        import time
+    def _meta_from_picked(self, picked_meta: Optional[Dict[str, Any]]) -> Tuple[Optional[str], str, str]:
+        """model_name optional; model_version string; weights_digest string ('unknown' if missing)."""
+        mv = str(self.model_version)
+        mn: Optional[str] = None
+        wd: Optional[str] = None
+        if isinstance(picked_meta, dict):
+            x = picked_meta.get("model_name")
+            if isinstance(x, str) and x.strip():
+                mn = x.strip()
+            xv = picked_meta.get("model_version")
+            if isinstance(xv, str) and xv.strip():
+                mv = xv.strip()
+            xw = picked_meta.get("weights_digest")
+            if isinstance(xw, str) and xw.strip():
+                wd = xw.strip()
+        return mn, mv, (wd if wd else "unknown")
 
+    def extract(self, doc: Any) -> Dict[str, Any]:
         t0 = time.perf_counter()
-        sys_before = system_snapshot()
         mem_before = process_memory_bytes()
+        error: Optional[str] = None
+
+        def _finish(ff: Dict[str, Any], esid: Dict[str, Any]) -> Dict[str, Any]:
+            sys_after = system_snapshot()
+            mem_after = process_memory_bytes()
+            total_s = time.perf_counter() - t0
+            return self._build_return(
+                features_flat=ff,
+                embedding_source_id=esid,
+                sys_after=sys_after,
+                mem_before=mem_before,
+                mem_after=mem_after,
+                total_s=total_s,
+                error=error,
+            )
+
+        ff = self._base_features_flat()
 
         rel, primary_source, picked_meta = self._pick_primary_relpath(doc)
         if not rel:
             if self.strict_missing_primary:
-                raise RuntimeError("EmbeddingSourceIdExtractor: primary embedding not found (missing upstream embeddings/transcript_aggregates)")
-            sys_after = system_snapshot()
-            mem_after = process_memory_bytes()
-            total_s = time.perf_counter() - t0
-            return {
-                "device": "cpu",
-                "version": self.VERSION,
-                "system": {
-                    "pre_init": sys_before,
-                    "post_init": sys_before,
-                    "post_process": sys_after,
-                    "peaks": {
-                        "ram_peak_mb": int(max(mem_before, mem_after) / 1024 / 1024),
-                        "gpu_peak_mb": 0,
-                    },
-                },
-                "timings_s": {"total": round(total_s, 3)},
-                "result": {
-                    "features_flat": {
-                        "tp_embid_present": 0.0,
-                        "tp_embid_policy_transcript_first": 1.0 if (self.primary_source_policy == "transcript_first") else 0.0,
-                        "tp_embid_policy_title_first": 1.0 if (self.primary_source_policy == "title_first") else 0.0,
-                        "tp_embid_policy_description_first": 1.0 if (self.primary_source_policy == "description_first") else 0.0,
-                        "tp_embid_policy_title_only": 1.0 if (self.primary_source_policy == "title_only") else 0.0,
-                        "tp_embid_policy_transcript_only": 1.0 if (self.primary_source_policy == "transcript_only") else 0.0,
-                    },
-                    "embedding_source_id": {"error": "no_embedding_found"},
-                },
-                "error": None,
-            }
+                raise RuntimeError(
+                    "EmbeddingSourceIdExtractor: primary embedding not found (missing upstream embeddings/transcript_aggregates)"
+                )
+            self._set_primary_onehots(ff, None)
+            return _finish(ff, {"error": "no_embedding_found"})
 
-        p = self._safe_join_artifacts_dir(self.artifacts_dir, rel)
+        self._set_primary_onehots(ff, primary_source)
+
         try:
-            import numpy as np
+            p = self._safe_join_artifacts_dir(self.artifacts_dir, rel)
+        except Exception:
+            ff["tp_embid_unsafe_relpath_flag"] = 1.0
+            if self.strict_missing_primary:
+                raise RuntimeError("EmbeddingSourceIdExtractor: unsafe embedding relpath") from None
+            return _finish(ff, {"error": "unsafe_relpath"})
+
+        if not p.exists():
+            ff["tp_embid_primary_embed_missing_flag"] = 1.0
+            if self.strict_missing_primary:
+                raise RuntimeError("EmbeddingSourceIdExtractor: embedding file not found in per-run artifacts")
+            return _finish(ff, {"error": "embedding_file_missing"})
+
+        try:
             vec = np.load(str(p))
         except Exception as e:
-            raise RuntimeError(f"EmbeddingSourceIdExtractor: failed to load embedding for id: {e}") from e
+            ff["tp_embid_primary_embed_missing_flag"] = 1.0
+            if self.strict_missing_primary:
+                raise RuntimeError(f"EmbeddingSourceIdExtractor: failed to load embedding for id: {e}") from e
+            return _finish(ff, {"error": "embedding_load_failed"})
+
+        vec = np.asarray(vec, dtype=np.float32).reshape(-1)
+        if int(vec.size) <= 0:
+            ff["tp_embid_primary_embed_missing_flag"] = 1.0
+            if self.strict_missing_primary:
+                raise RuntimeError("EmbeddingSourceIdExtractor: empty embedding vector")
+            return _finish(ff, {"error": "embedding_empty"})
+
+        if not np.isfinite(vec).all():
+            ff["tp_embid_nan_inf_flag"] = 1.0
+            if self.strict_missing_primary:
+                raise RuntimeError("EmbeddingSourceIdExtractor: embedding contains NaN/inf")
+            return _finish(ff, {"error": "embedding_non_finite"})
 
         vector_id = self._vector_id_from_values(vec)
-        # model metadata: prefer per-embedding meta from tp_artifacts, else config
-        model_name = None
-        weights_digest = None
-        if isinstance(picked_meta, dict):
-            mn = picked_meta.get("model_name")
-            if isinstance(mn, str) and mn:
-                model_name = mn
-            wd = picked_meta.get("weights_digest")
-            if isinstance(wd, str) and wd:
-                weights_digest = wd
-        model_version = model_name or self.model_version
+        model_name, model_version, weights_digest = self._meta_from_picked(
+            picked_meta if isinstance(picked_meta, dict) else None
+        )
 
-        features_flat = {
-            "tp_embid_present": 1.0,
-            "tp_embid_policy_transcript_first": 1.0 if (self.primary_source_policy == "transcript_first") else 0.0,
-            "tp_embid_policy_title_first": 1.0 if (self.primary_source_policy == "title_first") else 0.0,
-            "tp_embid_policy_description_first": 1.0 if (self.primary_source_policy == "description_first") else 0.0,
-            "tp_embid_policy_title_only": 1.0 if (self.primary_source_policy == "title_only") else 0.0,
-            "tp_embid_policy_transcript_only": 1.0 if (self.primary_source_policy == "transcript_only") else 0.0,
-            "tp_embid_primary_is_transcript": 1.0 if (isinstance(primary_source, str) and primary_source.startswith("transcript_")) else 0.0,
-            "tp_embid_primary_is_title": 1.0 if (primary_source == "title") else 0.0,
-            "tp_embid_primary_is_description": 1.0 if (primary_source == "description") else 0.0,
+        ff["tp_embid_present"] = 1.0
+
+        esid = {
+            "vector_id": vector_id,
+            "vector_store_uri": str(self.vector_store_uri),
+            "model_name": model_name,
+            "model_version": model_version,
+            "weights_digest": weights_digest,
+            "embedding_relpath": rel,
+            "primary_source": primary_source,
         }
-
-        out = {
-            "features_flat": features_flat,
-            "embedding_source_id": {
-                "vector_id": vector_id,
-                "vector_store_uri": self.vector_store_uri,
-                "model_version": model_version,
-                "weights_digest": str(weights_digest or "unknown"),
-                "embedding_relpath": rel,
-                "primary_source": primary_source,
-            },
-        }
-
-        sys_after = system_snapshot()
-        mem_after = process_memory_bytes()
-        total_s = time.perf_counter() - t0
-
-        return {
-            "device": "cpu",
-            "version": self.VERSION,
-            "system": {
-                "pre_init": sys_before,
-                "post_init": sys_before,
-                "post_process": sys_after,
-                "peaks": {
-                    "ram_peak_mb": int(max(mem_before, mem_after) / 1024 / 1024),
-                    "gpu_peak_mb": 0,
-                },
-            },
-            "timings_s": {"total": round(total_s, 3)},
-            "result": out,
-            "error": None,
-        }
-
+        return _finish(ff, esid)
 

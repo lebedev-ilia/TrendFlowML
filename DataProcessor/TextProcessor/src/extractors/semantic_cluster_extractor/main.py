@@ -16,45 +16,85 @@ try:
 except Exception:
     faiss = None  # type: ignore
 
+
 def _l2_normalize(x: np.ndarray, axis: int = 1, eps: float = 1e-9) -> np.ndarray:
     n = np.linalg.norm(x, axis=axis, keepdims=True)
     n = np.maximum(n, eps)
     return x / n
 
 
+def _build_features_flat_keys() -> Tuple[str, ...]:
+    return (
+        "tp_semclust_present",
+        "tp_semclust_require_primary_source_enabled",
+        "tp_semclust_require_embedding_enabled",
+        "tp_semclust_use_faiss_enabled",
+        "tp_semclust_require_faiss_enabled",
+        "tp_semclust_emit_extra_metrics_enabled",
+        "tp_semclust_config_primary_title",
+        "tp_semclust_config_primary_description",
+        "tp_semclust_config_primary_hashtag",
+        "tp_semclust_title_present",
+        "tp_semclust_description_present",
+        "tp_semclust_hashtag_present",
+        "tp_semclust_source_title",
+        "tp_semclust_source_description",
+        "tp_semclust_source_hashtag",
+        "tp_semclust_fallback_used",
+        "tp_semclust_backend_faiss",
+        "tp_semclust_dim_mismatch_flag",
+        "tp_semclust_unsafe_relpath_flag",
+        "tp_semclust_title_embed_missing_flag",
+        "tp_semclust_description_embed_missing_flag",
+        "tp_semclust_hashtag_embed_missing_flag",
+        "tp_semclust_id",
+        "tp_semclust_similarity",
+        "tp_semclust_distance",
+        "tp_semclust_n_clusters",
+        "tp_semclust_model_orig_dim",
+        "tp_semclust_model_reduced_dim",
+        "tp_semclust_embedding_dim",
+        "tp_semclust_margin_top2",
+        "tp_semclust_compute_ms",
+    )
+
+
+_FEATURES_FLAT_KEYS = _build_features_flat_keys()
+_SLOT_KEYS = ("title", "description", "hashtag")
+
+
 class SemanticClusterExtractor(BaseExtractor):
     """
-    A-policy semantic cluster classifier:
-    - Strict model loading via dp_models (fail-fast in __init__)
-    - Deterministic input loading via doc.tp_artifacts["embeddings"][...]["relpath"]
-    - Valid empty semantics (no fake vectors): missing optional inputs -> present=0 + NaNs + *_present flags
+    Nearest-centroid semantic cluster classification over shared taxonomy (PCA + centroids via dp_models).
+    Audit v3: fixed features_flat; per-slot load diagnostics; meta.backend on all branches.
     """
 
-    VERSION = "1.2.0"
+    VERSION = "1.3.0"
 
     def __init__(
         self,
         artifacts_dir: str | None = None,
         clusters_spec_name: str = "semantic_clusters_v1",
-        primary_source: str = "title",  # title|description|hashtag
-        allow_fallback_sources: Optional[List[str]] = None,  # list[str] subset of {title,description,hashtag}
+        primary_source: str = "title",
+        allow_fallback_sources: Optional[List[str]] = None,
         require_primary_source: bool = False,
         require_embedding: bool = False,
         use_faiss: bool = True,
         require_faiss: bool = False,
         emit_extra_metrics: bool = False,
-        # Deprecated legacy args (kept for config compatibility; A-policy forbids bypassing dp_models)
         cluster_model_path: str | None = None,
         pca_model_path: str | None = None,
         use_hdbscan: bool = False,
         source: str | None = None,
     ) -> None:
+        init_sys_before = system_snapshot()
+        init_mem_before = process_memory_bytes()
+
         if cluster_model_path is not None or pca_model_path is not None or use_hdbscan:
             raise RuntimeError(
-                "semantic_cluster_extractor: legacy model paths / use_hdbscan are no longer supported under A-policy. "
+                "semantic_cluster_extractor: legacy model paths / use_hdbscan are no longer supported under Audit v3. "
                 "Use dp_models spec (clusters_spec_name=...) and nearest-centroid classifier only."
             )
-        # Back-compat: allow old `source` config key to map to primary_source if provided.
         if source is not None:
             primary_source = str(source)
 
@@ -64,7 +104,7 @@ class SemanticClusterExtractor(BaseExtractor):
             raise RuntimeError("semantic_cluster_extractor: clusters_spec_name is required")
 
         self.primary_source = str(primary_source or "").strip().lower()
-        if self.primary_source not in ("title", "description", "hashtag"):
+        if self.primary_source not in _SLOT_KEYS:
             raise RuntimeError("semantic_cluster_extractor: primary_source must be one of: title|description|hashtag")
 
         self.require_primary_source = bool(require_primary_source)
@@ -88,6 +128,14 @@ class SemanticClusterExtractor(BaseExtractor):
 
         self._load_assets_from_dp_models()
 
+        init_sys_after = system_snapshot()
+        init_mem_after = process_memory_bytes()
+        self._init_metrics: Dict[str, Any] = {
+            "pre_init": init_sys_before,
+            "post_init": init_sys_after,
+            "ram_peak_bytes": max(init_mem_before, init_mem_after),
+        }
+
     def _normalize_fallback_sources(self, allow_fallback_sources: Optional[List[str]]) -> List[str]:
         if allow_fallback_sources is None:
             if self.primary_source == "title":
@@ -101,7 +149,7 @@ class SemanticClusterExtractor(BaseExtractor):
             ss = str(s).strip().lower()
             if not ss:
                 continue
-            if ss not in ("title", "description", "hashtag"):
+            if ss not in _SLOT_KEYS:
                 raise RuntimeError("semantic_cluster_extractor: allow_fallback_sources must be subset of title|description|hashtag")
             if ss == self.primary_source:
                 continue
@@ -110,10 +158,6 @@ class SemanticClusterExtractor(BaseExtractor):
         return out
 
     def _load_assets_from_dp_models(self) -> None:
-        """
-        Strictly loads PCA + centroids + cluster dictionary via dp_models (offline + fail-fast).
-        """
-        # Use global manager if available (TextProcessor sets DP_MODELS_ROOT externally).
         try:
             from dp_models import get_global_model_manager  # type: ignore
 
@@ -165,8 +209,6 @@ class SemanticClusterExtractor(BaseExtractor):
                 f"pca_reduced_dim={int(pca.shape[1])} centroids_reduced_dim={int(centroids.shape[1])}"
             )
 
-        # Validate dictionary (privacy-safe; contains only IDs/names/groups)
-        # We do NOT store it in output; UI can load it from dp_models by spec name.
         n_dict = 0
         try:
             with open(dict_path, "r", encoding="utf-8") as f:
@@ -191,7 +233,6 @@ class SemanticClusterExtractor(BaseExtractor):
         if self._n_clusters <= 0:
             raise RuntimeError("semantic_cluster_extractor: centroids.npy must contain at least 1 cluster")
         if n_dict and n_dict != self._n_clusters:
-            # Not fatal, but likely a packaging error.
             raise RuntimeError(
                 f"semantic_cluster_extractor: clusters.jsonl size mismatch: dict_lines={int(n_dict)} centroids_n={int(self._n_clusters)}"
             )
@@ -206,238 +247,314 @@ class SemanticClusterExtractor(BaseExtractor):
                 index.add(self._centroids.astype("float32"))
                 self._faiss_index = index
 
+    def _gpu_peak_mb(self, sys_after: Any) -> int:
+        def _g(snap: Any) -> int:
+            try:
+                g = (snap or {}).get("gpu") or {}
+                arr = g.get("gpus") or []
+                return max([int(x.get("memory_used_mb", 0)) for x in arr] or [0])
+            except Exception:
+                return 0
+
+        return max(
+            _g(self._init_metrics.get("pre_init")),
+            _g(self._init_metrics.get("post_init")),
+            _g(sys_after),
+        )
+
     @staticmethod
     def _safe_join_artifacts_dir(base_dir: Path, relpath: str) -> Path:
-        """
-        Join artifacts_dir with relpath and forbid path traversal.
-        """
         base = base_dir.expanduser().resolve()
         cand = (base / relpath).resolve()
         if not (cand == base or base in cand.parents):
             raise RuntimeError("semantic_cluster_extractor: embedding relpath escapes artifacts_dir")
         return cand
 
-    def _pick_embedding(self, doc: Any) -> Tuple[Optional[np.ndarray], str]:
-        # Deterministic: read relpaths via doc.tp_artifacts filled by embedder extractors.
+    @staticmethod
+    def _pack_features_flat(values: Dict[str, Any]) -> Dict[str, Any]:
+        nan = float("nan")
+        out: Dict[str, Any] = {}
+        for k in _FEATURES_FLAT_KEYS:
+            if k not in values:
+                raise KeyError(f"SemanticClusterExtractor: missing features_flat key {k!r}")
+            v = values[k]
+            if v is None:
+                out[k] = nan
+            elif isinstance(v, (bool, np.bool_)):
+                out[k] = float(bool(v))
+            else:
+                out[k] = float(v) if isinstance(v, (int, float, np.floating, np.integer)) else nan
+        return out
+
+    def _mirrors_fragment(self) -> Dict[str, float]:
+        return {
+            "tp_semclust_require_primary_source_enabled": float(bool(self.require_primary_source)),
+            "tp_semclust_require_embedding_enabled": float(bool(self.require_embedding)),
+            "tp_semclust_use_faiss_enabled": float(bool(self.use_faiss)),
+            "tp_semclust_require_faiss_enabled": float(bool(self.require_faiss)),
+            "tp_semclust_emit_extra_metrics_enabled": float(bool(self.emit_extra_metrics)),
+        }
+
+    def _primary_config_onehot(self) -> Dict[str, float]:
+        d = {f"tp_semclust_config_primary_{k}": 0.0 for k in _SLOT_KEYS}
+        d[f"tp_semclust_config_primary_{self.primary_source}"] = 1.0
+        return d
+
+    def _semantic_meta(self) -> Dict[str, Any]:
+        return {
+            "clusters_spec_name": self.clusters_spec_name,
+            "clusters_spec_version": self._clusters_spec_version,
+            "clusters_weights_digest": self._clusters_weights_digest,
+            "cluster_db_version": self._cluster_db_version,
+            "backend": "faiss_ip" if (self._faiss_index is not None) else "numpy_cosine",
+        }
+
+    def _empty_features_template(self) -> Dict[str, Any]:
+        nan = float("nan")
+        ff: Dict[str, Any] = {
+            "tp_semclust_present": 0.0,
+            "tp_semclust_title_present": 0.0,
+            "tp_semclust_description_present": 0.0,
+            "tp_semclust_hashtag_present": 0.0,
+            "tp_semclust_source_title": 0.0,
+            "tp_semclust_source_description": 0.0,
+            "tp_semclust_source_hashtag": 0.0,
+            "tp_semclust_fallback_used": 0.0,
+            "tp_semclust_dim_mismatch_flag": 0.0,
+            "tp_semclust_unsafe_relpath_flag": 0.0,
+            "tp_semclust_title_embed_missing_flag": 0.0,
+            "tp_semclust_description_embed_missing_flag": 0.0,
+            "tp_semclust_hashtag_embed_missing_flag": 0.0,
+            "tp_semclust_id": nan,
+            "tp_semclust_similarity": nan,
+            "tp_semclust_distance": nan,
+            "tp_semclust_n_clusters": nan,
+            "tp_semclust_model_orig_dim": nan,
+            "tp_semclust_model_reduced_dim": nan,
+            "tp_semclust_embedding_dim": nan,
+            "tp_semclust_margin_top2": nan,
+            "tp_semclust_compute_ms": nan,
+        }
+        ff.update(self._mirrors_fragment())
+        ff.update(self._primary_config_onehot())
+        ff["tp_semclust_backend_faiss"] = 1.0 if (self._faiss_index is not None) else 0.0
+        return ff
+
+    def _apply_extra_block(
+        self,
+        ff: Dict[str, Any],
+        *,
+        success: bool,
+        dim_mismatch: bool,
+        vec: Optional[np.ndarray],
+    ) -> None:
+        nan = float("nan")
+        if not self.emit_extra_metrics:
+            ff["tp_semclust_n_clusters"] = nan
+            ff["tp_semclust_model_orig_dim"] = nan
+            ff["tp_semclust_model_reduced_dim"] = nan
+            ff["tp_semclust_embedding_dim"] = nan
+            ff["tp_semclust_margin_top2"] = nan
+            ff["tp_semclust_compute_ms"] = nan
+            return
+        if success:
+            return  # caller filled numerics
+        if dim_mismatch and vec is not None:
+            ff["tp_semclust_n_clusters"] = float(int(self._n_clusters))
+            ff["tp_semclust_model_orig_dim"] = float(int(self._orig_dim))
+            ff["tp_semclust_model_reduced_dim"] = float(int(self._reduced_dim))
+            ff["tp_semclust_embedding_dim"] = float(int(vec.shape[0]))
+            ff["tp_semclust_margin_top2"] = nan
+            ff["tp_semclust_compute_ms"] = nan
+            return
+        ff["tp_semclust_n_clusters"] = nan
+        ff["tp_semclust_model_orig_dim"] = nan
+        ff["tp_semclust_model_reduced_dim"] = nan
+        ff["tp_semclust_embedding_dim"] = nan
+        ff["tp_semclust_margin_top2"] = nan
+        ff["tp_semclust_compute_ms"] = nan
+
+    def _scan_embedding_slots(
+        self, doc: Any
+    ) -> Tuple[Dict[str, Optional[np.ndarray]], bool, Dict[str, bool], Dict[str, float]]:
+        vecs: Dict[str, Optional[np.ndarray]] = {k: None for k in _SLOT_KEYS}
+        missing = {k: False for k in _SLOT_KEYS}
+        loaded_flag = {k: 0.0 for k in _SLOT_KEYS}
+        unsafe_any = False
+
         tp = getattr(doc, "tp_artifacts", None)
         emb = tp.get("embeddings") if isinstance(tp, dict) else None
-
-        order: List[str] = [self.primary_source]
-        if not self.require_primary_source:
-            order.extend(self.allow_fallback_sources)
-
         if not isinstance(emb, dict):
-            return None, ""
+            return vecs, unsafe_any, missing, loaded_flag
 
-        for key in order:
+        for key in _SLOT_KEYS:
             d = emb.get(key)
             rel = d.get("relpath") if isinstance(d, dict) else None
             if not isinstance(rel, str) or not rel:
                 continue
-            p = self._safe_join_artifacts_dir(self.artifacts_dir, rel)
+            try:
+                p = self._safe_join_artifacts_dir(self.artifacts_dir, rel)
+            except Exception:
+                unsafe_any = True
+                continue
             if not p.exists():
+                missing[key] = True
                 continue
             try:
                 v = np.load(p)
                 v = np.asarray(v, dtype=np.float32).reshape(-1)
-                return v, key
+                if int(v.size) <= 0:
+                    missing[key] = True
+                    continue
+                vecs[key] = v
+                loaded_flag[key] = 1.0
             except Exception:
+                missing[key] = True
+
+        return vecs, unsafe_any, missing, loaded_flag
+
+    def _select_embedding_vector(self, vecs: Dict[str, Optional[np.ndarray]]) -> Tuple[Optional[np.ndarray], str]:
+        order: List[str] = [self.primary_source]
+        if not self.require_primary_source:
+            order.extend(self.allow_fallback_sources)
+        seen: set[str] = set()
+        for k in order:
+            if k in seen:
                 continue
+            seen.add(k)
+            v = vecs.get(k)
+            if v is not None:
+                return v, k
         return None, ""
+
+    def _build_return(
+        self,
+        *,
+        features_flat: Dict[str, Any],
+        sys_after: Any,
+        mem_before: int,
+        mem_after: int,
+        total_s: float,
+    ) -> Dict[str, Any]:
+        gpu_peak_mb = self._gpu_peak_mb(sys_after)
+        return {
+            "device": "cpu",
+            "version": self.VERSION,
+            "model_name": None,
+            "model_version": None,
+            "weights_digest": None,
+            "system": {
+                "pre_init": self._init_metrics.get("pre_init"),
+                "post_init": self._init_metrics.get("post_init"),
+                "post_process": sys_after,
+                "peaks": {
+                    "ram_peak_mb": int(max(self._init_metrics.get("ram_peak_bytes", 0), mem_before, mem_after) / 1024 / 1024),
+                    "gpu_peak_mb": int(gpu_peak_mb),
+                },
+            },
+            "timings_s": {"total": round(total_s, 3)},
+            "result": {
+                "features_flat": self._pack_features_flat(features_flat),
+                "semantic_cluster_meta": self._semantic_meta(),
+            },
+            "error": None,
+        }
 
     def extract(self, doc: Any) -> Dict[str, Any]:
         import time
 
         t0 = time.perf_counter()
-        sys_before = system_snapshot()
         mem_before = process_memory_bytes()
 
-        features_flat: Dict[str, float] = {
-            "tp_semclust_present": 0.0,
-            "tp_semclust_id": float("nan"),
-            "tp_semclust_similarity": float("nan"),
-            "tp_semclust_distance": float("nan"),
-            "tp_semclust_dim_mismatch_flag": 0.0,
-            "tp_semclust_fallback_used": 0.0,
-            "tp_semclust_backend_faiss": 1.0 if (self._faiss_index is not None) else 0.0,
-            # input presence flags (best-effort, based on relpath existence)
-            "tp_semclust_title_present": 0.0,
-            "tp_semclust_description_present": 0.0,
-            "tp_semclust_hashtag_present": 0.0,
-            # source-used one-hot (always present, even for empty)
-            "tp_semclust_source_title": 0.0,
-            "tp_semclust_source_description": 0.0,
-            "tp_semclust_source_hashtag": 0.0,
-        }
-
-        tp = getattr(doc, "tp_artifacts", None)
-        emb = tp.get("embeddings") if isinstance(tp, dict) else None
-        if isinstance(emb, dict):
-            for k in ("title", "description", "hashtag"):
-                d = emb.get(k)
-                rel = d.get("relpath") if isinstance(d, dict) else None
-                if isinstance(rel, str) and rel:
-                    features_flat[f"tp_semclust_{k}_present"] = 1.0
-
-        # Models must be loaded in __init__ (fail-fast). Guard anyway.
         if self._pca is None or self._centroids is None:  # type: ignore[truthy-bool]
             raise RuntimeError("semantic_cluster_extractor: models not loaded (this should have failed in __init__)")
 
-        vec, detected = self._pick_embedding(doc)
+        vecs, unsafe_any, missing_map, loaded_flag = self._scan_embedding_slots(doc)
+        ff = self._empty_features_template()
+        ff["tp_semclust_unsafe_relpath_flag"] = 1.0 if unsafe_any else 0.0
+        for k in _SLOT_KEYS:
+            ff[f"tp_semclust_{k}_present"] = float(loaded_flag[k])
+            mf = 1.0 if missing_map[k] else 0.0
+            ff[f"tp_semclust_{k}_embed_missing_flag"] = float(mf)
+
+        vec, detected = self._select_embedding_vector(vecs)
+
+        def _finish(ff_local: Dict[str, Any]) -> Dict[str, Any]:
+            sys_after = system_snapshot()
+            mem_after = process_memory_bytes()
+            total_s = time.perf_counter() - t0
+            return self._build_return(
+                features_flat=ff_local,
+                sys_after=sys_after,
+                mem_before=mem_before,
+                mem_after=mem_after,
+                total_s=total_s,
+            )
+
         if vec is None:
             if self.require_embedding:
                 raise RuntimeError(
                     "semantic_cluster_extractor: required embedding is missing. "
                     f"primary_source={self.primary_source!r} require_primary_source={self.require_primary_source}"
                 )
-            sys_after = system_snapshot()
-            mem_after = process_memory_bytes()
-            total_s = time.perf_counter() - t0
-            return {
-                "device": "cpu",
-                "version": self.VERSION,
-                "system": {
-                    "pre_init": sys_before,
-                    "post_init": sys_before,
-                    "post_process": sys_after,
-                    "peaks": {
-                        "ram_peak_mb": int(max(mem_before, mem_after) / 1024 / 1024),
-                        "gpu_peak_mb": 0,
-                    },
-                },
-                "timings_s": {"total": round(total_s, 3)},
-                "result": {
-                    "features_flat": features_flat,
-                    "semantic_cluster_meta": {
-                        "clusters_spec_name": self.clusters_spec_name,
-                        "clusters_spec_version": self._clusters_spec_version,
-                        "clusters_weights_digest": self._clusters_weights_digest,
-                        "cluster_db_version": self._cluster_db_version,
-                    },
-                },
-                "error": None,
-            }
+            self._apply_extra_block(ff, success=False, dim_mismatch=False, vec=None)
+            return _finish(ff)
 
         if detected:
-            features_flat[f"tp_semclust_source_{detected}"] = 1.0
+            ff[f"tp_semclust_source_{detected}"] = 1.0
         if detected and detected != self.primary_source:
-            features_flat["tp_semclust_fallback_used"] = 1.0
+            ff["tp_semclust_fallback_used"] = 1.0
 
-        # Dim checks
         if int(vec.shape[0]) != int(self._orig_dim):
-            features_flat["tp_semclust_dim_mismatch_flag"] = 1.0
+            ff["tp_semclust_dim_mismatch_flag"] = 1.0
             if self.require_embedding:
                 raise RuntimeError(
                     f"semantic_cluster_extractor: embedding dim mismatch: embedding_dim={int(vec.shape[0])} "
                     f"model_orig_dim={int(self._orig_dim)} (clusters_spec_name={self.clusters_spec_name})"
                 )
-            sys_after = system_snapshot()
-            mem_after = process_memory_bytes()
-            total_s = time.perf_counter() - t0
-            if self.emit_extra_metrics:
-                features_flat["tp_semclust_embedding_dim"] = float(int(vec.shape[0]))
-                features_flat["tp_semclust_model_orig_dim"] = float(int(self._orig_dim))
-                features_flat["tp_semclust_model_reduced_dim"] = float(int(self._reduced_dim))
-                features_flat["tp_semclust_n_clusters"] = float(int(self._n_clusters))
-            return {
-                "device": "cpu",
-                "version": self.VERSION,
-                "system": {
-                    "pre_init": sys_before,
-                    "post_init": sys_before,
-                    "post_process": sys_after,
-                    "peaks": {
-                        "ram_peak_mb": int(max(mem_before, mem_after) / 1024 / 1024),
-                        "gpu_peak_mb": 0,
-                    },
-                },
-                "timings_s": {"total": round(total_s, 3)},
-                "result": {
-                    "features_flat": features_flat,
-                    "semantic_cluster_meta": {
-                        "clusters_spec_name": self.clusters_spec_name,
-                        "clusters_spec_version": self._clusters_spec_version,
-                        "clusters_weights_digest": self._clusters_weights_digest,
-                        "cluster_db_version": self._cluster_db_version,
-                    },
-                },
-                "error": None,
-            }
+            self._apply_extra_block(ff, success=False, dim_mismatch=True, vec=vec)
+            return _finish(ff)
 
-        # Project via PCA and normalize
         t_compute0 = time.perf_counter()
-        reduced = vec @ self._pca  # (reduced_dim,)
+        reduced = vec @ self._pca
         reduced = _l2_normalize(reduced.reshape(1, -1), axis=1)
 
-        # Nearest centroid by cosine similarity (inner product on L2-normalized vectors)
         want_k = 2 if self.emit_extra_metrics else 1
+        margin = float("nan")
         if self._faiss_index is not None:
             scores, idx = self._faiss_index.search(reduced.astype("float32"), want_k)
             sim = float(scores[0, 0])
             cid = int(idx[0, 0])
-            margin = float("nan")
             if self.emit_extra_metrics and scores.shape[1] >= 2:
                 margin = float(scores[0, 0] - scores[0, 1])
         else:
             sims = (reduced @ self._centroids.T).reshape(-1)  # type: ignore[arg-type]
             if sims.size <= 0:
-                # Should never happen (centroids validated in __init__), but keep safe behavior.
                 cid = -1
                 sim = float("nan")
             else:
                 cid = int(np.argmax(sims))
                 sim = float(sims[cid])
-            margin = float("nan")
             if self.emit_extra_metrics and sims.size >= 2:
-                # stable-ish second best
-                # argsort for 32-256 clusters is fine; FAISS is preferred for large N
                 s2 = np.sort(sims)[-2]
                 margin = float(sim - float(s2))
 
         dist = 1.0 - sim
-        features_flat["tp_semclust_present"] = 1.0
-        features_flat["tp_semclust_id"] = float(int(cid))
-        features_flat["tp_semclust_similarity"] = float(sim)
-        features_flat["tp_semclust_distance"] = float(dist)
+        ff["tp_semclust_present"] = 1.0
+        ff["tp_semclust_id"] = float(int(cid))
+        ff["tp_semclust_similarity"] = float(sim)
+        ff["tp_semclust_distance"] = float(dist)
 
         t_compute = time.perf_counter() - t_compute0
 
-        sys_after = system_snapshot()
-        mem_after = process_memory_bytes()
-        total_s = time.perf_counter() - t0
-
         if self.emit_extra_metrics:
-            features_flat["tp_semclust_n_clusters"] = float(int(self._n_clusters))
-            features_flat["tp_semclust_model_orig_dim"] = float(int(self._orig_dim))
-            features_flat["tp_semclust_model_reduced_dim"] = float(int(self._reduced_dim))
-            features_flat["tp_semclust_embedding_dim"] = float(int(vec.shape[0]))
-            features_flat["tp_semclust_margin_top2"] = float(margin)
-            features_flat["tp_semclust_compute_ms"] = float(round(t_compute * 1000.0, 3))
+            ff["tp_semclust_n_clusters"] = float(int(self._n_clusters))
+            ff["tp_semclust_model_orig_dim"] = float(int(self._orig_dim))
+            ff["tp_semclust_model_reduced_dim"] = float(int(self._reduced_dim))
+            ff["tp_semclust_embedding_dim"] = float(int(vec.shape[0]))
+            ff["tp_semclust_margin_top2"] = float(margin)
+            ff["tp_semclust_compute_ms"] = float(round(t_compute * 1000.0, 3))
+        else:
+            self._apply_extra_block(ff, success=True, dim_mismatch=False, vec=vec)
 
-        return {
-            "device": "cpu",
-            "version": self.VERSION,
-            "system": {
-                "pre_init": sys_before,
-                "post_init": sys_before,
-                "post_process": sys_after,
-                "peaks": {
-                    "ram_peak_mb": int(max(mem_before, mem_after) / 1024 / 1024),
-                    "gpu_peak_mb": 0,
-                },
-            },
-            "timings_s": {"total": round(total_s, 3)},
-            "result": {
-                "features_flat": features_flat,
-                "semantic_cluster_meta": {
-                    "clusters_spec_name": self.clusters_spec_name,
-                    "clusters_spec_version": self._clusters_spec_version,
-                    "clusters_weights_digest": self._clusters_weights_digest,
-                    "cluster_db_version": self._cluster_db_version,
-                    "backend": "faiss_ip" if (self._faiss_index is not None) else "numpy_cosine",
-                },
-            },
-            "error": None,
-        }
-
-
+        return _finish(ff)

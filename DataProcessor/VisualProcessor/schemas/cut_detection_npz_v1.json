@@ -1,0 +1,44 @@
+{
+  "schema_system_version": "vp_schema_v1",
+  "schema_version": "cut_detection_npz_v1",
+  "producer": "cut_detection",
+  "artifact_kind": "npz",
+  "allow_extra_keys": false,
+  "meta": {
+    "required_keys": [
+      "producer",
+      "producer_version",
+      "schema_version",
+      "created_at",
+      "platform_id",
+      "video_id",
+      "run_id",
+      "config_hash",
+      "sampling_policy_version",
+      "dataprocessor_version",
+      "status",
+      "empty_reason",
+      "models_used",
+      "model_signature",
+      "stage_timings_ms"
+    ],
+    "optional_keys": [
+      "total_frames",
+      "processed_frames",
+      "frames_dir",
+      "analysis_fps",
+      "analysis_width",
+      "analysis_height"
+    ]
+  },
+  "fields": {
+    "frame_indices": { "required": true, "tier": "model_facing", "dtype": "int32", "shape": ["N"] },
+    "times_s": { "required": true, "tier": "model_facing", "dtype": "float32", "shape": ["N"] },
+    "features": { "required": true, "tier": "analytics", "dtype": "object", "shape": [] },
+    "detections": { "required": true, "tier": "analytics", "dtype": "object", "shape": [] },
+    "model_facing_npz_path": { "required": false, "tier": "debug", "dtype": "str", "shape": [] },
+    "meta": { "required": true, "tier": "debug", "dtype": "object", "shape": [] }
+  }
+}
+
+

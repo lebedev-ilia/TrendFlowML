@@ -14,15 +14,59 @@ import argparse
 import faulthandler
 import signal
 import traceback
+from pathlib import Path
 from typing import Optional, List
+import importlib.util
 
 # Включаем faulthandler для диагностики SIGSEGV и других критических ошибок
 # faulthandler.enable() автоматически обрабатывает SIGSEGV, SIGFPE, SIGABRT и другие сигналы
 faulthandler.enable(all_threads=True, file=sys.stderr)
 
-sys.path.append(os.path.dirname(os.path.dirname(os.path.dirname(__file__))))
+_vp_root = str(Path(__file__).resolve().parents[2])  # VisualProcessor
+_dp_root = str(Path(__file__).resolve().parents[3])  # DataProcessor (dp_models)
 
-from action_recognition_slowfast import SlowFastActionRecognizer
+if _vp_root not in sys.path:
+    sys.path.insert(0, _vp_root)
+elif sys.path[0] != _vp_root:
+    try:
+        sys.path.remove(_vp_root)
+    except ValueError:
+        pass
+    sys.path.insert(0, _vp_root)
+
+if _dp_root not in sys.path:
+    sys.path.insert(1, _dp_root)
+
+
+def _sanitize_pytorch_cuda_alloc_conf() -> None:
+    """
+    Родительский E2E/worker часто выставляет PYTORCH_CUDA_ALLOC_CONF=...,expandable_segments:True
+    (PyTorch 2.4+). Старый torch в .action_recognition_venv падает при инициализации CUDA:
+    RuntimeError: Unrecognized CachingAllocator option: expandable_segments
+    Убираем эту опцию до import torch.
+    """
+    key = "PYTORCH_CUDA_ALLOC_CONF"
+    raw = os.environ.get(key)
+    if not raw or "expandable_segments" not in raw:
+        return
+    parts = [p.strip() for p in raw.split(",") if p.strip() and "expandable_segments" not in p]
+    if parts:
+        os.environ[key] = ",".join(parts)
+    else:
+        del os.environ[key]
+
+
+_sanitize_pytorch_cuda_alloc_conf()
+
+# Do not "from utils.action_recognition_slowfast": local utils/ shadows VisualProcessor/utils.
+_impl = Path(__file__).resolve().parent / "utils" / "action_recognition_slowfast.py"
+_spec = importlib.util.spec_from_file_location("action_recognition._slowfast_impl", str(_impl))
+if _spec is None or _spec.loader is None:
+    raise ImportError(f"Cannot load SlowFast impl: {_impl}")
+_ar_mod = importlib.util.module_from_spec(_spec)
+_spec.loader.exec_module(_ar_mod)
+SlowFastActionRecognizer = _ar_mod.SlowFastActionRecognizer
+
 from utils.logger import get_logger
 
 MODULE_NAME = "action_recognition"
@@ -50,8 +94,8 @@ def main(argv: Optional[List[str]] = None) -> int:
     parser.add_argument(
         "--clip-len",
         type=int,
-        default=16,
-        help="Длина клипа в кадрах"
+        default=32,
+        help="Длина клипа в кадрах (минимум 32 для SlowFast, T_slow=8)"
     )
     parser.add_argument(
         "--stride",

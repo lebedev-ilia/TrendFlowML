@@ -1,15 +1,19 @@
 ## `topk_similar_titles_extractor` (Similarity search)
 
+**Версия**: 1.3.0  
+**Контракт Audit v3**: [SCHEMA.md](./SCHEMA.md) · machine: [`schemas/topk_similar_titles_extractor_output_v1.json`](../../schemas/topk_similar_titles_extractor_output_v1.json) · **Audit v4:** [`../../../../docs/audit_v4/components/text_processor/topk_similar_titles_extractor_audit_v4.md`](../../../../docs/audit_v4/components/text_processor/topk_similar_titles_extractor_audit_v4.md) · **L2 stats:** [`../../../../storage/audit_v4/topk_similar_titles_extractor_l2/topk_similar_titles_extractor_audit_v4_stats.json`](../../../../storage/audit_v4/topk_similar_titles_extractor_l2/topk_similar_titles_extractor_audit_v4_stats.json) (tooling: `scripts/audit_v4_npz_stats.py`)
+
+**Диапазоны и валидатор среза** (`text_features.npz`): [`docs/FEATURE_DESCRIPTION.md`](docs/FEATURE_DESCRIPTION.md) · [`utils/validate_topk_similar_titles_extractor_text_npz.py`](utils/validate_topk_similar_titles_extractor_text_npz.py)
+
 ### Назначение
 
 Находит **Top-K наиболее похожих заголовков** из **статического корпуса** по эмбеддингу текущего заголовка видео.
 
-Ключевые требования (production-grade):
+Ключевые требования:
 - корпус загружается **строго через `dp_models` (offline, fail-fast)**;
 - входной title embedding берётся детерминированно через `doc.tp_artifacts["embeddings"]["title"]["relpath"]` (без `glob+mtime`);
-- missing corpus / missing title embedding / mismatch dim → **ошибка (fail-fast)**.
+- по умолчанию **`require_title_embedding=false`**: отсутствие relpath/файла/ошибка чтения → **valid empty** + флаги (`tp_topktitles_title_embed_missing_flag` и др.); при **`require_title_embedding=true`** — **fail-fast** на тех же условиях.
 
-**Версия**: 1.2.0  
 **Категория**: similarity search  
 **GPU**: не требуется (FAISS работает на CPU)
 
@@ -28,26 +32,37 @@
 #### Основные результаты
 
 - `topk_similar_corpus_titles`: словарь с результатами поиска
-  - `corpus`: метаданные корпуса (версия/размерность/хэш)
+  - `corpus`: метаданные корпуса (corpus_spec_name, corpus_version, corpus_weights_digest, id_kind, corpus_size, dim, backend, hnsw параметры)
   - `topk_similar_ids` и `topk_similar_scores` возвращаются **только если** включён `export_topk_mode` (см. конфиг) и с лимитом `max_export_k`
 
 #### Скалярные признаки (`result.features_flat`)
 
 Экстрактор всегда возвращает стабильный набор `tp_topktitles_*` (NaN + flags при empty):
-- `tp_topktitles_present`
-- `tp_topktitles_disabled_by_policy`, `tp_topktitles_enabled`
-- `tp_topktitles_require_title_embedding_enabled`
-- `tp_topktitles_k`, `tp_topktitles_dim`, `tp_topktitles_corpus_size`
-- `tp_topktitles_backend_faiss`, `tp_topktitles_faiss_available`, `tp_topktitles_require_faiss_enabled`
-- `tp_topktitles_export_k_used`, `tp_topktitles_export_k_truncated_flag`, `tp_topktitles_max_export_k`
-- `tp_topktitles_top1_score`, `tp_topktitles_topk_mean_score`
-- flags: `tp_topktitles_unsafe_relpath_flag`, `tp_topktitles_dim_mismatch_flag`, `tp_topktitles_zero_norm_flag`, `tp_topktitles_nan_inf_flag`
+- `tp_topktitles_present`: флаг наличия результатов
+- `tp_topktitles_disabled_by_policy`, `tp_topktitles_enabled`: флаги конфигурации
+- `tp_topktitles_require_title_embedding_enabled`: флаг require_title_embedding
+- `tp_topktitles_k`: значение k (Top-K)
+- `tp_topktitles_dim`: размерность эмбеддингов корпуса
+- `tp_topktitles_corpus_size`: размер корпуса
+- `tp_topktitles_backend_faiss`: флаг использования FAISS backend (1.0 если используется)
+- `tp_topktitles_faiss_available`: флаг доступности FAISS (1.0 если установлен)
+- `tp_topktitles_require_faiss_enabled`, `tp_topktitles_require_faiss_above_corpus_size`: флаги конфигурации FAISS
+- `tp_topktitles_allow_numpy_large_corpus_enabled`, `tp_topktitles_max_corpus_for_numpy`: флаги конфигурации numpy backend
+- `tp_topktitles_cache_enabled`, `tp_topktitles_cache_ttl_s`, `tp_topktitles_cache_max_entries`: флаги конфигурации кеша
+- `tp_topktitles_export_topk_mode_ids_only`, `tp_topktitles_export_topk_mode_ids_and_scores`, `tp_topktitles_export_topk_mode_none`: флаги режима экспорта
+- `tp_topktitles_export_k_used`: фактическое количество экспортированных результатов
+- `tp_topktitles_export_k_truncated_flag`: флаг обрезки результатов (1.0 если k > max_export_k)
+- `tp_topktitles_max_export_k`: максимальное количество экспортируемых результатов
+- `tp_topktitles_top1_score`: score первого результата (cosine similarity)
+- `tp_topktitles_topk_mean_score`: средний score топ-k результатов
+- flags: `tp_topktitles_unsafe_relpath_flag`, `tp_topktitles_title_embed_missing_flag` (нет файла / ошибка загрузки `.npy`), `tp_topktitles_dim_mismatch_flag`, `tp_topktitles_zero_norm_flag`, `tp_topktitles_nan_inf_flag`
 
 #### Метаданные
 
 - `device`: устройство обработки (всегда `"cpu"`)
-- `version`: версия экстрактора (`"1.0.0"`)
-- `system`: системные метрики (pre_init, post_init, post_process, peaks)
+- `version`: версия экстрактора
+- `model_name` / `model_version` / `weights_digest`: **`null`** (корпус не ST-модель в рантайме)
+- `system`: **`pre_init`/`post_init`** из **`__init__`** (после загрузки корпуса), **`post_process`**, peaks (**`gpu_peak_mb`**)
 - `timings_s.total`: общее время обработки (секунды)
 - `error`: ошибка (если есть, иначе `None`)
   - в production-grade режиме missing dependencies → **исключение**, а не мягкий `error`-код.
@@ -74,28 +89,36 @@
     "corpus_spec_name": "similar_titles_corpus_v1",  # dp_models spec name (offline asset)
     "k": 5,                                          # Top-K
     "enabled": True,                                 # feature-gating
-    "require_title_embedding": False,                 # если True и нет title embedding → ошибка (fail-fast)
+    "require_title_embedding": False,                # если True и нет title embedding → ошибка (fail-fast)
     "export_topk_mode": "ids_and_scores",             # none | ids_only | ids_and_scores
-    "max_export_k": 50,                               # лимит для UI/NPZ size
+    "max_export_k": 50,                              # лимит для UI/NPZ size
     "require_faiss": False,                           # если True и faiss недоступен → ошибка
-    "require_faiss_above_corpus_size": 200_000,       # если corpus >= threshold и faiss недоступен → ошибка
+    "require_faiss_above_corpus_size": 200_000,      # если corpus >= threshold и faiss недоступен → ошибка
     "allow_numpy_large_corpus": False,                # защита от случайного O(N·D) на больших корпусах
-    "max_corpus_for_numpy": 100_000,                  # порог “большого” корпуса для numpy backend
-    "hnsw_m": 32,
-    "hnsw_ef_construction": 200,
-    "hnsw_ef_search": 128,
-    "cache_enabled": True,                            # process-level cache индекса/корпуса
-    "cache_ttl_s": 3600.0,
-    "cache_max_entries": 2
+    "max_corpus_for_numpy": 100_000,                 # порог "большого" корпуса для numpy backend
+    "hnsw_m": 32,                                    # HNSW параметр: количество связей на уровне
+    "hnsw_ef_construction": 200,                      # HNSW параметр: размер кандидатов при построении
+    "hnsw_ef_search": 128,                            # HNSW параметр: размер кандидатов при поиске
+    "cache_enabled": True,                           # process-level cache индекса/корпуса
+    "cache_ttl_s": 3600.0,                           # TTL кеша в секундах
+    "cache_max_entries": 2,                           # Максимальное количество записей в кеше (LRU)
+    "artifacts_dir": None                            # Путь к артефактам (по умолчанию: из env)
 }
 ```
 
 ### Формат входных данных
 
+**Corpus spec** (dp_models):
+- Должен иметь `runtime_params` с:
+  - `embeddings_relpath`: относительный путь к файлу embeddings.npy
+  - `ids_relpath`: относительный путь к файлу ids.json
+  - `id_kind` (опционально): строка, описывающая тип ID (для метаданных)
+
 **Corpus embeddings** (`embeddings.npy`, в dp_models):
 - 2D numpy array, dtype: `float32`
 - Shape: `[n_docs, embedding_dim]`
 - Векторы должны быть L2-нормализованы (автоматически нормализуются при загрузке)
+- Не должны содержать NaN/inf
 
 **Corpus ids** (`ids.json`, в dp_models):
 - JSON список ID (любого типа: строки, числа, и т.д.)
@@ -126,15 +149,15 @@
 
 ### Обработка ошибок
 
-В production-grade режиме missing dependencies → **исключение**:
-- корпус не резолвится через `dp_models` (missing files / invalid spec)
-- отсутствует `doc.tp_artifacts["embeddings"]["title"]["relpath"]`
-- отсутствует файл title embedding в per-run artifacts
-- mismatch размерности (corpus_dim != title_dim)
-- `require_faiss=true`, но `faiss` недоступен
+**Корпус** в `__init__`: не резолвится / битые файлы spec → **RuntimeError** (fail-fast при старте экстрактора).
 
-Valid empty semantics (если `require_title_embedding=false`):
-- отсутствует/нечитаем title embedding → `tp_topktitles_present=0`, scores=NaN, списки не выдаются
+**Title embedding** в `extract()`:
+- при **`require_title_embedding=true`**: нет relpath / unsafe relpath / нет файла / ошибка `np.load` / NaN / dim mismatch / zero norm → **RuntimeError**;
+- при **`require_title_embedding=false`**: те же случаи → **valid empty** (`tp_topktitles_present=0`, scores **NaN**, флаги **`tp_topktitles_*`**), без исключения.
+
+**FAISS**: `require_faiss=true`, но пакет недоступен → **RuntimeError** при загрузке корпуса (если выбран faiss path по размеру).
+
+**HNSW**: приближённый top-K; для **точного** порядка/скоров на малом корпусе сравнивайте с numpy backend (см. `SCHEMA.md`).
 
 ### Архитектура
 
@@ -143,7 +166,7 @@ Valid empty semantics (если `require_title_embedding=false`):
 3. **Поиск эмбеддинга заголовка**: чтение relpath из `doc.tp_artifacts`
 4. **Нормализация**: L2-нормализация эмбеддинга заголовка
 5. **Поиск похожих**: выполнение поиска через FAISS или numpy
-6. **Формирование результатов**: scalar summary всегда; списки ids/scores только при `export_topk_lists=true`
+6. **Формирование результатов**: `features_flat` всегда; списки ids/scores только при `export_topk_mode` ≠ `none` (и в пределах `max_export_k`)
 7. **Сбор метрик**: измерение времени выполнения и использования памяти
 
 ### Performance characteristics

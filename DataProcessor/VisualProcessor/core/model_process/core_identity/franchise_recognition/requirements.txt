@@ -1,0 +1,2 @@
+# Dependencies for franchise_recognition component
+# Add component-specific dependencies here

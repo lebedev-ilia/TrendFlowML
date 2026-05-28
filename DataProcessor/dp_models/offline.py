@@ -6,6 +6,23 @@ import socket
 from typing import Dict, Iterator, Optional
 
 
+def _default_hf_home() -> str:
+    """Default HuggingFace cache: ~/.cache/huggingface."""
+    return os.path.join(os.path.expanduser("~"), ".cache", "huggingface")
+
+
+def _hf_cache_has_hub(cache_dir: str) -> bool:
+    """Check if HF cache dir has hub/ with model entries (e.g. models--*)."""
+    hub_dir = os.path.join(cache_dir, "hub")
+    if not os.path.isdir(hub_dir):
+        return False
+    try:
+        entries = os.listdir(hub_dir)
+        return any(e.startswith("models--") for e in entries)
+    except OSError:
+        return False
+
+
 def enforce_offline_env(models_root: str) -> Dict[str, str]:
     """
     Best-effort offline enforcement via environment variables.
@@ -16,15 +33,26 @@ def enforce_offline_env(models_root: str) -> Dict[str, str]:
     Note: For demucs models, TORCH_HOME is used for caching, but if the model is not
     in cache and offline mode is enforced, the model loading will fail (expected behavior).
     Models should be pre-downloaded via download scripts.
+    
+    HF cache: if models_root/hf_cache has hub/ with models, use it; else fall back to
+    ~/.cache/huggingface (e.g. emotion_diarization WavLM when bundled_models/hf_cache is empty).
     """
     mr = os.path.abspath(str(models_root))
+    hf_cache_bundled = os.path.join(mr, "hf_cache")
+    if _hf_cache_has_hub(hf_cache_bundled):
+        hf_home = hf_cache_bundled
+    else:
+        hf_home = _default_hf_home()
+    hf_hub = os.path.join(hf_home, "hub")
     env = {
         # HuggingFace offline
         # "HF_HUB_OFFLINE": "1",
         # "TRANSFORMERS_OFFLINE": "1",
-        # Common cache roots pinned under models_root
-        "SENTENCE_TRANSFORMERS_HOME": os.path.join(mr, "hf_cache"),
-        "HF_HOME": os.path.join(mr, "hf_cache"),
+        # Common cache roots: use bundled if populated, else default HF cache
+        "SENTENCE_TRANSFORMERS_HOME": hf_home,
+        "HF_HOME": hf_home,
+        "HF_HUB_CACHE": hf_hub,
+        "TRANSFORMERS_CACHE": hf_hub,
         # Torch cache (for torchvision weights, torch.hub models, and demucs)
         # demucs.pretrained.get_model() uses torch.hub.load internally, which respects TORCH_HOME
         "TORCH_HOME": os.path.join(mr, "torch_cache"),

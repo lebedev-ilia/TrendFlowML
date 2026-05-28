@@ -1,0 +1,114 @@
+{
+  "schema_system_version": "vp_schema_v1",
+  "schema_version": "scene_classification_npz_v2",
+  "producer": "scene_classification",
+  "artifact_kind": "npz",
+  "allow_extra_keys": false,
+  "meta": {
+    "required_keys": [
+      "producer",
+      "producer_version",
+      "schema_version",
+      "created_at",
+      "platform_id",
+      "video_id",
+      "run_id",
+      "config_hash",
+      "sampling_policy_version",
+      "dataprocessor_version",
+      "status",
+      "empty_reason",
+      "models_used",
+      "model_signature",
+      "stage_timings_ms"
+    ],
+    "optional_keys": [
+      "total_frames",
+      "processed_frames",
+      "frames_dir",
+      "analysis_fps",
+      "analysis_width",
+      "analysis_height",
+      "ui_payload",
+
+      "module_sampling_policy_version",
+      "prefer_cut_detection_boundaries",
+      "label_fusion",
+      "min_scene_length_frames",
+      "min_scene_seconds",
+      "runtime",
+      "triton_model_spec",
+      "triton_http_url",
+      "model_arch",
+      "use_timm",
+      "input_size",
+      "batch_size",
+      "temporal_smoothing",
+      "smoothing_window",
+      "use_tta",
+      "use_multi_crop",
+      "enable_advanced_features"
+    ]
+  },
+  "fields": {
+    "frame_indices": { "required": true, "tier": "model_facing", "dtype": "int32", "shape": ["N"] },
+    "times_s": { "required": true, "tier": "model_facing", "dtype": "float32", "shape": ["N"] },
+
+    "frame_topk_ids": { "required": true, "tier": "model_facing", "dtype": "int32", "shape": ["N", 5] },
+    "frame_topk_probs": { "required": true, "tier": "model_facing", "dtype": "float32", "shape": ["N", 5] },
+    "frame_entropy": { "required": true, "tier": "model_facing", "dtype": "float32", "shape": ["N"] },
+    "frame_top1_prob": { "required": true, "tier": "model_facing", "dtype": "float32", "shape": ["N"] },
+    "frame_top1_top2_gap": { "required": true, "tier": "model_facing", "dtype": "float32", "shape": ["N"] },
+    "frame_scene_id": { "required": true, "tier": "model_facing", "dtype": "int32", "shape": ["N"] },
+
+    "label_fusion": { "required": true, "tier": "debug", "dtype": "object", "shape": [] },
+    "min_scene_seconds": { "required": true, "tier": "debug", "dtype": "float32", "shape": [] },
+
+    "scene_ids": { "required": true, "tier": "analytics", "dtype": "object", "shape": ["S"] },
+    "scene_label": { "required": true, "tier": "analytics", "dtype": "object", "shape": ["S"] },
+    "fusion_mode": { "required": true, "tier": "debug", "dtype": "object", "shape": ["S"] },
+    "start_frame": { "required": true, "tier": "analytics", "dtype": "int32", "shape": ["S"] },
+    "end_frame": { "required": true, "tier": "analytics", "dtype": "int32", "shape": ["S"] },
+    "start_time_s": { "required": true, "tier": "analytics", "dtype": "float32", "shape": ["S"] },
+    "end_time_s": { "required": true, "tier": "analytics", "dtype": "float32", "shape": ["S"] },
+    "length_frames": { "required": true, "tier": "analytics", "dtype": "int32", "shape": ["S"] },
+    "length_seconds": { "required": true, "tier": "analytics", "dtype": "float32", "shape": ["S"] },
+
+    "mean_score": { "required": true, "tier": "analytics", "dtype": "float32", "shape": ["S"] },
+    "class_entropy_mean": { "required": true, "tier": "analytics", "dtype": "float32", "shape": ["S"] },
+    "top1_prob_mean": { "required": true, "tier": "analytics", "dtype": "float32", "shape": ["S"] },
+    "top1_vs_top2_gap_mean": { "required": true, "tier": "analytics", "dtype": "float32", "shape": ["S"] },
+    "fraction_high_confidence_frames": { "required": true, "tier": "analytics", "dtype": "float32", "shape": ["S"] },
+
+    "mean_aesthetic_score": { "required": true, "tier": "analytics", "dtype": "float32", "shape": ["S"] },
+    "aesthetic_std": { "required": true, "tier": "analytics", "dtype": "float32", "shape": ["S"] },
+    "aesthetic_frac_high": { "required": true, "tier": "analytics", "dtype": "float32", "shape": ["S"] },
+    "mean_luxury_score": { "required": true, "tier": "analytics", "dtype": "float32", "shape": ["S"] },
+
+    "mean_cozy": { "required": true, "tier": "analytics", "dtype": "float32", "shape": ["S"] },
+    "mean_scary": { "required": true, "tier": "analytics", "dtype": "float32", "shape": ["S"] },
+    "mean_epic": { "required": true, "tier": "analytics", "dtype": "float32", "shape": ["S"] },
+    "mean_neutral": { "required": true, "tier": "analytics", "dtype": "float32", "shape": ["S"] },
+    "atmosphere_entropy": { "required": true, "tier": "analytics", "dtype": "float32", "shape": ["S"] },
+
+    "scene_change_score": { "required": true, "tier": "analytics", "dtype": "float32", "shape": ["S"] },
+    "label_stability": { "required": true, "tier": "analytics", "dtype": "float32", "shape": ["S"] },
+
+    "indices": { "required": true, "tier": "debug", "dtype": "object", "shape": ["S"] },
+    "dominant_places_topk_ids": { "required": true, "tier": "debug", "dtype": "object", "shape": ["S"] },
+    "dominant_places_topk_probs": { "required": true, "tier": "debug", "dtype": "object", "shape": ["S"] },
+
+    "scenes": { "required": true, "tier": "analytics", "dtype": "object", "shape": [] },
+    "scenes_raw": { "required": true, "tier": "debug", "dtype": "object", "shape": [] },
+
+    "scene_aesthetic_prompts": { "required": true, "tier": "debug", "dtype": "object", "shape": ["P1"] },
+    "scene_luxury_prompts": { "required": true, "tier": "debug", "dtype": "object", "shape": ["P2"] },
+    "scene_atmosphere_prompts": { "required": true, "tier": "debug", "dtype": "object", "shape": ["P3"] },
+    "places365_prompts": { "required": true, "tier": "debug", "dtype": "object", "shape": ["P4"] },
+
+    "summary": { "required": true, "tier": "analytics", "dtype": "object", "shape": [] },
+    "meta": { "required": true, "tier": "debug", "dtype": "object", "shape": [] }
+  }
+}
+
+

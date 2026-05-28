@@ -1,0 +1,43 @@
+{
+  "schema_system_version": "vp_schema_v1",
+  "schema_version": "topk_similar_titles_extractor_output_v1",
+  "producer": "topk_similar_titles_extractor",
+  "artifact_kind": "extractor_features_flat",
+  "allow_extra_keys": false,
+  "description": "TopKSimilarCorpusTitlesExtractor: 29 fixed tp_topktitles_* keys; corpus via dp_models; HNSW is approximate vs exact numpy; variable-length topk lists only under result.topk_similar_corpus_titles.",
+  "meta": {
+    "required_keys": [],
+    "optional_keys": []
+  },
+  "fields": {
+    "tp_topktitles_present": { "required": true, "tier": "analytics", "dtype": "float32", "shape": [] },
+    "tp_topktitles_disabled_by_policy": { "required": true, "tier": "analytics", "dtype": "float32", "shape": [] },
+    "tp_topktitles_enabled": { "required": true, "tier": "analytics", "dtype": "float32", "shape": [] },
+    "tp_topktitles_require_title_embedding_enabled": { "required": true, "tier": "analytics", "dtype": "float32", "shape": [] },
+    "tp_topktitles_k": { "required": true, "tier": "analytics", "dtype": "float32", "shape": [] },
+    "tp_topktitles_corpus_size": { "required": true, "tier": "analytics", "dtype": "float32", "shape": [] },
+    "tp_topktitles_dim": { "required": true, "tier": "analytics", "dtype": "float32", "shape": [] },
+    "tp_topktitles_backend_faiss": { "required": true, "tier": "analytics", "dtype": "float32", "shape": [] },
+    "tp_topktitles_faiss_available": { "required": true, "tier": "analytics", "dtype": "float32", "shape": [] },
+    "tp_topktitles_require_faiss_enabled": { "required": true, "tier": "analytics", "dtype": "float32", "shape": [] },
+    "tp_topktitles_require_faiss_above_corpus_size": { "required": true, "tier": "analytics", "dtype": "float32", "shape": [] },
+    "tp_topktitles_allow_numpy_large_corpus_enabled": { "required": true, "tier": "analytics", "dtype": "float32", "shape": [] },
+    "tp_topktitles_max_corpus_for_numpy": { "required": true, "tier": "analytics", "dtype": "float32", "shape": [] },
+    "tp_topktitles_cache_enabled": { "required": true, "tier": "analytics", "dtype": "float32", "shape": [] },
+    "tp_topktitles_cache_ttl_s": { "required": true, "tier": "analytics", "dtype": "float32", "shape": [] },
+    "tp_topktitles_cache_max_entries": { "required": true, "tier": "analytics", "dtype": "float32", "shape": [] },
+    "tp_topktitles_export_topk_mode_ids_only": { "required": true, "tier": "analytics", "dtype": "float32", "shape": [] },
+    "tp_topktitles_export_topk_mode_ids_and_scores": { "required": true, "tier": "analytics", "dtype": "float32", "shape": [] },
+    "tp_topktitles_export_topk_mode_none": { "required": true, "tier": "analytics", "dtype": "float32", "shape": [] },
+    "tp_topktitles_max_export_k": { "required": true, "tier": "analytics", "dtype": "float32", "shape": [] },
+    "tp_topktitles_export_k_used": { "required": true, "tier": "analytics", "dtype": "float32", "shape": [] },
+    "tp_topktitles_export_k_truncated_flag": { "required": true, "tier": "analytics", "dtype": "float32", "shape": [] },
+    "tp_topktitles_unsafe_relpath_flag": { "required": true, "tier": "analytics", "dtype": "float32", "shape": [] },
+    "tp_topktitles_title_embed_missing_flag": { "required": true, "tier": "analytics", "dtype": "float32", "shape": [] },
+    "tp_topktitles_dim_mismatch_flag": { "required": true, "tier": "analytics", "dtype": "float32", "shape": [] },
+    "tp_topktitles_zero_norm_flag": { "required": true, "tier": "analytics", "dtype": "float32", "shape": [] },
+    "tp_topktitles_nan_inf_flag": { "required": true, "tier": "analytics", "dtype": "float32", "shape": [] },
+    "tp_topktitles_top1_score": { "required": true, "tier": "analytics", "dtype": "float32", "shape": [] },
+    "tp_topktitles_topk_mean_score": { "required": true, "tier": "analytics", "dtype": "float32", "shape": [] }
+  }
+}

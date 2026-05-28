@@ -64,6 +64,13 @@ def render_title_embedding_cluster_entropy_extractor(
         clusters["top_k_used"] = _clean_value(extractor_features["tp_titleclent_top_k_used"])
     if "tp_titleclent_top_k_slots" in extractor_features:
         clusters["top_k_slots"] = _clean_value(extractor_features["tp_titleclent_top_k_slots"])
+    if "tp_titleclent_top_k_slots_requested" in extractor_features:
+        clusters["top_k_slots_requested"] = _clean_value(extractor_features["tp_titleclent_top_k_slots_requested"])
+    if "tp_titleclent_top_k_slots_clamped" in extractor_features:
+        v = extractor_features["tp_titleclent_top_k_slots_clamped"]
+        clusters["top_k_slots_clamped"] = bool(v > 0.5) if isinstance(v, (float, int, np.floating, np.integer)) else None
+    if "tp_titleclent_schema_top_k_slots_max" in extractor_features:
+        clusters["schema_top_k_slots_max"] = _clean_value(extractor_features["tp_titleclent_schema_top_k_slots_max"])
     
     # Try to get cluster metadata from payload
     cluster_meta = {}

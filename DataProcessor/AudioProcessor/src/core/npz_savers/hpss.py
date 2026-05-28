@@ -31,38 +31,47 @@ def save_hpss_npz(
     # Feature-gated metrics
     features_enabled = payload.get("_features_enabled", [])
     
-    # Energy metrics (feature-gated)
+    # Energy metrics (feature-gated, omit when disabled)
     if "energy_metrics" in features_enabled:
         add("hpss_harmonic_share", payload.get("hpss_harmonic_share"))
         add("hpss_percussive_share", payload.get("hpss_percussive_share"))
-        add("hpss_energy_total", payload.get("hpss_energy_total"))
-        add("hpss_energy_harmonic", payload.get("hpss_energy_harmonic"))
-        add("hpss_energy_percussive", payload.get("hpss_energy_percussive"))
-        add("hpss_harmonic_stability", payload.get("hpss_harmonic_stability"))
-        add("hpss_percussive_stability", payload.get("hpss_percussive_stability"))
+        for _k in (
+            "hpss_energy_total",
+            "hpss_energy_harmonic",
+            "hpss_energy_percussive",
+            "hpss_harmonic_stability",
+            "hpss_percussive_stability",
+        ):
+            _v = payload.get(_k)
+            if _v is not None:
+                add(_k, _v)
         add("hpss_separation_quality", payload.get("hpss_separation_quality"))
         add("hpss_balance_score", payload.get("hpss_balance_score"))
-        # Segment-level aggregates (if run_segments was used)
         if "hpss_harmonic_share_mean" in payload:
             add("hpss_harmonic_share_mean", payload.get("hpss_harmonic_share_mean"))
             add("hpss_harmonic_share_std", payload.get("hpss_harmonic_share_std"))
             add("hpss_percussive_share_mean", payload.get("hpss_percussive_share_mean"))
             add("hpss_percussive_share_std", payload.get("hpss_percussive_share_std"))
     
-    # Spectral features (feature-gated)
+    # Spectral features (feature-gated; omit tabular row if missing — e.g. failed spectral sub-step)
     if "spectral_features" in features_enabled:
-        add("hpss_harmonic_centroid_mean", payload.get("hpss_harmonic_centroid_mean"))
-        add("hpss_harmonic_centroid_std", payload.get("hpss_harmonic_centroid_std"))
-        add("hpss_harmonic_bandwidth_mean", payload.get("hpss_harmonic_bandwidth_mean"))
-        add("hpss_harmonic_bandwidth_std", payload.get("hpss_harmonic_bandwidth_std"))
-        add("hpss_harmonic_rolloff_mean", payload.get("hpss_harmonic_rolloff_mean"))
-        add("hpss_harmonic_rolloff_std", payload.get("hpss_harmonic_rolloff_std"))
-        add("hpss_percussive_centroid_mean", payload.get("hpss_percussive_centroid_mean"))
-        add("hpss_percussive_centroid_std", payload.get("hpss_percussive_centroid_std"))
-        add("hpss_percussive_bandwidth_mean", payload.get("hpss_percussive_bandwidth_mean"))
-        add("hpss_percussive_bandwidth_std", payload.get("hpss_percussive_bandwidth_std"))
-        add("hpss_percussive_rolloff_mean", payload.get("hpss_percussive_rolloff_mean"))
-        add("hpss_percussive_rolloff_std", payload.get("hpss_percussive_rolloff_std"))
+        for _sk in (
+            "hpss_harmonic_centroid_mean",
+            "hpss_harmonic_centroid_std",
+            "hpss_harmonic_bandwidth_mean",
+            "hpss_harmonic_bandwidth_std",
+            "hpss_harmonic_rolloff_mean",
+            "hpss_harmonic_rolloff_std",
+            "hpss_percussive_centroid_mean",
+            "hpss_percussive_centroid_std",
+            "hpss_percussive_bandwidth_mean",
+            "hpss_percussive_bandwidth_std",
+            "hpss_percussive_rolloff_mean",
+            "hpss_percussive_rolloff_std",
+        ):
+            _sv = payload.get(_sk)
+            if _sv is not None:
+                add(_sk, _sv)
     
     # Metadata (always saved)
     add("sample_rate", payload.get("sample_rate"))
@@ -98,52 +107,57 @@ def save_hpss_npz(
         elif "hpss_percussive_share_series" in payload:
             percussive_share_series = np.asarray(payload.get("hpss_percussive_share_series"), dtype=np.float32)
     
-    # Segment-level data (if run_segments was used)
-    segment_centers_sec = None
-    segment_durations_sec = None
-    if "segment_centers_sec" in payload:
-        segment_centers_sec = np.asarray(payload.get("segment_centers_sec"), dtype=np.float32)
-    if "segment_durations_sec" in payload:
-        segment_durations_sec = np.asarray(payload.get("segment_durations_sec"), dtype=np.float32)
-    
-    # Waveforms (feature-gated, saved to .npy)
-    harmonic_npy = None
-    percussive_npy = None
+    # Segment-level data (run_segments: strict alignment, Audit v3)
+    segment_start_sec = _arr("segment_start_sec", dtype=np.float32) if "segment_start_sec" in payload else np.zeros((0,), dtype=np.float32)
+    segment_end_sec = _arr("segment_end_sec", dtype=np.float32) if "segment_end_sec" in payload else np.zeros((0,), dtype=np.float32)
+    segment_center_sec = _arr("segment_center_sec", dtype=np.float32) if "segment_center_sec" in payload else np.zeros((0,), dtype=np.float32)
+    segment_mask = _arr("segment_mask", dtype=bool) if "segment_mask" in payload else np.zeros((0,), dtype=bool)
+    hpss_harmonic_share_by_segment = _arr("hpss_harmonic_share_by_segment", dtype=np.float32) if "hpss_harmonic_share_by_segment" in payload else np.zeros((0,), dtype=np.float32)
+    hpss_percussive_share_by_segment = _arr("hpss_percussive_share_by_segment", dtype=np.float32) if "hpss_percussive_share_by_segment" in payload else np.zeros((0,), dtype=np.float32)
+
+    # Waveform paths in meta.extra only (no arrays in NPZ, Audit v3)
+    meta_extra = {
+        **(extra_meta or {}),
+        **({"error": error} if error else {}),
+        "empty_reason": empty_reason,
+        "hpss_contract_version": payload.get("hpss_contract_version"),
+        "features_enabled": features_enabled,
+        # Audit v4.2: observability
+        "stage_timings_ms": payload.get("stage_timings_ms"),
+        "hpss_resource_profile": payload.get("hpss_resource_profile"),
+        "device_used": payload.get("device_used"),
+    }
+    if payload.get("hpss_dominance"):
+        meta_extra["hpss_dominance"] = payload["hpss_dominance"]
     if "waveforms" in features_enabled:
-        harmonic_npy_path = payload.get("hpss_harmonic_npy")
-        percussive_npy_path = payload.get("hpss_percussive_npy")
-        if harmonic_npy_path:
-            npy_path = os.path.join(run_rs_path, "hpss_extractor", harmonic_npy_path)
-            if os.path.exists(npy_path):
-                harmonic_npy = np.load(npy_path)
-        if percussive_npy_path:
-            npy_path = os.path.join(run_rs_path, "hpss_extractor", percussive_npy_path)
-            if os.path.exists(npy_path):
-                percussive_npy = np.load(npy_path)
-    
-    atomic_save_npz(
-        out_path,
-        feature_names=np.asarray(feature_names, dtype=object),
-        feature_values=np.asarray(feature_values, dtype=np.float32),
-        harmonic_share_series=harmonic_share_series if harmonic_share_series is not None else np.zeros((0,), dtype=np.float32),
-        percussive_share_series=percussive_share_series if percussive_share_series is not None else np.zeros((0,), dtype=np.float32),
-        segment_centers_sec=segment_centers_sec if segment_centers_sec is not None else np.zeros((0,), dtype=np.float32),
-        segment_durations_sec=segment_durations_sec if segment_durations_sec is not None else np.zeros((0,), dtype=np.float32),
-        harmonic_npy=harmonic_npy if harmonic_npy is not None else np.zeros((0,), dtype=np.float32),
-        percussive_npy=percussive_npy if percussive_npy is not None else np.zeros((0,), dtype=np.float32),
-        meta=build_meta(
+        h_path = payload.get("hpss_harmonic_npy")
+        p_path = payload.get("hpss_percussive_npy")
+        if h_path:
+            meta_extra["hpss_harmonic_npy_path"] = h_path
+        if p_path:
+            meta_extra["hpss_percussive_npy_path"] = p_path
+
+    npz_arrays = {
+        "feature_names": np.asarray(feature_names, dtype=object),
+        "feature_values": np.asarray(feature_values, dtype=np.float32),
+        "segment_start_sec": segment_start_sec,
+        "segment_end_sec": segment_end_sec,
+        "segment_center_sec": segment_center_sec,
+        "segment_mask": segment_mask,
+        "hpss_harmonic_share_by_segment": hpss_harmonic_share_by_segment,
+        "hpss_percussive_share_by_segment": hpss_percussive_share_by_segment,
+        "meta": build_meta(
             producer="hpss_extractor",
             producer_version=producer_version,
             schema_version=schema_version,
             status=status,
-            extra={
-                **(extra_meta or {}),
-                **({"error": error} if error else {}),
-                "empty_reason": empty_reason,
-                "hpss_contract_version": payload.get("hpss_contract_version"),
-                "features_enabled": features_enabled,
-            },
+            extra=meta_extra,
         ),
-    )
+    }
+    if "time_series" in features_enabled:
+        npz_arrays["hpss_harmonic_share_series"] = harmonic_share_series if harmonic_share_series is not None else np.zeros((0,), dtype=np.float32)
+        npz_arrays["hpss_percussive_share_series"] = percussive_share_series if percussive_share_series is not None else np.zeros((0,), dtype=np.float32)
+
+    atomic_save_npz(out_path, **npz_arrays)
     return out_path
 

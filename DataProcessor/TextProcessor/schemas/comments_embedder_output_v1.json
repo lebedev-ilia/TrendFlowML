@@ -1,0 +1,125 @@
+{
+  "schema_system_version": "vp_schema_v1",
+  "schema_version": "comments_embedder_output_v1",
+  "producer": "comments_embedder",
+  "artifact_kind": "extractor_features_flat",
+  "allow_extra_keys": false,
+  "description": "Logical contract for CommentsEmbedder.features_flat. Matrix in comments_embeddings.npy.",
+  "meta": {
+    "required_keys": [],
+    "optional_keys": []
+  },
+  "fields": {
+    "tp_commentsemb_present": {
+      "required": true,
+      "tier": "model_facing",
+      "dtype": "float32",
+      "shape": [],
+      "description": "1.0 if embeddings computed (compute_embeddings path with non-empty selection)"
+    },
+    "tp_commentsemb_count": {
+      "required": true,
+      "tier": "model_facing",
+      "dtype": "float32",
+      "shape": []
+    },
+    "tp_commentsemb_dim": {
+      "required": true,
+      "tier": "model_facing",
+      "dtype": "float32",
+      "shape": []
+    },
+    "tp_commentsemb_n_input": {
+      "required": true,
+      "tier": "analytics",
+      "dtype": "float32",
+      "shape": []
+    },
+    "tp_commentsemb_n_deduped": {
+      "required": true,
+      "tier": "analytics",
+      "dtype": "float32",
+      "shape": []
+    },
+    "tp_commentsemb_n_selected": {
+      "required": true,
+      "tier": "analytics",
+      "dtype": "float32",
+      "shape": []
+    },
+    "tp_commentsemb_total_chars_used": {
+      "required": true,
+      "tier": "analytics",
+      "dtype": "float32",
+      "shape": []
+    },
+    "tp_commentsemb_truncated_by_total_chars_flag": {
+      "required": true,
+      "tier": "analytics",
+      "dtype": "float32",
+      "shape": []
+    },
+    "tp_commentsemb_cache_enabled": {
+      "required": true,
+      "tier": "analytics",
+      "dtype": "float32",
+      "shape": []
+    },
+    "tp_commentsemb_cache_hit": {
+      "required": true,
+      "tier": "analytics",
+      "dtype": "float32",
+      "shape": [],
+      "description": "NaN if emit_extra_metrics=false; in extract_batch with emit_extra_metrics=true — NaN (cache not used)"
+    },
+    "tp_commentsemb_fp16": {
+      "required": true,
+      "tier": "analytics",
+      "dtype": "float32",
+      "shape": []
+    },
+    "tp_commentsemb_device_cuda": {
+      "required": true,
+      "tier": "analytics",
+      "dtype": "float32",
+      "shape": []
+    },
+    "tp_commentsemb_model_digest_u24": {
+      "required": true,
+      "tier": "analytics",
+      "dtype": "float32",
+      "shape": []
+    },
+    "tp_commentsemb_compute_enabled": {
+      "required": true,
+      "tier": "analytics",
+      "dtype": "float32",
+      "shape": []
+    },
+    "tp_commentsemb_write_artifact_enabled": {
+      "required": true,
+      "tier": "analytics",
+      "dtype": "float32",
+      "shape": []
+    },
+    "tp_commentsemb_artifact_written": {
+      "required": true,
+      "tier": "analytics",
+      "dtype": "float32",
+      "shape": []
+    },
+    "tp_commentsemb_select_ms": {
+      "required": true,
+      "tier": "analytics",
+      "dtype": "float32",
+      "shape": []
+    },
+    "tp_commentsemb_encode_ms": {
+      "required": true,
+      "tier": "analytics",
+      "dtype": "float32",
+      "shape": [],
+      "description": "Wall in extract; in extract_batch — share of batch encode time by comment count"
+    }
+  }
+}

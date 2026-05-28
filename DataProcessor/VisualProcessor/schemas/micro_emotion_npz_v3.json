@@ -1,0 +1,74 @@
+{
+  "schema_system_version": "vp_schema_v1",
+  "schema_version": "micro_emotion_npz_v3",
+  "producer": "micro_emotion",
+  "artifact_kind": "npz",
+  "allow_extra_keys": false,
+  "meta": {
+    "required_keys": [
+      "producer",
+      "producer_version",
+      "schema_version",
+      "created_at",
+      "platform_id",
+      "video_id",
+      "run_id",
+      "config_hash",
+      "sampling_policy_version",
+      "dataprocessor_version",
+      "status",
+      "empty_reason",
+      "models_used",
+      "model_signature",
+      "stage_timings_ms"
+    ],
+    "optional_keys": [
+      "total_frames",
+      "processed_frames",
+      "frames_dir",
+      "analysis_fps",
+      "analysis_width",
+      "analysis_height",
+      "ui_payload",
+
+      "module_sampling_policy_version",
+      "face_frames_sampling_policy_version",
+      "docker_image",
+      "openface_batch_size",
+      "device",
+      "feature_groups",
+      "fps",
+      "microexpr_smoothing_sigma",
+      "microexpr_delta_threshold",
+      "microexpr_max_duration_frames",
+      "microexpr_min_peak_distance_frames",
+      "gaze_centered_threshold",
+      "pca_components",
+      "au_confidence_threshold"
+    ]
+  },
+  "fields": {
+    "frame_indices": { "required": true, "tier": "model_facing", "dtype": "int32", "shape": ["N"] },
+    "times_s": { "required": true, "tier": "model_facing", "dtype": "float32", "shape": ["N"] },
+    "face_present_any": { "required": true, "tier": "model_facing", "dtype": "bool", "shape": ["N"] },
+
+    "frame_feature_names": { "required": true, "tier": "model_facing", "dtype": "object", "shape": ["F"] },
+    "frame_features": { "required": true, "tier": "model_facing", "dtype": "float32", "shape": ["N", "F"] },
+
+    "compact22": { "required": true, "tier": "model_facing", "dtype": "float32", "shape": ["N", 22] },
+    "compact22_feature_names": { "required": true, "tier": "model_facing", "dtype": "object", "shape": [22] },
+
+    "event_times_s": { "required": true, "tier": "analytics", "dtype": "float32", "shape": ["K"] },
+    "event_type_id": { "required": true, "tier": "analytics", "dtype": "int16", "shape": ["K"] },
+    "event_strength": { "required": true, "tier": "analytics", "dtype": "float32", "shape": ["K"] },
+
+    "feature_names": { "required": true, "tier": "model_facing", "dtype": "object", "shape": ["V"] },
+    "feature_values": { "required": true, "tier": "model_facing", "dtype": "float32", "shape": ["V"] },
+
+    "microexpr_features": { "required": true, "tier": "analytics", "dtype": "object", "shape": [] },
+    "summary": { "required": true, "tier": "analytics", "dtype": "object", "shape": [] },
+    "meta": { "required": true, "tier": "analytics", "dtype": "object", "shape": [] }
+  }
+}
+
+

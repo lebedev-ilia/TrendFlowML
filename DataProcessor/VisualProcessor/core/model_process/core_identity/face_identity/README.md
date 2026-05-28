@@ -1,4 +1,36 @@
-## Component: `core_face_identity` (semantic head, v1)
+## Component: `core_face_identity` (semantic head, Audit v3)
+
+**Version**: `0.2` (Audit v3)  
+**Schema**: `core_face_identity_npz_v2`
+
+### Changelog
+
+#### v0.2 (Audit v3, schema v2) — 2026-02-XX
+
+**Критические изменения**:
+- **Schema bump**: `core_face_identity_npz_v1` → `core_face_identity_npz_v2`
+- **Детерминированный label-space**: добавлены `semantic_label_names` и `semantic_object_ids` для стабильного отображения UUID → int32
+- **db_digest**: добавлен SHA256 digest базы лиц для reproducibility
+- **meta_json**: добавлен cross-venv safe JSON representation meta
+- **face_bbox_xyxy**: добавлено поле для сохранения bbox top-1 лица на каждом кадре (для render assets)
+
+**Улучшения**:
+- **Fail-fast политика**: строгая проверка доступности Embedding Service (включая empty case)
+- **Строгая валидация UUID**: RuntimeError если UUID не найден в label-space (консистентность базы)
+- **Atomic save**: двухпроходная запись NPZ для избежания частично записанных артефактов
+- **Render system**: полноценный mini-dashboard с privacy banner, top/anti-top примерами, assets
+- **Документация**: добавлен SCHEMA.md, обновлен README с разделом Render
+
+**Breaking changes**:
+- `face_ids` теперь содержит int32 индексы из `semantic_label_names` вместо UUID (детерминированное отображение)
+- Структура NPZ изменена: добавлены обязательные поля `semantic_label_names`, `semantic_object_ids`, `face_bbox_xyxy`, `meta_json`
+
+#### v0.1 (initial) — до Audit v3
+
+- Базовая реализация face identity recognition
+- Schema v1 без детерминированного label-space
+- Без db_digest и meta_json
+- Без render assets
 
 ### Назначение
 
@@ -98,21 +130,22 @@ POST http://localhost:8001/search
 - **Graceful degradation**: При ошибке отдельного лица компонент продолжает работу, но если все лица упали - падает с ошибкой
 - **Логирование**: Все ошибки и предупреждения логируются
 
-### Early validation (Embedding Service)
+### Early validation (Embedding Service, Audit v3)
 
 Компонент выполняет **раннюю проверку доступности Embedding Service**:
-- Проверка health endpoint через `embedding_client._ensure_url()`
-- Тестовый запрос с первым кадром, где есть лицо (dummy image), для проверки работоспособности search endpoint
+- Проверка health endpoint через `embedding_client._ensure_url()` (fail-fast)
+- Загрузка label-space через `GET /categories/face/labels` (fail-fast если база пустая)
+- Тестовый запрос с первым кадром, где есть лицо, для проверки работоспособности search endpoint
 - Если тест не проходит (например, 500 ошибка):
   - Выдается одно предупреждение вместо множества ошибок
-  - Пропускается обработка всех кадров
-  - Заполняются пустые результаты вместо обработки с ошибками
+  - Пропускается обработка всех кадров (но если все лица упали → error)
 - Если тест проходит — продолжается обычная обработка
 
 **Преимущества**:
 - Fail-fast: проблемы обнаруживаются до начала обработки всех кадров
 - Улучшенный UX: одно предупреждение вместо сотен ошибок
 - Экономия ресурсов: не тратится время на обработку, которая все равно завершится ошибкой
+- **Audit v3**: строгая проверка консистентности базы (UUID должен быть в label-space)
 
 **No-fallback policy**:
 - Если Embedding Service недоступен при инициализации → **error** (fail-fast)
@@ -127,15 +160,28 @@ POST http://localhost:8001/search
 
 **Artifact filename**: `face_identity.npz` (фиксированное имя, `ARTIFACT_FILENAME`)
 
-**Schema version**: `core_face_identity_npz_v1`
+**Schema version**: `core_face_identity_npz_v2`
 
-**Ключи (v1)**:
-- `frame_indices (N,) int32` - Индексы кадров (из metadata)
-- `times_s (N,) float32` - Временные метки из `union_timestamps_sec[frame_indices]`
-- `face_ids (N, K) int32` - ID известных людей на каждом кадре (-1 если нет результата)
-- `face_names (N, K) str` - Имена известных людей на каждом кадре (пустая строка если нет)
-- `face_similarities (N, K) float32` - Similarity scores (0.0 если нет результата)
-- `meta` (object dict): статус + информация о базе лиц + models_used
+**Ключи (v2, semantic-head contract v1)**:
+- **Time-axis**:
+  - `frame_indices (N,) int32` - Индексы кадров (только кадры с лицами)
+  - `times_s (N,) float32` - Временные метки из `union_timestamps_sec[frame_indices]`
+- **Label space (deterministic, derived from Embedding Service)**:
+  - `semantic_label_names (A,) str`: `"int_id:name"` (детерминированное отображение UUID → int32)
+  - `semantic_object_ids (A,) str`: UUID из Embedding Service (aligned с `semantic_label_names`)
+- **Per-frame top-K results**:
+  - `face_ids (N, K) int32` - Face identity indices (int32 из semantic_label_names), -1 где нет результата
+  - `face_names (N, K) str` - Имена известных людей (human-readable), "" где нет результата
+  - `face_similarities (N, K) float32` - Similarity scores (0.0-1.0), 0.0 где нет результата
+- **Render assets** (Audit v3):
+  - `face_bbox_xyxy (N, 4) float32` - Bbox для top-1 лица на каждом кадре (x1, y1, x2, y2), NaN где нет лица
+- **Meta**:
+  - `meta` (object dict): статус + информация о базе лиц + models_used + db_digest
+  - `meta_json` (str): meta как JSON строка (cross-venv safe)
+
+**K=5**: Фиксированный top-K для semantic-head v1 contract.
+
+**См. также**: `SCHEMA.md` для полного описания схемы v2.
 
 **Meta обязательные поля** (baseline contract):
 - `producer`, `producer_version`, `schema_version`, `created_at`
@@ -143,12 +189,17 @@ POST http://localhost:8001/search
 - `dataprocessor_version` (может быть "unknown" в baseline)
 - `status` (`ok`/`empty`/`error`), `empty_reason` (если `status="empty"`)
 - `models_used[]` (если используются модели)
+- `model_signature` (детерминированная подпись моделей)
 - `stage_timings_ms` (dict): тайминги стадий выполнения в миллисекундах:
   - `initialization`: инициализация компонента
   - `load_deps`: загрузка зависимостей (`core_face_landmarks`)
   - `process_frames`: обработка кадров и поиск лиц
   - `saving`: сохранение артефакта
   - `total`: общее время выполнения
+- **DB provenance (reproducibility)**:
+  - `db_name`: `"embedding_service"`
+  - `db_version`: `"v1"`
+  - `db_digest`: SHA256 от канонического списка labels (детерминированная подпись базы)
 
 ### Sampling / units-of-processing requirements
 
@@ -256,32 +307,54 @@ POST http://localhost:8001/search
 - **Стабильность**: одинаковые люди должны иметь похожие similarity scores на соседних кадрах
 - **Coverage**: проверка, что распознавание покрывает разные части видео (начало/середина/конец)
 
-### Human-friendly визуализация (Render System)
+### Human-friendly визуализация (Render System, Audit v3)
 
-`face_identity` генерирует **render-context JSON** для каждого запуска:
+`face_identity` генерирует **render-context JSON** и **offline HTML mini-dashboard** для каждого запуска:
 
-- Путь: `result_store/<platform_id>/<video_id>/<run_id>/core_face_identity/_render/render_context.json`
+#### Render files
 
-Этот JSON содержит:
-- **Summary**: статистики по распознаванию лиц (frames_count, unique_faces_count, total_identifications, confident_predictions_count/ratio, top1_score_mean/std/min/max/median)
-- **Timeline**: данные по каждому кадру (frame_index, time_sec, top1_face_id, top1_face_name, top1_score, is_confident, unique_faces_count, topk_scores)
-- **Distributions**: распределения top1_scores и all_scores (min, max, mean, std, median, percentiles)
-- **Top faces**: топ лица по количеству кадров и среднему score
+- **Render-context JSON**: `result_store/<platform_id>/<video_id>/<run_id>/core_face_identity/_render/render_context.json`
+- **HTML mini-dashboard**: `result_store/.../core_face_identity/_render/render.html` (offline, без CDN)
+- **Assets** (опционально): `result_store/.../core_face_identity/_render/assets/*.jpg` (face crops для примеров)
 
-Render-context может быть использован:
-- **LLM** для генерации текстовых описаний распознанных людей в видео
-- **Frontend** для построения графиков и визуализаций (timeline charts, distributions, face pie charts)
-- **Debugging**: быстрая проверка качества распознавания без загрузки NPZ
+#### Render-context JSON структура
 
-**HTML debug страница** (опционально):
-- Путь: `result_store/.../core_face_identity/_render/render.html`
-- Содержит интерактивные графики (Chart.js):
-  - Timeline: top-1 face scores по времени с цветовой кодировкой лиц
-  - Distributions: статистики по top1_scores и all_scores
-  - Top faces: таблица с топ лицами и их метриками
-  - Summary metrics: ключевые показатели в удобном формате
+- **summary**: ключевые статистики (frames, unique_faces_count, total_identifications, confident_predictions_count/ratio, status)
+- **key_facts**: `schema_version`, `producer_version`, `db_digest`, `embedding_model`, `stage_timings_ms`
+- **config_highlights**: важные параметры конфига (`top_k`, `similarity_threshold`, `category`)
+- **qa_hints**: рекомендации по интерпретации результатов
+- **distributions**: статистики по `top1_scores` и `all_scores` (min, max, mean, std, median, percentiles)
+- **top_faces**: топ лица по количеству кадров и среднему score
+- **examples**: top/anti-top примеры с assets (face crops)
+- **timeline**: данные по каждому кадру (frame_index, time_sec, top1_face_name, top1_score, is_confident)
 
-**Конфигурация** (в `global_config.yaml`):
+#### HTML mini-dashboard
+
+**Секции**:
+1. **Key facts**: schema_version, producer_version, db_digest, embedding_model, frames, unique_faces
+2. **Config highlights**: top_k, similarity_threshold, category
+3. **Examples (top / anti-top)**: визуальные примеры с face crops (если assets доступны)
+4. **Top faces**: таблица с топ лицами по count/avg_score/max_score/min_score
+5. **Timeline**: таблица с поиском и фильтрацией по имени лица (первые 3000 кадров)
+6. **How to QA**: рекомендации по проверке качества
+
+**Интерактивность** (offline, vanilla JS):
+- Поиск по имени лица в timeline таблице
+- Сортировка таблиц (через браузер)
+- Кликабельные ссылки на assets
+
+**Assets policy**:
+- Face crops сохраняются в `_render/assets/` для top/anti-top примеров
+- Имена файлов детерминированы: `face_frame_{frame_index}.jpg`
+- Рендер работает offline (открытие `render.html` из файловой системы)
+
+**Privacy**:
+- Face crops содержат персональные данные (лица)
+- В production можно отключить генерацию assets через конфиг
+- Render содержит только метаданные (имена, scores), не raw embeddings
+
+#### Конфигурация (в `global_config.yaml`)
+
 ```yaml
 face_identity:
   embedding_service_url: "http://localhost:8005"
@@ -289,8 +362,25 @@ face_identity:
   similarity_threshold: 0
   render:
     enable_render: true  # Генерировать render-context JSON
-    enable_html_render: true  # Генерировать HTML debug страницу
+    enable_html_render: true  # Генерировать HTML mini-dashboard
+    # assets_dir будет автоматически установлен VisualProcessor renderer
 ```
+
+#### Как читать выход
+
+**Типовые распределения**:
+- **top1_scores**: обычно > 0.3 для корректных распознаваний, > 0.7 для confident
+- **all_scores**: широкое распределение (0.0-1.0), пик около 0.5-0.7 для известных людей
+
+**Аномалии для поиска**:
+- Много `confident=false` при явно известных людях → возможно `similarity_threshold` слишком высокий или база маленькая
+- Много `confident=true` при явном мусоре → возможно `similarity_threshold` слишком низкий или качество face crops плохое
+- Нестабильность: одинаковые люди имеют сильно различающиеся scores на соседних кадрах → возможно проблемы с качеством face crops или Embedding Service
+
+**Связь с NPZ**:
+- NPZ остается source-of-truth
+- Render — это "человеческая интерпретация" NPZ, не отдельный контракт данных
+- Все данные в render можно восстановить из NPZ
 
 **Примечание**: Render генерируется автоматически после успешной обработки компонента (best-effort: ошибки render не валят основной процесс).
 
@@ -428,14 +518,20 @@ curl -X POST "http://localhost:8001/search" \
 - В выдаче будут `name` из `known_people` (например, `mrbeast`, `taylorswift`, `uriydud`)
 - В `metadata.num_images` можно увидеть, сколько фото использовалось для усреднения.
 
-### Алгоритм работы
+### Алгоритм работы (Audit v3, schema v2)
 
 1. Компонент загружает `core_face_landmarks/landmarks.npz` (no-fallback)
 2. Инициализирует Embedding Service клиент и проверяет доступность (fail-fast)
-3. Извлекает `frame_indices` из landmarks.npz и фильтрует их по `face_present`:
+3. **Загружает label-space** из Embedding Service (`GET /categories/face/labels`):
+   - Получает список всех известных людей с UUID, именами, embedding_model
+   - **Fail-fast**: если база пустая (0 labels) → error
+   - Создает детерминированное отображение UUID → int32 (сортировка по UUID)
+   - Вычисляет `db_digest` (SHA256 от канонического списка labels) для reproducibility
+   - Создает `semantic_label_names` и `semantic_object_ids` для детерминированного label-space
+4. Извлекает `frame_indices` из landmarks.npz и фильтрует их по `face_present`:
    - Оставляет только кадры, где `face_present[i]` содержит хотя бы одно `True`
-   - Если таких кадров нет → возвращает valid empty artifact
-4. Для каждого отфильтрованного кадра (только кадры с лицами):
+   - Если таких кадров нет → возвращает valid empty artifact **только если Embedding Service доступен и база не пустая** (fail-fast в empty case)
+5. Для каждого отфильтрованного кадра (только кадры с лицами):
    - Загружает кадр через `FrameManager`
    - Для каждого лица в кадре (из `face_landmarks`):
      - Извлекает bbox из landmarks (min/max координаты с padding 5%)
@@ -443,31 +539,45 @@ curl -X POST "http://localhost:8001/search" \
      - Отправляет crop в Embedding Service для поиска (`POST /search`)
        - Использует retry механизм (3 попытки с exponential backoff)
        - При ошибке логирует warning и увеличивает счетчик failed_faces
-     - Получает top-K результатов с similarity scores
+     - Получает top-K результатов с similarity scores и UUID
+     - **Преобразует UUID в int32 индексы** через детерминированное отображение
+     - **Fail-fast**: если UUID не найден в label-space → RuntimeError (консистентность базы нарушена)
    - Дедуплицирует результаты по имени (берет лучший similarity для каждого имени)
-   - Заполняет выходные массивы (`face_ids`, `face_names`, `face_similarities`)
-5. Проверяет fail-fast условие: если все лица упали с ошибками → **error**
-6. Сохраняет результаты в NPZ с полным meta (все обязательные поля baseline contract)
+   - Заполняет выходные массивы (`face_ids` как int32 индексы, `face_names`, `face_similarities`)
+   - **Сохраняет bbox top-1 лица** в `face_bbox_xyxy` для render assets
+6. Проверяет fail-fast условие: если все лица упали с ошибками → **error**
+7. Сохраняет результаты в NPZ с полным meta (все обязательные поля baseline contract):
+   - Добавляет `db_digest`, `db_name`, `db_version` для reproducibility
+   - Добавляет `meta_json` (cross-venv safe)
+   - Использует **atomic save** (двухпроходная запись) для избежания частично записанных артефактов
 
-### Valid empty outputs
+### Valid empty outputs (Audit v3)
 
-Если лиц в видео нет или Embedding Service не нашел совпадений:
+**Valid empty** создается только если:
+- Лиц в видео нет (`empty_reason="no_faces_in_video"`)
+- **И** Embedding Service доступен
+- **И** база не пустая (есть хотя бы один label)
+
+В этом случае:
 - Компонент возвращает NPZ со `status="empty"`
-- `empty_reason="no_faces_in_video"` (если лиц нет) или пустые результаты (если совпадений нет)
+- `empty_reason="no_faces_in_video"`
 - Выходные массивы заполнены значениями по умолчанию:
-  - `face_ids`: -1
-  - `face_names`: пустые строки
-  - `face_similarities`: 0.0
+  - `frame_indices`: пустой массив
+  - `times_s`: пустой массив
+  - `face_ids`: пустой массив (0, K)
+  - `face_names`: пустой массив (0, K)
+  - `face_similarities`: пустой массив (0, K)
+  - `face_bbox_xyxy`: пустой массив (0, 4)
+- Но `semantic_label_names` и `semantic_object_ids` присутствуют (с db_digest)
 
-Это **валидный empty**, не ошибка.
+**Fail-fast**: Если Embedding Service недоступен или база пустая → компонент падает с ошибкой, не создает empty artifact.
 
 ### Troubleshooting
 
-#### Embedding Service недоступен:
+#### Embedding Service недоступен (Audit v3, fail-fast):
 
 ```
-WARNING: core_face_identity | Embedding Service test request failed: ...
-Skipping all frames to avoid repeated errors.
+RuntimeError: core_face_identity | Embedding Service unavailable at http://localhost:8001: ... (fail-fast)
 ```
 
 **Решение**: 
@@ -478,7 +588,17 @@ python run_server.py
 ```
 - Проверьте, что категория `face` настроена в Embedding Service
 - Проверьте логи Embedding Service для детальной информации об ошибках
-- Компонент автоматически пропустит все кадры и заполнит пустые результаты при недоступности сервиса
+- **Важно (Audit v3)**: Компонент теперь использует fail-fast политику — при недоступности сервиса компонент падает с ошибкой, не создает empty artifact
+
+#### База пустая (0 labels):
+
+```
+RuntimeError: core_face_identity | Embedding Service category 'face' has 0 labels (fail-fast)
+```
+
+**Решение**:
+- Засейте категорию `face` хотя бы несколькими labels через `sync_known_people_to_embedding_service.py`
+- Проверьте: `GET /categories/face/labels` должен вернуть `count > 0`
 
 #### Пустые результаты от Embedding Service:
 
@@ -511,9 +631,23 @@ RuntimeError: core_face_identity | All X faces failed with Embedding Service err
 - Проверьте, что категория `face` настроена в Embedding Service
 - Убедитесь, что Triton доступен и модель для категории `face` загружена
 
+#### UUID не найден в label-space (Audit v3):
+
+```
+RuntimeError: core_face_identity | Face UUID {uuid} not found in label-space. This indicates database inconsistency...
+```
+
+**Решение**:
+- Это указывает на неконсистентность базы: label-space был загружен с одним набором labels, но search вернул UUID, которого нет в этом наборе
+- Возможные причины: база изменилась между загрузкой label-space и поиском, или race condition
+- Перезапустите компонент (label-space будет перезагружен)
+- Если проблема повторяется — проверьте логи Embedding Service на предмет изменений базы во время работы
+
 ### Ссылки
 
-- **Baseline component audit criteria**: `docs/baseline/BASELINE_COMPONENT_AUDIT_CRITERIA.md`
-- **Artifacts and schemas**: `docs/contracts/ARTIFACTS_AND_SCHEMAS.md`
-- **Segmenter contract**: `docs/contracts/SEGMENTER_CONTRACT.md`
-- **Embedding Service**: `embedding_service/README.md`
+- **Audit v3 decisions**: `DataProcessor/docs/audit_v3/DECISIONS_AND_RULES.md`
+- **Schema**: `SCHEMA.md` (в этой директории)
+- **Artifacts and schemas**: `DataProcessor/docs/contracts/ARTIFACTS_AND_SCHEMAS.md`
+- **Segmenter contract**: `DataProcessor/docs/contracts/SEGMENTER_CONTRACT.md`
+- **Embedding Service**: `DataProcessor/embedding_service/README.md`
+- **VisualProcessor main index**: `DataProcessor/VisualProcessor/docs/MAIN_INDEX.md`

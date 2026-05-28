@@ -10,7 +10,7 @@ from typing import Optional, List, Dict, Any
 
 sys.path.append(os.path.dirname(os.path.dirname(os.path.dirname(__file__))))
 
-from modules.similarity_metrics.similarity_metrics import SimilarityBaselineModule
+from modules.similarity_metrics.utils.similarity_metrics import SimilarityBaselineModule
 from utils.logger import get_logger
 
 MODULE_NAME = "similarity_metrics"

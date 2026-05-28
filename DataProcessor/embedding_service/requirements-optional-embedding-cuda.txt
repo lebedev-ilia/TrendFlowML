@@ -1,0 +1,10 @@
+# Опционально: ускорение ArcFace/InsightFace в Embedding Service (поиск category=face).
+# Подберите сборку под вашу версию драйвера/CUDA, см.:
+#   https://onnxruntime.ai/docs/execution-providers/CUDA-ExecutionProvider.html
+# После установки: в onnxruntime должен появиться CUDAExecutionProvider
+#   python -c \"import onnxruntime as ort; print(ort.get_available_providers())\"
+#
+# Пример (версия подставьте сами):
+# onnxruntime-gpu==1.17.1
+#
+# Принудительно CPU: INSIGHTFACE_DISABLE_CUDA=1

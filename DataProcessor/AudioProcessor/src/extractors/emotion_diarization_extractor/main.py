@@ -21,9 +21,21 @@ from typing import Any, Dict, List, Optional, Callable, Tuple
 import numpy as np
 import torch
 
+# Enforce offline mode (Audit v3). ModelManager should set these too, but we set defensively.
+os.environ["TRANSFORMERS_OFFLINE"] = "1"
+os.environ["HF_HUB_OFFLINE"] = "1"
+os.environ["HF_DATASETS_OFFLINE"] = "1"
+os.environ["HF_HUB_DISABLE_TELEMETRY"] = "1"
+
 # Import base classes first (before modifying sys.path)
 from src.core.base_extractor import BaseExtractor, ExtractorResult
 from src.core.audio_utils import AudioUtils
+
+from .utils.resource_profile import (
+    prefix_snapshot,
+    resource_profile_enabled,
+    snapshot_process_resources,
+)
 
 # Add local speechbrain to path (after base imports to avoid breaking module imports)
 _extractor_dir = Path(__file__).resolve().parent
@@ -39,7 +51,7 @@ EMOTION_CONTRACT_VERSION = "emotion_contract_v1"
 
 class EmotionDiarizationExtractor(BaseExtractor):
     name = "emotion_diarization_extractor"
-    version = "3.0.0"
+    version = "3.1.2"
     description = "Emotion diarization via SpeechBrain Speech_Emotion_Diarization (probs + aggregates)"
     category = "speech"
     dependencies = ["numpy", "torch", "speechbrain", "dp_models"]
@@ -57,17 +69,17 @@ class EmotionDiarizationExtractor(BaseExtractor):
         batch_size: int = 16,
         # Feature gating flags (per-feature control, default: all False)
         enable_probs: bool = False,
-        enable_ids: bool = False,
-        enable_confidence: bool = False,
+        enable_ids: bool = True,
+        enable_confidence: bool = True,
         enable_mean_probs: bool = False,
-        enable_entropy: bool = False,
-        enable_dominant: bool = False,
+        enable_entropy: bool = True,
+        enable_dominant: bool = True,
         enable_quality_metrics: bool = False,
         # Silence detection
         silence_peak_threshold: float = 1e-3,
         silence_rms_threshold: float = 1e-4,
         enable_silence_detection: bool = True,
-        # Full audio processing mode
+        # Full audio processing mode (Audit v3: disabled)
         process_full_audio: bool = False,
         # Progress reporting callback
         progress_callback: Optional[Callable[[int, int, str], None]] = None,
@@ -114,8 +126,26 @@ class EmotionDiarizationExtractor(BaseExtractor):
         self.silence_rms_threshold = float(silence_rms_threshold)
         self.enable_silence_detection = bool(enable_silence_detection)
         
-        # Full audio processing mode (process entire audio as one segment instead of using provided segments)
-        self.process_full_audio = bool(process_full_audio)
+        # Audit v3: Segmenter owns sampling; no full-audio fallback in audited contract.
+        if bool(process_full_audio):
+            raise RuntimeError(
+                "emotion_diarization | process_full_audio is disabled in audited mode. "
+                "Use Segmenter families.emotion windows and run_segments()."
+            )
+        self.process_full_audio = False
+
+        # Audit v3: minimal model-facing sequences must be enabled.
+        if not self.enable_ids or not self.enable_confidence:
+            raise RuntimeError(
+                "emotion_diarization | audited contract requires enable_ids=true and enable_confidence=true "
+                "(model_facing per-segment sequences)."
+            )
+        # Audit v3: core aggregates are required (frozen model-facing subset).
+        if not self.enable_entropy or not self.enable_dominant:
+            raise RuntimeError(
+                "emotion_diarization | audited contract requires enable_entropy=true and enable_dominant=true "
+                "(core model-facing aggregates)."
+            )
         
         # Progress callback
         self.progress_callback = progress_callback
@@ -260,7 +290,7 @@ class EmotionDiarizationExtractor(BaseExtractor):
         peak = float(np.max(np.abs(x)) + 1e-12)
         return rms, peak
 
-    def _infer_probs_batch(self, batch: np.ndarray, batch_ids: List[str]) -> np.ndarray:
+    def _infer_probs_batch(self, batch: np.ndarray, wav_lens: np.ndarray) -> np.ndarray:
         """
         Выполнить batch inference для получения вероятностей эмоций через SpeechBrain Speech_Emotion_Diarization.
         
@@ -269,7 +299,7 @@ class EmotionDiarizationExtractor(BaseExtractor):
         
         Args:
             batch: паддингнутые аудио сегменты, shape [B, max_length] float32
-            batch_ids: список идентификаторов для каждого сегмента в батче
+            wav_lens: относительные длины (float32[B], (0,1]) для каждого сегмента ДО паддинга
         
         Returns:
             вероятности эмоций, shape [B, num_emotions] float32
@@ -282,24 +312,21 @@ class EmotionDiarizationExtractor(BaseExtractor):
             # SpeechBrain expects [batch, time] format for mono audio
             batch_tensor = torch.from_numpy(batch).to(self.device)
             
-            # Calculate relative lengths (for padding)
-            max_len = batch.shape[1]
-            # Calculate actual lengths (non-zero samples)
-            actual_lens = []
-            for i in range(batch.shape[0]):
-                # Find last non-zero sample
-                non_zero = np.nonzero(batch[i])[0]
-                actual_len = len(non_zero) if len(non_zero) > 0 else max_len
-                actual_lens.append(float(actual_len) / max_len)
-            
-            wav_lens = torch.tensor(actual_lens, device=self.device)
+            # wav_lens is provided by caller (true lengths), do NOT infer it from non-zero samples.
+            wav_lens = np.asarray(wav_lens, dtype=np.float32).reshape(-1)
+            if wav_lens.shape[0] != batch.shape[0]:
+                raise RuntimeError(
+                    f"emotion_diarization | wav_lens shape mismatch: wav_lens={wav_lens.shape} batch={batch.shape}"
+                )
+            wav_lens = np.clip(wav_lens, 1e-6, 1.0)
+            wav_lens_t = torch.from_numpy(wav_lens).to(self.device)
             
             # Get logits from model before softmax
             # SpeechBrain model structure: encode_batch -> avg_pool -> output_mlp -> log_softmax
             # Note: avg_pool with kernel_size=1 and stride=1 doesn't actually pool, so we need to manually average
             with torch.no_grad():
                 # Encode batch (WavLM encoder)
-                outputs = self.model.encode_batch(batch_tensor, wav_lens)
+                outputs = self.model.encode_batch(batch_tensor, wav_lens_t)
                 
                 # outputs shape: [B, T, D] where T is time dimension
                 
@@ -349,7 +376,8 @@ class EmotionDiarizationExtractor(BaseExtractor):
         Progress reporting: каждые 10% батчей (если progress_callback установлен).
         """
         start_time = time.time()
-        timings = {}  # Детальное профилирование этапов
+        timings: Dict[str, float] = {}  # Детальное профилирование этапов
+        emotion_diarization_resource_profile: Optional[Dict[str, Any]] = None
         
         try:
             if not self._validate_input(input_uri):
@@ -357,76 +385,136 @@ class EmotionDiarizationExtractor(BaseExtractor):
             if not isinstance(segments, list) or not segments:
                 raise ValueError("segments is empty (no-fallback)")
 
-            dur_sec = float(max((float(s.get("end_sec", 0.0)) for s in segments), default=0.0))
+            if resource_profile_enabled():
+                try:
+                    emotion_diarization_resource_profile = {
+                        **prefix_snapshot("at_start", snapshot_process_resources()),
+                    }
+                except Exception:
+                    emotion_diarization_resource_profile = None
+
+            # Time axis (strict alignment)
+            N = len(segments)
+            starts = np.asarray([float(s.get("start_sec", 0.0) or 0.0) for s in segments], dtype=np.float32)
+            ends = np.asarray([float(s.get("end_sec", 0.0) or 0.0) for s in segments], dtype=np.float32)
+            centers = np.asarray([float(s.get("center_sec", 0.0) or 0.0) for s in segments], dtype=np.float32)
+            seg_mask = np.zeros((N,), dtype=np.bool_)
+
+            # For <5s, return valid empty (Audit v3).
+            dur_sec = float(np.max(ends) if ends.size else 0.0)
             if dur_sec < 5.0:
-                raise RuntimeError(f"emotion_diarization | audio too short (<5s): duration_sec={dur_sec:.3f}")
+                payload: Dict[str, Any] = {
+                    "status": "empty",
+                    "empty_reason": "audio_too_short",
+                    "segments_total": int(N),
+                    "segments_count": int(0),
+                    "sample_rate": int(self.sample_rate),
+                    "device_used": str(self.device),
+                    "emotion_labels": self.emotion_labels,
+                    "segment_start_sec": starts,
+                    "segment_end_sec": ends,
+                    "segment_center_sec": centers,
+                    "segment_mask": seg_mask,
+                    "emotion_id": np.full((N,), -1, dtype=np.int32),
+                    "emotion_confidence": np.full((N,), np.nan, dtype=np.float32),
+                    "emotion_contract_version": EMOTION_CONTRACT_VERSION,
+                    "_features_enabled": [],
+                    "stage_timings_ms": {},
+                    "emotion_diarization_resource_profile": emotion_diarization_resource_profile,
+                }
+                return self._create_result(True, payload=payload, processing_time=time.time() - start_time)
 
             # Этап 1: Загрузка сегментов
             t_load_start = time.time()
-            waves: list[np.ndarray] = []
-            starts: list[float] = []
-            ends: list[float] = []
-            centers: list[float] = []
-            lens: list[int] = []
-            for seg in segments:
-                ss = int(seg.get("start_sample"))
-                es = int(seg.get("end_sample"))
-                st = float(seg.get("start_sec"))
-                en = float(seg.get("end_sec"))
-                c = float(seg.get("center_sec"))
-                wav_t, sr = self.audio_utils.load_audio_segment(input_uri, start_sample=ss, end_sample=es, target_sr=self.sample_rate)
-                wav = self.audio_utils.to_numpy(wav_t)
-                wav = wav[0] if wav.ndim == 2 else wav.reshape(-1)
-                wav = np.asarray(wav, dtype=np.float32).reshape(-1)
-                if int(sr) != int(self.sample_rate):
-                    raise RuntimeError(f"emotion_diarization | segment SR mismatch: got {sr} expected {self.sample_rate}")
-                waves.append(wav)
-                lens.append(int(wav.shape[0]))
-                starts.append(st)
-                ends.append(en)
-                centers.append(c)
+            waves_valid: list[np.ndarray] = []
+            lens_valid: list[int] = []
+            valid_indices: list[int] = []
+            for i, seg in enumerate(segments):
+                try:
+                    ss = int(seg.get("start_sample"))
+                    es = int(seg.get("end_sample"))
+                    wav_t, sr = self.audio_utils.load_audio_segment(
+                        input_uri, start_sample=ss, end_sample=es, target_sr=self.sample_rate
+                    )
+                    wav = self.audio_utils.to_numpy(wav_t)
+                    wav = wav[0] if wav.ndim == 2 else wav.reshape(-1)
+                    wav = np.asarray(wav, dtype=np.float32).reshape(-1)
+                    if int(sr) != int(self.sample_rate):
+                        raise RuntimeError(f"segment SR mismatch: got {sr} expected {self.sample_rate}")
+                    if wav.size <= 0:
+                        continue
+                    waves_valid.append(wav)
+                    lens_valid.append(int(wav.shape[0]))
+                    valid_indices.append(i)
+                    seg_mask[i] = True
+                except Exception as e:
+                    # Strict alignment: mark segment as invalid, keep arrays length N.
+                    seg_mask[i] = False
             
             t_load_end = time.time()
             timings["load_segments_sec"] = t_load_end - t_load_start
-            logger.info(f"emotion_diarization | loaded {len(segments)} segments in {timings['load_segments_sec']:.3f}s")
+            logger.info(
+                f"emotion_diarization | loaded segments: total={N} valid={int(np.sum(seg_mask))} in {timings['load_segments_sec']:.3f}s"
+            )
 
-            max_len = int(max(lens) if lens else 0)
+            max_len = int(max(lens_valid) if lens_valid else 0)
             if max_len <= 0:
-                raise RuntimeError("emotion_diarization | no audio samples in segments")
+                raise RuntimeError("emotion_diarization | no valid audio samples in segments")
 
             # Этап 2: Silence detection (if enabled)
             t_silence_start = time.time()
+            # Avoid concatenating all segments: compute streaming RMS/peak (saves memory, faster).
+            sumsq = 0.0
+            n_samp = 0
+            peak_abs = 0.0
+            for w in waves_valid:
+                if w.size <= 0:
+                    continue
+                # w is float32; accumulate in float64 scalar.
+                peak_abs = max(peak_abs, float(np.max(np.abs(w))))
+                sumsq += float(np.dot(w, w))
+                n_samp += int(w.size)
+            rms = float(np.sqrt(sumsq / float(n_samp))) if n_samp > 0 else 0.0
+            peak = float(peak_abs)
+
             if self.enable_silence_detection:
-                concat = np.concatenate([w for w in waves if w.size], axis=0) if waves else np.zeros((0,), dtype=np.float32)
-                rms, peak = self._rms_and_peak(concat)
                 if peak < self.silence_peak_threshold and rms < self.silence_rms_threshold:
                     payload: Dict[str, Any] = {
                         "status": "empty",
                         "empty_reason": "audio_silent",
-                        "segments_count": int(len(segments)),
+                        "segments_total": int(N),
+                        "segments_count": int(0),
                         "sample_rate": int(self.sample_rate),
                         "rms": float(rms),
                         "peak": float(peak),
-                        "model_name": self.model_name,
                         "emotion_labels": self.emotion_labels,
-                        "device_used": "cuda",
+                        "device_used": str(self.device),
                         "emotion_contract_version": EMOTION_CONTRACT_VERSION,
+                        "segment_start_sec": starts,
+                        "segment_end_sec": ends,
+                        "segment_center_sec": centers,
+                        "segment_mask": np.zeros((N,), dtype=np.bool_),
+                        "emotion_id": np.full((N,), -1, dtype=np.int32),
+                        "emotion_confidence": np.full((N,), np.nan, dtype=np.float32),
+                        "_features_enabled": [],
+                        "stage_timings_ms": {},
+                        "emotion_diarization_resource_profile": emotion_diarization_resource_profile,
                     }
                     timings["silence_detection_sec"] = time.time() - t_silence_start
                     return self._create_result(True, payload=payload, processing_time=time.time() - start_time)
                 rms_val, peak_val = rms, peak
             else:
-                concat = np.concatenate([w for w in waves if w.size], axis=0) if waves else np.zeros((0,), dtype=np.float32)
-                rms_val, peak_val = self._rms_and_peak(concat)
+                rms_val, peak_val = rms, peak
             
             t_silence_end = time.time()
             timings["silence_detection_sec"] = t_silence_end - t_silence_start
 
             # Этап 3: Padding для батчинга
             t_pad_start = time.time()
-            padded = np.zeros((len(waves), max_len), dtype=np.float32)
-            for i, w in enumerate(waves):
-                padded[i, : int(w.shape[0])] = w
+            padded = np.zeros((len(waves_valid), max_len), dtype=np.float32)
+            lens_arr = np.asarray(lens_valid, dtype=np.int32).reshape(-1)
+            for j, w in enumerate(waves_valid):
+                padded[j, : int(w.shape[0])] = w
             t_pad_end = time.time()
             timings["padding_sec"] = t_pad_end - t_pad_start
 
@@ -434,22 +522,26 @@ class EmotionDiarizationExtractor(BaseExtractor):
             t_inference_start = time.time()
             # Determine batch size (auto-split if >100 segments)
             effective_batch_size = self.batch_size
-            if len(waves) > 100:
+            if len(waves_valid) > 100:
                 effective_batch_size = min(100, self.batch_size)  # Auto-split large batches
             
             # Process in batches
             probs_chunks: list[np.ndarray] = []
-            total_batches = (len(waves) + effective_batch_size - 1) // effective_batch_size
+            total_batches = (len(waves_valid) + effective_batch_size - 1) // effective_batch_size
             progress_report_interval = max(1, total_batches // 10) if total_batches >= 10 else 1
             last_reported_pct = -1
             
-            logger.info(f"emotion_diarization | starting inference: {total_batches} batches, batch_size={effective_batch_size}, segments={len(waves)}")
+            logger.info(
+                f"emotion_diarization | starting inference: {total_batches} batches, batch_size={effective_batch_size}, segments_valid={len(waves_valid)}"
+            )
             
             for batch_idx, start in enumerate(range(0, padded.shape[0], effective_batch_size)):
                 batch = padded[start : start + effective_batch_size]
-                # Create batch IDs for SpeechBrain
-                batch_ids = [f"seg_{start + i}" for i in range(batch.shape[0])]
-                batch_probs = self._infer_probs_batch(batch, batch_ids)
+                batch_lens = lens_arr[start : start + effective_batch_size].astype(np.float32, copy=False)
+                max_len_b = float(batch.shape[1]) if batch.shape[1] > 0 else 1.0
+                wav_lens = (batch_lens / max_len_b).astype(np.float32, copy=False)
+                np.clip(wav_lens, 1e-6, 1.0, out=wav_lens)
+                batch_probs = self._infer_probs_batch(batch, wav_lens)
                 probs_chunks.append(batch_probs)
                 
                 # Progress reporting
@@ -471,8 +563,7 @@ class EmotionDiarizationExtractor(BaseExtractor):
                 raise RuntimeError(f"emotion_diarization | probs batch mismatch: probs={probs.shape} windows={padded.shape[0]}")
 
             # Normalize (defensive)
-            s = np.sum(probs, axis=1, keepdims=True) + 1e-9
-            probs = probs / s
+            probs /= (np.sum(probs, axis=1, keepdims=True) + 1e-9)
             
             # Validate emotion_labels
             num_classes = probs.shape[1]
@@ -480,10 +571,10 @@ class EmotionDiarizationExtractor(BaseExtractor):
             if not is_valid_labels:
                 raise ValueError(f"emotion_diarization | emotion_labels validation failed: {error_msg_labels}")
 
-            # Этап 6: Compute aggregates
+            # Этап 6: Compute aggregates (valid segments only)
             t_aggregates_start = time.time()
-            emotion_id = np.argmax(probs, axis=1).astype(np.int32)
-            emotion_conf = np.max(probs, axis=1).astype(np.float32)
+            emotion_id_valid = np.argmax(probs, axis=1).astype(np.int32)
+            emotion_conf_valid = np.max(probs, axis=1).astype(np.float32)
             mean_probs = np.mean(probs, axis=0).astype(np.float32) if probs.size else np.zeros((0,), dtype=np.float32)
             ent = float(-np.sum(mean_probs * np.log(mean_probs + 1e-9))) if mean_probs.size else 0.0
             dominant_id = int(np.argmax(mean_probs)) if mean_probs.size else -1
@@ -491,98 +582,98 @@ class EmotionDiarizationExtractor(BaseExtractor):
             t_aggregates_end = time.time()
             timings["aggregates_sec"] = t_aggregates_end - t_aggregates_start
 
+            # Scatter back to strict-aligned arrays
+            emotion_id_full = np.full((N,), -1, dtype=np.int32)
+            emotion_conf_full = np.full((N,), np.nan, dtype=np.float32)
+            if valid_indices:
+                vi = np.asarray(valid_indices, dtype=np.int32)
+                emotion_id_full[vi] = emotion_id_valid
+                emotion_conf_full[vi] = emotion_conf_valid
+
             payload: Dict[str, Any] = {
-                "segments_count": int(len(segments)),
+                "segments_total": int(N),
+                "segments_count": int(np.sum(seg_mask)),
                 "sample_rate": int(self.sample_rate),
-                "device_used": "cuda",
+                "device_used": str(self.device),
+                "model_name": getattr(self, "model_name", None),
+                "weights_digest": getattr(self, "weights_digest", None),
                 "rms": float(rms_val),
                 "peak": float(peak_val),
-                "model_name": self.model_name,
                 "emotion_labels": self.emotion_labels,
                 "emotion_contract_version": EMOTION_CONTRACT_VERSION,
+                "segment_start_sec": starts,
+                "segment_end_sec": ends,
+                "segment_center_sec": centers,
+                "segment_mask": seg_mask,
+                "emotion_id": emotion_id_full,
+                "emotion_confidence": emotion_conf_full,
+                # Core model-facing aggregates (Audit v3: always present)
+                "emotion_entropy": float(ent),
+                "dominant_emotion_id": int(dominant_id),
+                "dominant_emotion_prob": float(dominant_prob),
             }
-            
-            # Feature gating: emotion_probs
+
+            # Transitions / distribution / stability / diversity computed on valid segments
+            valid_ids = emotion_id_full[seg_mask]
+            valid_durations = (ends - starts)[seg_mask].astype(np.float32) if seg_mask.size else np.zeros((0,), dtype=np.float32)
+            total_duration = float(np.sum(valid_durations)) if valid_durations.size else 0.0
+
+            transitions = 0
+            if valid_ids.size > 1:
+                transitions = int(np.sum(valid_ids[1:] != valid_ids[:-1]))
+            payload["emotion_transitions_count"] = int(transitions)
+
+            # Stability score
+            transitions_freq = float(transitions) / total_duration if total_duration > 0 else 0.0
+            payload["emotion_stability_score"] = float(1.0 / (1.0 + transitions_freq))
+
+            # Diversity score
+            if mean_probs.size > 1:
+                max_entropy = float(np.log(float(num_classes)))
+                payload["emotion_diversity_score"] = float(ent / max_entropy) if max_entropy > 0 else 0.0
+            else:
+                payload["emotion_diversity_score"] = 0.0
+
+            # Optional: save probs / mean_probs
             if self.enable_probs:
-                payload["emotion_probs"] = probs
-            
-            # Feature gating: emotion_id
-            if self.enable_ids:
-                payload["emotion_id"] = emotion_id
-            
-            # Feature gating: emotion_confidence
-            if self.enable_confidence:
-                payload["emotion_confidence"] = emotion_conf
-            
-            # Feature gating: emotion_mean_probs
+                probs_full = np.full((N, int(num_classes)), np.nan, dtype=np.float32)
+                if valid_indices:
+                    vi = np.asarray(valid_indices, dtype=np.int32)
+                    probs_full[vi, :] = probs
+                payload["emotion_probs"] = probs_full
             if self.enable_mean_probs:
                 payload["emotion_mean_probs"] = mean_probs
-            
-            # Feature gating: emotion_entropy
-            if self.enable_entropy:
-                payload["emotion_entropy"] = float(ent)
-            
-            # Feature gating: dominant emotion
+
+            # Optional: distribution objects
             if self.enable_dominant:
-                payload["dominant_emotion_id"] = int(dominant_id)
-                payload["dominant_emotion_prob"] = float(dominant_prob)
-            
-            # Always include segment timestamps (needed for downstream)
-            payload["segment_start_sec"] = starts
-            payload["segment_end_sec"] = ends
-            payload["segment_center_sec"] = centers
-            
-            # Additional aggregates (if any feature is enabled)
-            if self.enable_ids or self.enable_confidence or self.enable_dominant:
-                # Emotion transitions count
-                if len(emotion_id) > 1:
-                    transitions = sum(1 for i in range(len(emotion_id) - 1) if emotion_id[i] != emotion_id[i + 1])
-                    payload["emotion_transitions_count"] = int(transitions)
-                
-                # Emotion distribution (time ratios)
-                if self.enable_dominant:
-                    emotion_duration = {}
-                    emotion_segments_count = {}
-                    total_duration = float(max(ends) if ends else 0.0)
-                    for i, emo_id in enumerate(emotion_id):
-                        emo_id_int = int(emo_id)
-                        if emo_id_int not in emotion_duration:
-                            emotion_duration[emo_id_int] = 0.0
-                            emotion_segments_count[emo_id_int] = 0
-                        seg_duration = float(ends[i] - starts[i])
-                        emotion_duration[emo_id_int] += seg_duration
-                        emotion_segments_count[emo_id_int] += 1
-                    
-                    emotion_distribution = {}
-                    if total_duration > 0:
-                        for emo_id, duration in emotion_duration.items():
-                            emotion_distribution[int(emo_id)] = float(duration / total_duration)
-                    payload["emotion_distribution"] = emotion_distribution
-                    payload["emotion_segments_per_emotion"] = {int(k): int(v) for k, v in emotion_segments_count.items()}
-                    payload["emotion_duration_per_emotion"] = {int(k): float(v) for k, v in emotion_duration.items()}
-                    
-                    # Emotion stability score (inverse of transitions frequency)
-                    if total_duration > 0:
-                        transitions_freq = float(transitions) / total_duration if transitions > 0 else 0.0
-                        stability_score = float(1.0 / (1.0 + transitions_freq))  # 0 = unstable, 1 = stable
-                        payload["emotion_stability_score"] = stability_score
-                    
-                    # Emotion diversity score (normalized entropy)
-                    if mean_probs.size > 1:
-                        max_entropy = float(np.log(num_classes))
-                        diversity_score = float(ent / max_entropy) if max_entropy > 0 else 0.0
-                        payload["emotion_diversity_score"] = diversity_score
+                emotion_duration: Dict[int, float] = {}
+                emotion_segments_count: Dict[int, int] = {}
+                for k, emo_id in enumerate(valid_ids.tolist() if hasattr(valid_ids, "tolist") else list(valid_ids)):
+                    emo_id_int = int(emo_id)
+                    emotion_duration.setdefault(emo_id_int, 0.0)
+                    emotion_segments_count.setdefault(emo_id_int, 0)
+                    d = float(valid_durations[k]) if k < int(valid_durations.size) else 0.0
+                    emotion_duration[emo_id_int] += d
+                    emotion_segments_count[emo_id_int] += 1
+                emotion_distribution: Dict[int, float] = {}
+                if total_duration > 0:
+                    for emo_id_int, d in emotion_duration.items():
+                        emotion_distribution[int(emo_id_int)] = float(d / total_duration)
+                payload["emotion_distribution"] = emotion_distribution
+                payload["emotion_segments_per_emotion"] = {int(k): int(v) for k, v in emotion_segments_count.items()}
+                payload["emotion_duration_per_emotion"] = {int(k): float(v) for k, v in emotion_duration.items()}
             
             # Feature gating: quality metrics
             if self.enable_quality_metrics:
                 quality_metrics = {}
-                if self.enable_confidence:
-                    quality_metrics["confidence_mean"] = float(np.mean(emotion_conf))
-                    quality_metrics["confidence_std"] = float(np.std(emotion_conf))
-                    quality_metrics["confidence_min"] = float(np.min(emotion_conf))
-                    quality_metrics["confidence_max"] = float(np.max(emotion_conf))
-                    quality_metrics["confidence_median"] = float(np.median(emotion_conf))
-                if self.enable_mean_probs:
+                conf_clean = emotion_conf_full[seg_mask]
+                if conf_clean.size:
+                    quality_metrics["confidence_mean"] = float(np.mean(conf_clean))
+                    quality_metrics["confidence_std"] = float(np.std(conf_clean))
+                    quality_metrics["confidence_min"] = float(np.min(conf_clean))
+                    quality_metrics["confidence_max"] = float(np.max(conf_clean))
+                    quality_metrics["confidence_median"] = float(np.median(conf_clean))
+                if mean_probs.size:
                     quality_metrics["mean_probs_min"] = float(np.min(mean_probs))
                     quality_metrics["mean_probs_max"] = float(np.max(mean_probs))
                     quality_metrics["mean_probs_std"] = float(np.std(mean_probs))
@@ -592,16 +683,12 @@ class EmotionDiarizationExtractor(BaseExtractor):
             enabled_features = []
             if self.enable_probs:
                 enabled_features.append("probs")
-            if self.enable_ids:
-                enabled_features.append("ids")
-            if self.enable_confidence:
-                enabled_features.append("confidence")
             if self.enable_mean_probs:
                 enabled_features.append("mean_probs")
-            if self.enable_entropy:
-                enabled_features.append("entropy")
-            if self.enable_dominant:
-                enabled_features.append("dominant")
+            enabled_features.append("ids")
+            enabled_features.append("confidence")
+            enabled_features.append("entropy")
+            enabled_features.append("dominant")
             if self.enable_quality_metrics:
                 enabled_features.append("quality_metrics")
             
@@ -614,8 +701,21 @@ class EmotionDiarizationExtractor(BaseExtractor):
             # Log detailed profiling
             logger.info(f"emotion_diarization | run_segments completed: segments={len(segments)}, probs_shape={probs.shape if self.enable_probs else 'disabled'}, enabled_features={enabled_features}")
             logger.info(f"emotion_diarization | profiling: load={timings.get('load_segments_sec', 0):.3f}s, silence={timings.get('silence_detection_sec', 0):.3f}s, pad={timings.get('padding_sec', 0):.3f}s, inference={timings.get('inference_sec', 0):.3f}s, aggregates={timings.get('aggregates_sec', 0):.3f}s, postprocess={timings.get('postprocess_sec', 0):.3f}s, total={total_time:.3f}s")
-            if not enabled_features:
-                logger.warning(f"emotion_diarization | WARNING: All feature flags are disabled! No emotion data will be saved. Enable at least enable_ids or enable_confidence in config.")
+
+            stage_timings_ms = {k.replace("_sec", "_ms"): float(v) * 1000.0 for k, v in timings.items()}
+            stage_timings_ms["total_ms"] = float(total_time) * 1000.0
+
+            if emotion_diarization_resource_profile is not None:
+                try:
+                    emotion_diarization_resource_profile = {
+                        **emotion_diarization_resource_profile,
+                        **prefix_snapshot("at_end", snapshot_process_resources()),
+                    }
+                except Exception:
+                    pass
+
+            payload["stage_timings_ms"] = stage_timings_ms
+            payload["emotion_diarization_resource_profile"] = emotion_diarization_resource_profile
 
             return self._create_result(True, payload=payload, processing_time=total_time)
 
@@ -624,195 +724,14 @@ class EmotionDiarizationExtractor(BaseExtractor):
 
     def run(self, input_uri: str, tmp_path: str) -> ExtractorResult:
         """
-        Process entire audio file as one continuous segment (if process_full_audio=True).
-        Otherwise, returns error (use run_segments() for segment-based processing).
+        Legacy full-audio mode is disabled in audited contract (Audit v3).
         """
-        if not self.process_full_audio:
-            return self._create_result(
-                success=False,
-                error="emotion_diarization_extractor | run() is not supported. Use run_segments() with Segmenter families.emotion windows, or set process_full_audio=True in config.",
-                processing_time=0.0,
-            )
-        
-        start_time = time.time()
-        timings = {}  # Детальное профилирование этапов
-        
-        try:
-            if not self._validate_input(input_uri):
-                return self._create_result(False, error="Некорректный входной файл", processing_time=time.time() - start_time)
-            
-            logger.info(f"emotion_diarization | run() processing full audio: {input_uri}")
-            
-            # Этап 1: Load entire audio
-            t_load_start = time.time()
-            wav_t, sr = self.audio_utils.load_audio(input_uri, target_sr=self.sample_rate)
-            wav = self.audio_utils.to_numpy(wav_t)
-            wav = wav[0] if wav.ndim == 2 else wav.reshape(-1)
-            wav = np.asarray(wav, dtype=np.float32).reshape(-1)
-            
-            if int(sr) != int(self.sample_rate):
-                raise RuntimeError(f"emotion_diarization | SR mismatch: got {sr} expected {self.sample_rate}")
-            
-            dur_sec = float(wav.shape[0]) / self.sample_rate
-            if dur_sec < 5.0:
-                raise RuntimeError(f"emotion_diarization | audio too short (<5s): duration_sec={dur_sec:.3f}")
-            
-            t_load_end = time.time()
-            timings["load_audio_sec"] = t_load_end - t_load_start
-            logger.info(f"emotion_diarization | loaded audio: duration={dur_sec:.2f}s, samples={wav.shape[0]}, sr={sr}, load_time={timings['load_audio_sec']:.3f}s")
-            
-            # Progress reporting: загрузка завершена
-            if self.progress_callback:
-                self.progress_callback("emotion_diarization", 1, 3, f"Loaded audio ({dur_sec:.1f}s)")
-            
-            # Этап 2: Silence detection
-            t_silence_start = time.time()
-            if self.enable_silence_detection:
-                rms, peak = self._rms_and_peak(wav)
-                if peak < self.silence_peak_threshold and rms < self.silence_rms_threshold:
-                    payload: Dict[str, Any] = {
-                        "status": "empty",
-                        "empty_reason": "audio_silent",
-                        "segments_count": 1,
-                        "sample_rate": int(self.sample_rate),
-                        "rms": float(rms),
-                        "peak": float(peak),
-                        "model_name": self.model_name,
-                        "emotion_labels": self.emotion_labels,
-                        "device_used": "cuda",
-                        "emotion_contract_version": EMOTION_CONTRACT_VERSION,
-                    }
-                    timings["silence_detection_sec"] = time.time() - t_silence_start
-                    return self._create_result(True, payload=payload, processing_time=time.time() - start_time)
-                rms_val, peak_val = rms, peak
-            else:
-                rms_val, peak_val = self._rms_and_peak(wav)
-            
-            t_silence_end = time.time()
-            timings["silence_detection_sec"] = t_silence_end - t_silence_start
-            
-            # Этап 3: Inference
-            t_inference_start = time.time()
-            batch = wav.reshape(1, -1).astype(np.float32)
-            batch_ids = ["full_audio"]
-            probs = self._infer_probs_batch(batch, batch_ids)
-            t_inference_end = time.time()
-            timings["inference_sec"] = t_inference_end - t_inference_start
-            logger.info(f"emotion_diarization | inference completed: {timings['inference_sec']:.3f}s")
-            
-            # Progress reporting: inference завершен
-            if self.progress_callback:
-                self.progress_callback("emotion_diarization", 2, 3, f"Inference completed ({timings['inference_sec']:.1f}s)")
-            
-            # Этап 4: Postprocessing и агрегация
-            t_postprocess_start = time.time()
-            # Normalize (defensive)
-            s = np.sum(probs, axis=1, keepdims=True) + 1e-9
-            probs = probs / s
-            
-            # Validate emotion_labels
-            num_classes = probs.shape[1]
-            is_valid_labels, error_msg_labels = self._validate_emotion_labels(num_classes)
-            if not is_valid_labels:
-                raise ValueError(f"emotion_diarization | emotion_labels validation failed: {error_msg_labels}")
-            
-            # Compute aggregates
-            emotion_id = np.argmax(probs, axis=1).astype(np.int32)
-            emotion_conf = np.max(probs, axis=1).astype(np.float32)
-            mean_probs = np.mean(probs, axis=0).astype(np.float32) if probs.size else np.zeros((0,), dtype=np.float32)
-            ent = float(-np.sum(mean_probs * np.log(mean_probs + 1e-9))) if mean_probs.size else 0.0
-            dominant_id = int(np.argmax(mean_probs)) if mean_probs.size else -1
-            dominant_prob = float(np.max(mean_probs)) if mean_probs.size else 0.0
-            
-            payload: Dict[str, Any] = {
-                "segments_count": 1,
-                "sample_rate": int(self.sample_rate),
-                "device_used": "cuda",
-                "rms": float(rms_val),
-                "peak": float(peak_val),
-                "model_name": self.model_name,
-                "emotion_labels": self.emotion_labels,
-                "emotion_contract_version": EMOTION_CONTRACT_VERSION,
-            }
-            
-            # Feature gating (same as run_segments)
-            if self.enable_probs:
-                payload["emotion_probs"] = probs
-            if self.enable_ids:
-                payload["emotion_id"] = emotion_id
-            if self.enable_confidence:
-                payload["emotion_confidence"] = emotion_conf
-            if self.enable_mean_probs:
-                payload["emotion_mean_probs"] = mean_probs
-            if self.enable_entropy:
-                payload["emotion_entropy"] = float(ent)
-            if self.enable_dominant:
-                payload["dominant_emotion_id"] = int(dominant_id)
-                payload["dominant_emotion_prob"] = float(dominant_prob)
-            
-            # Single segment timestamps
-            payload["segment_start_sec"] = [0.0]
-            payload["segment_end_sec"] = [dur_sec]
-            payload["segment_center_sec"] = [dur_sec / 2.0]
-            
-            # Additional aggregates
-            if self.enable_ids or self.enable_confidence or self.enable_dominant:
-                if self.enable_dominant:
-                    payload["emotion_distribution"] = {int(dominant_id): 1.0}
-                    payload["emotion_segments_per_emotion"] = {int(dominant_id): 1}
-                    payload["emotion_duration_per_emotion"] = {int(dominant_id): dur_sec}
-                    payload["emotion_stability_score"] = 1.0  # Single segment = stable
-                    if mean_probs.size > 1:
-                        max_entropy = float(np.log(num_classes))
-                        diversity_score = float(ent / max_entropy) if max_entropy > 0 else 0.0
-                        payload["emotion_diversity_score"] = diversity_score
-            
-            if self.enable_quality_metrics:
-                quality_metrics = {}
-                if self.enable_confidence:
-                    quality_metrics["confidence_mean"] = float(emotion_conf[0])
-                    quality_metrics["confidence_std"] = 0.0
-                    quality_metrics["confidence_min"] = float(emotion_conf[0])
-                    quality_metrics["confidence_max"] = float(emotion_conf[0])
-                    quality_metrics["confidence_median"] = float(emotion_conf[0])
-                if self.enable_mean_probs:
-                    quality_metrics["mean_probs_min"] = float(np.min(mean_probs))
-                    quality_metrics["mean_probs_max"] = float(np.max(mean_probs))
-                    quality_metrics["mean_probs_std"] = float(np.std(mean_probs))
-                payload["emotion_quality_metrics"] = quality_metrics
-            
-            # Track enabled features
-            enabled_features = []
-            if self.enable_probs:
-                enabled_features.append("probs")
-            if self.enable_ids:
-                enabled_features.append("ids")
-            if self.enable_confidence:
-                enabled_features.append("confidence")
-            if self.enable_mean_probs:
-                enabled_features.append("mean_probs")
-            if self.enable_entropy:
-                enabled_features.append("entropy")
-            if self.enable_dominant:
-                enabled_features.append("dominant")
-            if self.enable_quality_metrics:
-                enabled_features.append("quality_metrics")
-            
-            payload["_features_enabled"] = enabled_features
-            
-            t_postprocess_end = time.time()
-            timings["postprocess_sec"] = t_postprocess_end - t_postprocess_start
-            total_time = time.time() - start_time
-            
-            # Log detailed profiling
-            logger.info(f"emotion_diarization | run() completed: duration={dur_sec:.2f}s, emotion_id={emotion_id[0] if self.enable_ids else 'disabled'}, confidence={emotion_conf[0] if self.enable_confidence else 'disabled'}, enabled_features={enabled_features}")
-            logger.info(f"emotion_diarization | profiling: load={timings.get('load_audio_sec', 0):.3f}s, silence={timings.get('silence_detection_sec', 0):.3f}s, inference={timings.get('inference_sec', 0):.3f}s, postprocess={timings.get('postprocess_sec', 0):.3f}s, total={total_time:.3f}s")
-            
-            return self._create_result(True, payload=payload, processing_time=total_time)
-            
-        except Exception as e:
-            logger.error(f"emotion_diarization | run() failed: {e}", exc_info=True)
-            return self._create_result(False, error=str(e), processing_time=time.time() - start_time)
+        t0 = time.time()
+        return self._create_result(
+            success=False,
+            error="emotion_diarization_extractor | run() is disabled in audited mode. Use run_segments() with Segmenter families.emotion windows.",
+            processing_time=time.time() - t0,
+        )
 
     def _validate_input(self, input_uri: str) -> bool:
         if not super()._validate_input(input_uri):
@@ -856,344 +775,40 @@ class EmotionDiarizationExtractor(BaseExtractor):
         Returns:
             Список ExtractorResult для каждого файла
         """
+        # Audit v3 correctness-first:
+        # - Preserve per-file strict alignment + mask semantics by reusing run_segments().
+        # - Cross-video batching is intentionally not performed here.
         start_time = time.time()
-        
         if not audio_files_with_segments:
             return []
-        
-        try:
-            # Этап 1: Сбор всех сегментов с привязкой к файлам
-            all_segments_with_metadata: List[Dict[str, Any]] = []
-            file_segment_ranges: Dict[str, Tuple[int, int]] = {}
-            
-            for file_info in audio_files_with_segments:
-                file_id = file_info.get("file_id", "unknown")
-                segments = file_info.get("segments", [])
-                input_uri = file_info.get("input_uri")
-                tmp_path = file_info.get("tmp_path")
-                
-                if not input_uri or not tmp_path or not segments:
-                    continue
-                
-                # Проверка длительности для каждого файла
-                dur_sec = float(max((float(s.get("end_sec", 0.0)) for s in segments), default=0.0))
-                if dur_sec < 5.0:
-                    self.logger.warning(f"emotion_diarization | file_id={file_id} audio too short (<5s): duration_sec={dur_sec:.3f}")
-                    continue
-                
-                start_idx = len(all_segments_with_metadata)
-                for seg in segments:
-                    all_segments_with_metadata.append({
-                        "segment": seg,
-                        "file_id": file_id,
-                        "input_uri": input_uri,
-                        "tmp_path": tmp_path,
-                    })
-                end_idx = len(all_segments_with_metadata)
-                file_segment_ranges[file_id] = (start_idx, end_idx)
-            
-            if not all_segments_with_metadata:
-                return [
+
+        results: List[ExtractorResult] = []
+        for file_info in audio_files_with_segments:
+            input_uri = file_info.get("input_uri")
+            tmp_path = file_info.get("tmp_path")
+            segments = file_info.get("segments", [])
+            if not input_uri or not tmp_path:
+                results.append(
                     self._create_result(
                         success=False,
-                        error="No segments provided or all files too short",
+                        error="Missing input_uri/tmp_path",
                         processing_time=time.time() - start_time,
                     )
-                    for _ in audio_files_with_segments
-                ]
-            
-            # Этап 2: Загрузка и предобработка всех сегментов
-            waves: List[Dict[str, Any]] = []
-            starts: List[float] = []
-            ends: List[float] = []
-            centers: List[float] = []
-            lens: List[int] = []
-            
-            for seg_meta in all_segments_with_metadata:
-                seg = seg_meta["segment"]
-                input_uri = seg_meta["input_uri"]
-                
-                try:
-                    ss = int(seg.get("start_sample"))
-                    es = int(seg.get("end_sample"))
-                    st = float(seg.get("start_sec", 0.0))
-                    en = float(seg.get("end_sec", 0.0))
-                    c = float(seg.get("center_sec", 0.0))
-                    
-                    wav_t, sr = self.audio_utils.load_audio_segment(
-                        input_uri, start_sample=ss, end_sample=es, target_sr=self.sample_rate
-                    )
-                    wav = self.audio_utils.to_numpy(wav_t)
-                    wav = wav[0] if wav.ndim == 2 else wav.reshape(-1)
-                    wav = np.asarray(wav, dtype=np.float32).reshape(-1)
-                    
-                    if int(sr) != int(self.sample_rate):
-                        raise RuntimeError(f"emotion_diarization | segment SR mismatch: got {sr} expected {self.sample_rate}")
-                    
-                    waves.append({
-                        "audio": wav,
-                        "file_id": seg_meta["file_id"],
-                    })
-                    starts.append(st)
-                    ends.append(en)
-                    centers.append(c)
-                    lens.append(int(wav.shape[0]))
-                except Exception as e:
-                    self.logger.error(f"Error preprocessing segment for file_id={seg_meta['file_id']}: {e}")
-                    continue
-            
-            if not waves:
-                return [
-                    self._create_result(
-                        success=False,
-                        error="Failed to preprocess any segments",
-                        processing_time=time.time() - start_time,
-                    )
-                    for _ in audio_files_with_segments
-                ]
-            
-            # Этап 3: Паддинг для батчинга
-            max_len = int(max(lens) if lens else 0)
-            if max_len <= 0:
-                return [
-                    self._create_result(
-                        success=False,
-                        error="No audio samples in segments",
-                        processing_time=time.time() - start_time,
-                    )
-                    for _ in audio_files_with_segments
-                ]
-            
-            padded = np.zeros((len(waves), max_len), dtype=np.float32)
-            for i, w in enumerate(waves):
-                padded[i, : int(w["audio"].shape[0])] = w["audio"]
-            
-            # Этап 4: Определение размера батча
-            effective_batch_size = max_segments_per_batch
-            if effective_batch_size is None:
-                effective_batch_size = self.batch_size
-                if len(waves) > 100:
-                    effective_batch_size = min(100, self.batch_size)  # Auto-split large batches
-            
-            # Этап 5: Обработка батчей через Triton
-            probs_chunks: List[np.ndarray] = []
-            
-            for batch_start in range(0, padded.shape[0], effective_batch_size):
-                batch_end = min(batch_start + effective_batch_size, padded.shape[0])
-                batch = padded[batch_start:batch_end]
-                
-                try:
-                    # Create batch IDs for SpeechBrain
-                    batch_ids = [f"seg_{batch_start + i}" for i in range(batch.shape[0])]
-                    batch_probs = self._infer_probs_batch(batch, batch_ids)
-                    probs_chunks.append(batch_probs)
-                except Exception as e:
-                    self.logger.error(f"Error processing batch {batch_start // effective_batch_size}: {e}")
-                    # Добавляем нулевые вероятности для неудачных сегментов
-                    batch_size_actual = batch_end - batch_start
-                    num_emotions = len(self.emotion_labels) if hasattr(self, 'emotion_labels') else 7
-                    probs_chunks.append(np.zeros((batch_size_actual, num_emotions), dtype=np.float32))
-            
-            probs_all = np.concatenate(probs_chunks, axis=0) if probs_chunks else np.zeros((0, 0), dtype=np.float32)
-            
-            # Normalize (defensive)
-            if probs_all.size > 0:
-                s = np.sum(probs_all, axis=1, keepdims=True) + 1e-9
-                probs_all = probs_all / s
-            
-            # Этап 6: Распределение результатов обратно по файлам
-            results: List[ExtractorResult] = []
-            
-            for file_info in audio_files_with_segments:
-                file_id = file_info.get("file_id", "unknown")
-                file_start, file_end = file_segment_ranges.get(file_id, (0, 0))
-                
-                # Извлекаем результаты для этого файла
-                file_probs: List[np.ndarray] = []
-                file_starts: List[float] = []
-                file_ends: List[float] = []
-                file_centers: List[float] = []
-                
-                for idx in range(len(waves)):
-                    if waves[idx]["file_id"] == file_id:
-                        if idx < probs_all.shape[0]:
-                            file_probs.append(probs_all[idx])
-                        file_starts.append(starts[idx])
-                        file_ends.append(ends[idx])
-                        file_centers.append(centers[idx])
-                
-                if not file_probs:
-                    results.append(self._create_result(
-                        success=False,
-                        error="No probabilities generated for this file",
-                        processing_time=time.time() - start_time,
-                    ))
-                    continue
-                
-                # Формируем массив вероятностей для файла
-                probs = np.stack(file_probs, axis=0).astype(np.float32)
-                
-                # Silence detection (если включено)
-                if self.enable_silence_detection:
-                    concat = np.concatenate([w["audio"] for w in waves if w["file_id"] == file_id], axis=0) if waves else np.zeros((0,), dtype=np.float32)
-                    rms_val, peak_val = self._rms_and_peak(concat)
-                    if peak_val < self.silence_peak_threshold and rms_val < self.silence_rms_threshold:
-                        payload: Dict[str, Any] = {
-                            "status": "empty",
-                            "empty_reason": "audio_silent",
-                            "segments_count": int(len(file_probs)),
-                            "sample_rate": int(self.sample_rate),
-                            "rms": float(rms_val),
-                            "peak": float(peak_val),
-                            "model_name": self.model_name,
-                            "emotion_labels": self.emotion_labels,
-                            "device_used": "cuda",
-                            "emotion_contract_version": EMOTION_CONTRACT_VERSION,
-                        }
-                        results.append(self._create_result(True, payload=payload, processing_time=time.time() - start_time))
-                        continue
-                else:
-                    concat = np.concatenate([w["audio"] for w in waves if w["file_id"] == file_id], axis=0) if waves else np.zeros((0,), dtype=np.float32)
-                    rms_val, peak_val = self._rms_and_peak(concat)
-                
-                # Validate emotion_labels
-                num_classes = probs.shape[1]
-                is_valid_labels, error_msg_labels = self._validate_emotion_labels(num_classes)
-                if not is_valid_labels:
-                    results.append(self._create_result(
-                        success=False,
-                        error=f"emotion_labels validation failed: {error_msg_labels}",
-                        processing_time=time.time() - start_time,
-                    ))
-                    continue
-                
-                # Compute aggregates (аналогично run_segments)
-                emotion_id = np.argmax(probs, axis=1).astype(np.int32)
-                emotion_conf = np.max(probs, axis=1).astype(np.float32)
-                mean_probs = np.mean(probs, axis=0).astype(np.float32) if probs.size else np.zeros((0,), dtype=np.float32)
-                ent = float(-np.sum(mean_probs * np.log(mean_probs + 1e-9))) if mean_probs.size else 0.0
-                dominant_id = int(np.argmax(mean_probs)) if mean_probs.size else -1
-                dominant_prob = float(np.max(mean_probs)) if mean_probs.size else 0.0
-                
-                payload: Dict[str, Any] = {
-                    "segments_count": int(len(file_probs)),
-                    "sample_rate": int(self.sample_rate),
-                    "device_used": "cuda",
-                    "rms": float(rms_val),
-                    "peak": float(peak_val),
-                    "model_name": self.model_name,
-                    "emotion_labels": self.emotion_labels,
-                    "emotion_contract_version": EMOTION_CONTRACT_VERSION,
-                }
-                
-                # Feature gating (аналогично run_segments)
-                if self.enable_probs:
-                    payload["emotion_probs"] = probs
-                if self.enable_ids:
-                    payload["emotion_id"] = emotion_id
-                if self.enable_confidence:
-                    payload["emotion_confidence"] = emotion_conf
-                if self.enable_mean_probs:
-                    payload["emotion_mean_probs"] = mean_probs
-                if self.enable_entropy:
-                    payload["emotion_entropy"] = float(ent)
-                if self.enable_dominant:
-                    payload["dominant_emotion_id"] = int(dominant_id)
-                    payload["dominant_emotion_prob"] = float(dominant_prob)
-                
-                payload["segment_start_sec"] = file_starts
-                payload["segment_end_sec"] = file_ends
-                payload["segment_center_sec"] = file_centers
-                
-                # Additional aggregates (если нужно)
-                if self.enable_ids or self.enable_confidence or self.enable_dominant:
-                    if len(emotion_id) > 1:
-                        transitions = sum(1 for i in range(len(emotion_id) - 1) if emotion_id[i] != emotion_id[i + 1])
-                        payload["emotion_transitions_count"] = int(transitions)
-                    
-                    if self.enable_dominant:
-                        emotion_duration = {}
-                        emotion_segments_count = {}
-                        total_duration = float(max(file_ends) if file_ends else 0.0)
-                        for i, emo_id in enumerate(emotion_id):
-                            emo_id_int = int(emo_id)
-                            if emo_id_int not in emotion_duration:
-                                emotion_duration[emo_id_int] = 0.0
-                                emotion_segments_count[emo_id_int] = 0
-                            seg_duration = float(file_ends[i] - file_starts[i])
-                            emotion_duration[emo_id_int] += seg_duration
-                            emotion_segments_count[emo_id_int] += 1
-                        
-                        emotion_distribution = {}
-                        if total_duration > 0:
-                            for emo_id, duration in emotion_duration.items():
-                                emotion_distribution[int(emo_id)] = float(duration / total_duration)
-                        payload["emotion_distribution"] = emotion_distribution
-                        payload["emotion_segments_per_emotion"] = {int(k): int(v) for k, v in emotion_segments_count.items()}
-                        payload["emotion_duration_per_emotion"] = {int(k): float(v) for k, v in emotion_duration.items()}
-                        
-                        if total_duration > 0:
-                            transitions_freq = float(transitions) / total_duration if transitions > 0 else 0.0
-                            stability_score = float(1.0 / (1.0 + transitions_freq))
-                            payload["emotion_stability_score"] = stability_score
-                        
-                        if mean_probs.size > 1:
-                            max_entropy = float(np.log(num_classes))
-                            diversity_score = float(ent / max_entropy) if max_entropy > 0 else 0.0
-                            payload["emotion_diversity_score"] = diversity_score
-                
-                if self.enable_quality_metrics:
-                    quality_metrics = {}
-                    if self.enable_confidence:
-                        quality_metrics["confidence_mean"] = float(np.mean(emotion_conf))
-                        quality_metrics["confidence_std"] = float(np.std(emotion_conf))
-                        quality_metrics["confidence_min"] = float(np.min(emotion_conf))
-                        quality_metrics["confidence_max"] = float(np.max(emotion_conf))
-                        quality_metrics["confidence_median"] = float(np.median(emotion_conf))
-                    if self.enable_mean_probs:
-                        quality_metrics["mean_probs_min"] = float(np.min(mean_probs))
-                        quality_metrics["mean_probs_max"] = float(np.max(mean_probs))
-                        quality_metrics["mean_probs_std"] = float(np.std(mean_probs))
-                    payload["emotion_quality_metrics"] = quality_metrics
-                
-                # Track enabled features
-                enabled_features = []
-                if self.enable_probs:
-                    enabled_features.append("probs")
-                if self.enable_ids:
-                    enabled_features.append("ids")
-                if self.enable_confidence:
-                    enabled_features.append("confidence")
-                if self.enable_mean_probs:
-                    enabled_features.append("mean_probs")
-                if self.enable_entropy:
-                    enabled_features.append("entropy")
-                if self.enable_dominant:
-                    enabled_features.append("dominant")
-                if self.enable_quality_metrics:
-                    enabled_features.append("quality_metrics")
-                
-                payload["_features_enabled"] = enabled_features
-                
-                results.append(self._create_result(
-                    success=True,
-                    payload=payload,
-                    processing_time=time.time() - start_time,
-                ))
-            
-            return results
-            
-        except Exception as e:
-            self.logger.error(f"Error in extract_batch_segments: {e}")
-            return [
-                self._create_result(
-                    success=False,
-                    error=str(e),
-                    processing_time=time.time() - start_time,
                 )
-                for _ in audio_files_with_segments
-            ]
-    
+                continue
+            try:
+                r = self.run_segments(input_uri, tmp_path, segments)
+                results.append(r)
+            except Exception as e:
+                results.append(
+                    self._create_result(
+                        success=False,
+                        error=str(e),
+                        processing_time=time.time() - start_time,
+                    )
+                )
+        return results
+
     def get_model_info(self) -> Dict[str, Any]:
         return {
             "model_size": self.model_size,

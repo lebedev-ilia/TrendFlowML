@@ -1,0 +1,2 @@
+# Dependencies for similarity_metrics module
+# Add module-specific dependencies here

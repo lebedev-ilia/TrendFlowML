@@ -13,15 +13,25 @@ from __future__ import annotations
 import os
 import sys
 import argparse
+from pathlib import Path
 from typing import Optional, List
 
-
-_PATH = os.path.dirname(os.path.dirname(os.path.dirname(__file__)))
-if _PATH not in sys.path:
-    sys.path.append(_PATH)
+# VisualProcessor must be first; prepending DataProcessor root breaks `from utils.logger`.
+_vp = str(Path(__file__).resolve().parents[2])
+if _vp not in sys.path:
+    sys.path.insert(0, _vp)
+elif sys.path[0] != _vp:
+    try:
+        sys.path.remove(_vp)
+    except ValueError:
+        pass
+    sys.path.insert(0, _vp)
+_repo_root = str(Path(_vp).parent)
+if _repo_root not in sys.path:
+    sys.path.append(_repo_root)
 
 from utils.logger import get_logger
-from micro_emotion_processor import MicroEmotionModule  # type: ignore
+from modules.micro_emotion.utils.micro_emotion_processor import MicroEmotionModule  # type: ignore
 
 
 MODULE_NAME = "micro_emotion"
@@ -34,6 +44,17 @@ def run_pipeline(
     feature_groups: str = "default",
     openface_batch_size: int = 64,
     docker_image: str = "openface/openface:latest",
+    *,
+    fps: int = 30,
+    microexpr_smoothing_sigma: float = 0.05,
+    microexpr_delta_threshold: float = 0.4,
+    microexpr_max_duration_frames: int = 15,
+    microexpr_min_peak_distance_frames: int = 6,
+    gaze_centered_threshold: float = 10.0,
+    pca_components: int = 3,
+    au_confidence_threshold: float = 0.5,
+    device: str = "cuda",
+    progress_every_frames: int = 50,
 ) -> str:
     """
     Основная логика обработки micro_emotion.
@@ -42,11 +63,20 @@ def run_pipeline(
     """
     module = MicroEmotionModule(
         rs_path=rs_path,
-        docker_image=docker_image,
-        openface_batch_size=int(openface_batch_size),
-        feature_groups=str(feature_groups),
+        fps=int(fps),
+        microexpr_smoothing_sigma=float(microexpr_smoothing_sigma),
+        microexpr_delta_threshold=float(microexpr_delta_threshold),
+        microexpr_max_duration_frames=int(microexpr_max_duration_frames),
+        microexpr_min_peak_distance_frames=int(microexpr_min_peak_distance_frames),
+        gaze_centered_threshold=float(gaze_centered_threshold),
+        pca_components=int(pca_components),
+        au_confidence_threshold=float(au_confidence_threshold),
         use_face_detection=True,
-        device="cuda",
+        docker_image=str(docker_image),
+        openface_batch_size=int(openface_batch_size),
+        device=str(device or "cuda"),
+        feature_groups=str(feature_groups),
+        progress_every_frames=int(progress_every_frames),
     )
     return module.run(frames_dir=frames_dir, config={})
 
@@ -71,6 +101,54 @@ def main(argv: Optional[List[str]] = None) -> int:
         help="Путь к директории ResultsStore (будут сохранены результаты micro_emotion)",
     )
     parser.add_argument(
+        "--fps",
+        type=int,
+        default=30,
+        help="Кадров в секунду (используется для пересчёта временных меток и окон micro-expressions)",
+    )
+    parser.add_argument(
+        "--microexpr-smoothing-sigma",
+        type=float,
+        default=0.05,
+        help="Сглаживание для micro-expressions (в секундах)",
+    )
+    parser.add_argument(
+        "--microexpr-delta-threshold",
+        type=float,
+        default=0.4,
+        help="Порог изменения интенсивности для micro-expression",
+    )
+    parser.add_argument(
+        "--microexpr-max-duration-frames",
+        type=int,
+        default=15,
+        help="Максимальная длительность micro-expression в кадрах",
+    )
+    parser.add_argument(
+        "--microexpr-min-peak-distance-frames",
+        type=int,
+        default=6,
+        help="Минимальное расстояние между пиками micro-expression в кадрах",
+    )
+    parser.add_argument(
+        "--gaze-centered-threshold",
+        type=float,
+        default=10.0,
+        help="Порог для определения взгляда в камеру (градусы)",
+    )
+    parser.add_argument(
+        "--pca-components",
+        type=int,
+        default=3,
+        help="Количество PCA компонент для AU",
+    )
+    parser.add_argument(
+        "--au-confidence-threshold",
+        type=float,
+        default=0.5,
+        help="Порог уверенности AU для флагов надёжности",
+    )
+    parser.add_argument(
         "--feature-groups",
         type=str,
         default="default",
@@ -87,6 +165,18 @@ def main(argv: Optional[List[str]] = None) -> int:
         type=str,
         default="openface/openface:latest",
         help="Docker image for OpenFace FeatureExtraction",
+    )
+    parser.add_argument(
+        "--device",
+        type=str,
+        default="cuda",
+        help="Устройство для обработки (cuda/cpu/auto)",
+    )
+    parser.add_argument(
+        "--progress-every-frames",
+        type=int,
+        default=50,
+        help="Как часто писать прогресс в state_events.jsonl (каждые N кадров)",
     )
     parser.add_argument(
         "--log-level",
@@ -114,6 +204,16 @@ def main(argv: Optional[List[str]] = None) -> int:
             feature_groups=args.feature_groups,
             openface_batch_size=args.openface_batch_size,
             docker_image=args.docker_image,
+            fps=args.fps,
+            microexpr_smoothing_sigma=args.microexpr_smoothing_sigma,
+            microexpr_delta_threshold=args.microexpr_delta_threshold,
+            microexpr_max_duration_frames=args.microexpr_max_duration_frames,
+            microexpr_min_peak_distance_frames=args.microexpr_min_peak_distance_frames,
+            gaze_centered_threshold=args.gaze_centered_threshold,
+            pca_components=args.pca_components,
+            au_confidence_threshold=args.au_confidence_threshold,
+            device=args.device,
+            progress_every_frames=args.progress_every_frames,
         )
         return 0
     except FileNotFoundError as e:

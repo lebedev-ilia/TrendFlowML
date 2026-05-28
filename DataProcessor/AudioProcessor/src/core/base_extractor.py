@@ -15,11 +15,18 @@ logger = logging.getLogger(__name__)
 def safe_log_error(logger_instance, message, *args, **kwargs):
     """Safely log an error message, catching I/O errors from closed handlers."""
     try:
-        # Try to log directly - catch all exceptions to prevent crashes
-        logger_instance.error(message, *args, **kwargs)
+        # Temporarily disable logging error reporting to prevent traceback output
+        old_raise_exceptions = logging.raiseExceptions
+        logging.raiseExceptions = False
+        try:
+            logger_instance.error(message, *args, **kwargs)
+        finally:
+            # Restore original setting
+            logging.raiseExceptions = old_raise_exceptions
     except Exception:
         # Catch ALL exceptions silently - handlers may be closed, streams may be closed,
         # or logging infrastructure may be in an invalid state during shutdown
+        # This is expected behavior during cleanup/shutdown phases
         pass
 
 

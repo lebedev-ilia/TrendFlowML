@@ -5,8 +5,14 @@
 Модуль `story_structure` анализирует структуру истории видео, вычисляя ключевые метрики повествования: **hook** (зацепка), **climax** (кульминация), **energy** (энергия) и **coherence** (связность). Это **Tier-0 baseline** модуль, который работает без локальных ML-моделей, используя только результаты core-провайдеров.
 
 ### Версия
-- **Версия модуля**: 3.0
-- **Версия схемы**: `story_structure_npz_v1`
+- **Версия модуля**: 3.0.2
+- **Версия схемы**: `story_structure_npz_v3`
+
+### Документы и проверка NPZ
+- `docs/FEATURE_DESCRIPTION.md` — ключи NPZ, табличные фичи, meta → wide CSV, melt/QA/ RU
+- `docs/FEATURES_DESCRIPTION.md` — назначение серий и скаляров
+- `docs/SCHEMA.md` — формальный контракт
+- Проверка: `utils/validate_story_structure.py` `<path>/story_structure.npz` `--struct` / `--qa` (нужен `DataProcessor/qa` на `PYTHONPATH`)
 
 ## Архитектура
 
@@ -120,11 +126,12 @@ times_s = union_timestamps_sec[frame_indices]
     "min_frames": 30,               # Fail-fast минимум кадров (N)
     "max_frames": 200,              # Максимальное число кадров (fail-fast лимит)
     "energy_smoothing_sigma": 1.0,  # Sigma для гауссова сглаживания
-    # Text (baseline v1): OCR -> CLIP text (triton). If OCR is missing/empty -> status=empty.
-    "text_mode": "ocr_clip_text",    # none|ocr_clip_text
+    # Text (baseline): OCR -> CLIP text (triton). If OCR is missing/empty -> topic_shift_curve_present=false (module still status=ok).
+    "text_mode": "none",             # none|ocr_clip_text
     "clip_text_model_spec": "clip_text_triton",
     "clip_text_batch_size": 64,
     "ocr_max_chars_per_frame": 256,
+    "triton_http_url": None,        # Triton HTTP URL (или использовать TRITON_HTTP_URL env var)
     # legacy / compat
     "subtitles": None,               # legacy only (moved to legacy_story_structure.py)
     "clip_model": None,
@@ -159,6 +166,7 @@ result_store/<platform_id>/<video_id>/<run_id>/story_structure/story_structure.n
 | `motion_norm_per_sec_mean` | `(N,) float32` | Кривая движения (нормализована на секунду) |
 | `any_face_present` | `(N,) bool` | Наличие лиц в кадрах |
 | `story_energy_curve` | `(N,) float32` | Основная кривая энергии (z-score) |
+| `frame_feature_present_ratio` | `(N,) float32` | Доля finite среди model-facing float кривых (energy/motion/emb_rate/topic_shift) |
 | `story_energy_curve_downsampled_128` | `(128,) float32` | Downsampled версия (128 точек) |
 | `story_energy_peaks_idx` | `(P,) int32` | Индексы пиков `story_energy_curve` (в терминах N) |
 | `story_energy_peaks_times_s` | `(P,) float32` | Времена пиков энергии (сек) |
@@ -167,12 +175,12 @@ result_store/<platform_id>/<video_id>/<run_id>/story_structure/story_structure.n
 | `topic_shift_curve_present` | `bool` | Есть ли текстовые точки (OCR) для topic_shift_curve |
 | `topic_shift_peaks_idx` | `(Q,) int32` | Пики topic shift (индексы в терминах N) |
 
-#### Словарь `features` (object)
+#### Табличные скалярные фичи (`feature_names` / `feature_values`)
 
-**Общая информация:**
-- `n_frames`: количество обработанных кадров
-- `max_frames`: лимит кадров
-- `video_length_seconds`: длина видео в секундах
+Вместо object‑dict модуль сохраняет фиксированную таблицу:
+
+- `feature_names (F,) object`
+- `feature_values (F,) float32` (0/1 для bool)
 
 **Hook метрики:**
 - `hook_visual_surprise_score`: среднее энергии на hook
@@ -184,17 +192,16 @@ result_store/<platform_id>/<video_id>/<run_id>/story_structure/story_structure.n
 - `hook_face_presence`: доля кадров с лицами
 
 **Climax метрики:**
-- `climax_timestamp`: индекс кадра кульминации (union-domain)
+- `climax_frame_index`: индекс кадра кульминации (union-domain frame index)
 - `climax_time_sec`: время кульминации (секунды)
 - `climax_position_normalized`: позиция в [0, 1]
-- `climax_strength`: сила (raw)
-- `climax_strength_normalized`: сила (z-score)
+- `climax_strength`: сила (raw, из combined_s)
+- `climax_strength_normalized`: сила (z-score, из story_energy_curve)
 - `number_of_peaks`: количество пиков энергии
 
 **Text (OCR -> CLIP text):**
 - `topic_shift_curve_present`: bool
 - `topic_shift_peaks_count`: int
-- `clip_text_model_spec`: str
 - `time_from_hook_to_climax`: нормализованное время от hook до climax
 - `hook_to_avg_energy_ratio`: отношение энергии hook к средней
 
@@ -203,17 +210,22 @@ result_store/<platform_id>/<video_id>/<run_id>/story_structure/story_structure.n
 - `speaker_switch_rate`: частота переключений
 - `speaker_switches_per_minute`: переключения в минуту
 
+**Trace/debugging:**
+- `core_face_landmarks_empty_reason`: причина empty для core_face_landmarks (если доступна)
+- `ocr_empty_reason`: причина отсутствия OCR (если доступна)
+
 #### Метаданные (`meta`, object)
 
 Стандартные поля BaseModule:
 - `producer`: "story_structure"
-- `producer_version`: "3.0"
-- `schema_version`: "story_structure_npz_v1"
+- `producer_version`: "3.0.2"
+- `schema_version`: "story_structure_npz_v3"
 - `created_at`: ISO timestamp
-- `status`: "ok" | "empty"
-- `empty_reason`: причина empty (если `status="empty"`)
+- `status`: "ok"
+- `empty_reason`: `null`
 - `models_used`: список использованных моделей (из зависимостей)
 - `model_signature`: хеш моделей
+- `stage_timings_ms`: timings по стадиям (dict)
 - Run identity keys: `platform_id`, `video_id`, `run_id`, и т.д.
 
 ## Зависимости
@@ -469,7 +481,7 @@ Render-context может быть использован:
 
 **HTML debug страница** (опционально):
 - Путь: `result_store/.../story_structure/_render/render.html`
-- Содержит интерактивные графики (Chart.js):
+- Содержит offline SVG графики (без CDN):
   - Timeline: story energy, motion, embedding change rate по времени с отмеченными hook window и climax
   - Markers: информация о hook window и climax
   - Peaks: список всех обнаруженных пиков энергии

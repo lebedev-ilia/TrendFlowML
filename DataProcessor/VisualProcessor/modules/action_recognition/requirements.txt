@@ -1,0 +1,2 @@
+# Dependencies for action_recognition module
+# Add module-specific dependencies here

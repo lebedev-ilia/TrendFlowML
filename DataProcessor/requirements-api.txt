@@ -1,0 +1,56 @@
+# Requirements для DataProcessor API
+#
+# Этот файл содержит зависимости для API модуля DataProcessor.
+# Ссылка: DataProcessor/docs/DATAPROCESSOR_API_ARCHITECTURE.md (строка 1852-1862)
+#
+# Установка:
+#   pip install -r requirements-api.txt
+
+# FastAPI и веб-сервер
+fastapi>=0.104.0
+uvicorn[standard]>=0.24.0
+
+# Валидация данных
+pydantic>=2.0.0
+pydantic-settings>=2.0.0
+
+# HTTP клиент (для будущей интеграции с backend)
+httpx>=0.25.0
+
+# Загрузка файлов
+python-multipart>=0.0.6
+
+# Server-Sent Events (для стриминга событий в Этапе 3)
+sse-starlette>=1.6.5
+
+# Метрики Prometheus (для мониторинга в Этапе 3)
+prometheus-client>=0.19.0
+
+# JSON логирование (опционально, для production)
+python-json-logger>=2.0.7
+
+# Redis клиент (для очередей и кэширования в Этапе 2)
+redis[asyncio]>=5.0.0
+
+# Мониторинг ресурсов (опционально, для memory monitoring)
+psutil>=5.9.0
+
+# Rate limiting (для Этапа 4)
+slowapi>=0.1.9
+
+# OpenTelemetry для distributed tracing (для Этапа 6 - Мониторинг)
+opentelemetry-api>=1.21.0
+opentelemetry-sdk>=1.21.0
+opentelemetry-instrumentation-fastapi>=0.42b0
+opentelemetry-instrumentation-httpx>=0.42b0
+opentelemetry-exporter-jaeger>=1.21.0
+opentelemetry-exporter-otlp>=1.21.0
+
+# Зависимости из основного проекта (если нужны)
+# Эти зависимости уже должны быть установлены в окружении DataProcessor
+# но перечислены здесь для полноты:
+# - storage модули (storage/base.py, storage/fs.py, storage/s3.py)
+# - state модули (state/managers.py, state/enums.py)
+# - numpy (для работы с NPZ файлами)
+# - PyYAML (для сохранения profile_config в YAML файл, используется в Этапе 1.5)
+

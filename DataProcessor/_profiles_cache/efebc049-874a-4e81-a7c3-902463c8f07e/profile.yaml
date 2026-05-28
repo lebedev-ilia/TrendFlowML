@@ -1,0 +1,14 @@
+config_hash: ingestion-e2e-segmenter-audio-smoke
+processors:
+  segmenter:
+    enabled: true
+    required: true
+  audio:
+    enabled: true
+    required: false
+  text:
+    enabled: false
+    required: false
+  visual:
+    enabled: false
+    required: false

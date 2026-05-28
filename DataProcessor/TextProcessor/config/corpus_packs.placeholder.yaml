@@ -1,0 +1,27 @@
+# Placeholder registry for Audit v3 corpus / FAISS packs (TextProcessor).
+# Replace paths and versions before declaring model_facing signals for pack-dependent extractors.
+# See: DataProcessor/docs/audit_v3/TEXTPROCESSOR_AUDIT_V3_PREFLIGHT_RULES.md §7
+
+schema: text_corpus_packs_placeholder_v1
+
+packs:
+  similar_titles_faiss:
+    status: placeholder
+    pack_version: "unresolved"
+    pack_digest: "unresolved"
+    uri_or_path: "TBD"
+    notes: "topk_similar_titles_extractor — time-frozen corpus + anti-leverage policy TBD."
+
+  title_embedding_cluster_reference:
+    status: placeholder
+    pack_version: "unresolved"
+    pack_digest: "unresolved"
+    uri_or_path: "TBD"
+    notes: "title_embedding_cluster_entropy_extractor — reference partition TBD."
+
+  semantic_cluster_taxonomy:
+    status: placeholder
+    pack_version: "unresolved"
+    pack_digest: "unresolved"
+    uri_or_path: "TBD"
+    notes: "semantic_cluster_extractor — optional taxonomy / cluster priors TBD."

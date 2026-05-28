@@ -13,7 +13,12 @@ from pydantic import BaseModel, Field
 
 from ..config.settings import EmbeddingServiceConfig
 from ..core.embedding_manager import EmbeddingManager
-from ..core.errors import EmbeddingNotFoundError, EmbeddingServiceError, InvalidCategoryError
+from ..core.errors import (
+    EmbeddingExtractionError,
+    EmbeddingNotFoundError,
+    EmbeddingServiceError,
+    InvalidCategoryError,
+)
 
 
 class AddObjectRequest(BaseModel):
@@ -65,6 +70,21 @@ def create_app(config: Optional[EmbeddingServiceConfig] = None) -> FastAPI:
 
     # Initialize embedding manager
     manager = EmbeddingManager(config)
+    _startup_logger = __import__("logging").getLogger(__name__)
+
+    @app.on_event("startup")
+    def _warmup_face_insightface():
+        """
+        Первый запрос /search?category=face тянет InsightFace+ONNX (десятки секунд на CPU);
+        иначе клиенты (face_identity) ловят read timeout. Прогрев — один 112-чип.
+        """
+        try:
+            m = manager._get_manager("face")
+            # Серый 112x112 BGR: не требуется реальное лицо, только init onnxruntime+модели
+            chip = np.full((112, 112, 3), 128, dtype=np.uint8)
+            m.extract_embedding(chip)
+        except Exception as e:
+            _startup_logger.warning("Embedding Service startup warmup (face) skipped: %s", e)
 
     @app.on_event("shutdown")
     async def shutdown_event():
@@ -298,6 +318,10 @@ def create_app(config: Optional[EmbeddingServiceConfig] = None) -> FastAPI:
         except InvalidCategoryError as e:
             logger.error(f"InvalidCategoryError in /search: {e}")
             raise HTTPException(status_code=400, detail=str(e))
+        except EmbeddingExtractionError as e:
+            # Нет эмбеддинга по кадру (нет лица / битая картинка) — не 500
+            logger.warning(f"EmbeddingExtractionError in /search: {e}")
+            raise HTTPException(status_code=400, detail=str(e))
         except EmbeddingServiceError as e:
             logger.error(f"EmbeddingServiceError in /search: {e}", exc_info=True)
             raise HTTPException(status_code=500, detail=str(e))
@@ -354,6 +378,41 @@ def create_app(config: Optional[EmbeddingServiceConfig] = None) -> FastAPI:
             
             return {"embeddings": result, "count": len(result)}
 
+        except InvalidCategoryError as e:
+            raise HTTPException(status_code=400, detail=str(e))
+        except EmbeddingServiceError as e:
+            raise HTTPException(status_code=500, detail=str(e))
+        except Exception as e:
+            raise HTTPException(status_code=500, detail=f"Internal error: {e}")
+
+    @app.get("/categories/{category}/labels")
+    async def get_category_labels(
+        category: str,
+        embedding_model: Optional[str] = None,
+    ):
+        """
+        Get label-space metadata for a category (WITHOUT embedding vectors).
+
+        This is used by semantic heads (brand/car/place/face identity) to build
+        a deterministic UUID->int32 mapping and compute db_digest, without
+        transferring heavy embeddings.
+        """
+        try:
+            labels = manager.get_labels(category, embedding_model)
+
+            # Ensure JSON-serializable types (uuid/datetime)
+            out = []
+            for row in labels:
+                r = dict(row)
+                if r.get("id") is not None:
+                    r["id"] = str(r["id"])
+                if r.get("added_at") is not None:
+                    r["added_at"] = str(r["added_at"])
+                if r.get("updated_at") is not None:
+                    r["updated_at"] = str(r["updated_at"])
+                out.append(r)
+
+            return {"labels": out, "count": len(out)}
         except InvalidCategoryError as e:
             raise HTTPException(status_code=400, detail=str(e))
         except EmbeddingServiceError as e:

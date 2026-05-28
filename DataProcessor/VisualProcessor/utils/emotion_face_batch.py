@@ -136,7 +136,23 @@ def _load_emonet_model(config: Dict[str, Any]) -> Any:
     
     # Fallback to explicit path
     if emo_path:
-        from models.emonet.emonet.models.emonet import EmoNet
+        import importlib.util
+        # dp_models/emonet/emonet/models/emonet.py
+        # Find DataProcessor root: utils/ -> VisualProcessor/ -> DataProcessor/
+        utils_dir = os.path.dirname(__file__)
+        data_processor_root = os.path.abspath(os.path.join(utils_dir, "..", ".."))
+        emonet_py = os.path.join(data_processor_root, "dp_models", "emonet", "emonet", "models", "emonet.py")
+        if not os.path.isfile(emonet_py):
+            raise RuntimeError(f"EmoNet source file not found: {emonet_py}")
+        spec = importlib.util.spec_from_file_location("_dp_vendor_emonet", emonet_py)
+        if spec is None or spec.loader is None:
+            raise RuntimeError("Failed to create import spec for EmoNet")
+        mod = importlib.util.module_from_spec(spec)
+        spec.loader.exec_module(mod)
+        EmoNet = getattr(mod, "EmoNet", None)
+        if EmoNet is None:
+            raise RuntimeError("EmoNet class not found in vendored emonet.py")
+        
         state = torch.load(str(emo_path), map_location="cpu")
         if isinstance(state, dict):
             state = {str(k).replace("module.", ""): v for k, v in state.items()}

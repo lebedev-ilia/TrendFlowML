@@ -47,7 +47,7 @@ class TranscriptChunkEmbedder(BaseExtractor):
     - Valid empty semantics (NaNs + *_present flags)
     """
 
-    VERSION = "1.2.0"
+    VERSION = "1.3.0"
 
     _SENT_SPLIT_RE = re.compile(r"(?<=[.!?])\s+")
 
@@ -219,8 +219,16 @@ class TranscriptChunkEmbedder(BaseExtractor):
                     text = " ".join(parts).strip()
                     if text:
                         out["whisper"] = text
+            # Audit v3 policy: if doc.asr.segments is missing (token-only path), allow fallback to decoded transcript text.
+            # DataProcessor can provide transcripts_token_ids["whisper"], which VideoDocument may decode into doc.transcripts["whisper"].
+            if "whisper" not in out:
+                transcripts_dict = getattr(doc, "transcripts", {}) or {}
+                if isinstance(transcripts_dict, dict) and transcripts_dict.get("whisper"):
+                    t3 = normalize_whitespace(transcripts_dict.get("whisper", ""))
+                    if t3:
+                        out["whisper"] = t3
             if self.require_asr and "whisper" not in out:
-                raise RuntimeError("TranscriptChunkEmbedder: require_asr=True but doc.asr.segments is missing/empty")
+                raise RuntimeError("TranscriptChunkEmbedder: require_asr=True but no ASR transcript is available (asr.segments or transcripts['whisper'])")
 
         if self.use_youtube_auto:
             transcripts_dict = getattr(doc, "transcripts", {}) or {}
@@ -500,6 +508,60 @@ class TranscriptChunkEmbedder(BaseExtractor):
                 pass
             total_bytes -= int(b)
 
+    def _build_features_flat(self, results_by_source: Dict[str, Any]) -> Dict[str, float]:
+        """
+        Stable 16-key features_flat for all branches. When emit_extra_metrics is False,
+        the five tuning fields are NaN (keys still present). When emit_confidence_metrics
+        is False, confidence scalars are zero / NaN.
+        """
+        features_flat: Dict[str, float] = {
+            "tp_tchunk_present": 1.0 if results_by_source else 0.0,
+            "tp_tchunk_sources_count": float(len(results_by_source)),
+            "tp_tchunk_whisper_present": 1.0 if ("whisper" in results_by_source) else 0.0,
+            "tp_tchunk_youtube_auto_present": 1.0 if ("youtube_auto" in results_by_source) else 0.0,
+            "tp_tchunk_whisper_chunks": float(
+                results_by_source.get("whisper", {}).get("n_chunks", 0) if isinstance(results_by_source.get("whisper"), dict) else 0
+            ),
+            "tp_tchunk_youtube_chunks": float(
+                results_by_source.get("youtube_auto", {}).get("n_chunks", 0)
+                if isinstance(results_by_source.get("youtube_auto"), dict)
+                else 0
+            ),
+            "tp_tchunk_embedding_dim": float(
+                results_by_source.get("whisper", {}).get("embedding_dim", float("nan"))
+                if isinstance(results_by_source.get("whisper"), dict)
+                else (
+                    results_by_source.get("youtube_auto", {}).get("embedding_dim", float("nan"))
+                    if isinstance(results_by_source.get("youtube_auto"), dict)
+                    else float("nan")
+                )
+            ),
+        }
+        if self.emit_confidence_metrics:
+            wd = results_by_source.get("whisper") if isinstance(results_by_source.get("whisper"), dict) else {}
+            features_flat["tp_tchunk_conf_present"] = float(wd.get("conf_present", 0.0) or 0.0)
+            features_flat["tp_tchunk_conf_mean"] = float(wd.get("conf_mean", float("nan")))
+            features_flat["tp_tchunk_conf_min"] = float(wd.get("conf_min", float("nan")))
+            features_flat["tp_tchunk_conf_max"] = float(wd.get("conf_max", float("nan")))
+        else:
+            features_flat["tp_tchunk_conf_present"] = 0.0
+            features_flat["tp_tchunk_conf_mean"] = float("nan")
+            features_flat["tp_tchunk_conf_min"] = float("nan")
+            features_flat["tp_tchunk_conf_max"] = float("nan")
+        if self.emit_extra_metrics:
+            features_flat["tp_tchunk_batch_size"] = float(int(self.batch_size))
+            features_flat["tp_tchunk_max_chunk_tokens_model"] = float(int(self.max_chunk_tokens_model))
+            features_flat["tp_tchunk_overlap_ratio"] = float(self.overlap_ratio)
+            features_flat["tp_tchunk_max_chunks_total"] = float(int(self.max_chunks_total))
+            features_flat["tp_tchunk_cache_enabled"] = 1.0 if self.cache_enabled else 0.0
+        else:
+            features_flat["tp_tchunk_batch_size"] = float("nan")
+            features_flat["tp_tchunk_max_chunk_tokens_model"] = float("nan")
+            features_flat["tp_tchunk_overlap_ratio"] = float("nan")
+            features_flat["tp_tchunk_max_chunks_total"] = float("nan")
+            features_flat["tp_tchunk_cache_enabled"] = float("nan")
+        return features_flat
+
     def extract(self, doc: VideoDocument) -> Dict[str, Any]:
         started = time.perf_counter()
         sys_before = system_snapshot()
@@ -512,6 +574,9 @@ class TranscriptChunkEmbedder(BaseExtractor):
             return {
                 "device": self.device,
                 "version": self.VERSION,
+                "model_name": self.model_name,
+                "model_version": str(self.model_version),
+                "weights_digest": self.weights_digest,
                 "system": {
                     "pre_init": self._init_metrics.get("pre_init"),
                     "post_init": self._init_metrics.get("post_init"),
@@ -522,21 +587,7 @@ class TranscriptChunkEmbedder(BaseExtractor):
                     },
                 },
                 "timings_s": {"total": 0.0},
-                "result": {
-                    "features_flat": {
-                        "tp_tchunk_present": 0.0,
-                        "tp_tchunk_sources_count": 0.0,
-                        "tp_tchunk_whisper_present": 0.0,
-                        "tp_tchunk_youtube_auto_present": 0.0,
-                        "tp_tchunk_whisper_chunks": 0.0,
-                        "tp_tchunk_youtube_chunks": 0.0,
-                        "tp_tchunk_embedding_dim": float("nan"),
-                        "tp_tchunk_conf_present": 0.0,
-                        "tp_tchunk_conf_mean": float("nan"),
-                        "tp_tchunk_conf_min": float("nan"),
-                        "tp_tchunk_conf_max": float("nan"),
-                    }
-                },
+                "result": {"features_flat": self._build_features_flat({})},
                 "error": None,
             }
 
@@ -683,50 +734,14 @@ class TranscriptChunkEmbedder(BaseExtractor):
             self._gpu_used_mb(sys_after),
         )
 
-        features_flat = {
-            "tp_tchunk_present": 1.0,
-            "tp_tchunk_sources_count": float(len(results_by_source)),
-            "tp_tchunk_whisper_present": 1.0 if ("whisper" in results_by_source) else 0.0,
-            "tp_tchunk_youtube_auto_present": 1.0 if ("youtube_auto" in results_by_source) else 0.0,
-            "tp_tchunk_whisper_chunks": float(
-                results_by_source.get("whisper", {}).get("n_chunks", 0) if isinstance(results_by_source.get("whisper"), dict) else 0
-            ),
-            "tp_tchunk_youtube_chunks": float(
-                results_by_source.get("youtube_auto", {}).get("n_chunks", 0) if isinstance(results_by_source.get("youtube_auto"), dict) else 0
-            ),
-            "tp_tchunk_embedding_dim": float(
-                results_by_source.get("whisper", {}).get("embedding_dim", float("nan"))
-                if isinstance(results_by_source.get("whisper"), dict)
-                else (
-                    results_by_source.get("youtube_auto", {}).get("embedding_dim", float("nan"))
-                    if isinstance(results_by_source.get("youtube_auto"), dict)
-                    else float("nan")
-                )
-            ),
-        }
-        if self.emit_confidence_metrics:
-            # confidence metrics only make sense for ASR-derived chunks (whisper)
-            wd = results_by_source.get("whisper") if isinstance(results_by_source.get("whisper"), dict) else {}
-            features_flat["tp_tchunk_conf_present"] = float(wd.get("conf_present", 0.0) or 0.0)
-            features_flat["tp_tchunk_conf_mean"] = float(wd.get("conf_mean", float("nan")))
-            features_flat["tp_tchunk_conf_min"] = float(wd.get("conf_min", float("nan")))
-            features_flat["tp_tchunk_conf_max"] = float(wd.get("conf_max", float("nan")))
-        else:
-            features_flat["tp_tchunk_conf_present"] = 0.0
-            features_flat["tp_tchunk_conf_mean"] = float("nan")
-            features_flat["tp_tchunk_conf_min"] = float("nan")
-            features_flat["tp_tchunk_conf_max"] = float("nan")
-        if self.emit_extra_metrics:
-            features_flat["tp_tchunk_batch_size"] = float(int(self.batch_size))
-            features_flat["tp_tchunk_max_chunk_tokens_model"] = float(int(self.max_chunk_tokens_model))
-            features_flat["tp_tchunk_overlap_ratio"] = float(self.overlap_ratio)
-            features_flat["tp_tchunk_max_chunks_total"] = float(int(self.max_chunks_total))
-            features_flat["tp_tchunk_cache_enabled"] = 1.0 if self.cache_enabled else 0.0
+        features_flat = self._build_features_flat(results_by_source)
 
         return {
             "device": self.device,
             "version": self.VERSION,
+            "model_name": self.model_name,
             "model_version": str(self.model_version),
+            "weights_digest": self.weights_digest,
             "system": {
                 "pre_init": self._init_metrics.get("pre_init"),
                 "post_init": self._init_metrics.get("post_init"),
@@ -752,7 +767,6 @@ class TranscriptChunkEmbedder(BaseExtractor):
         encode in batches, then distribute back per-document.
         """
         import time
-        from collections import defaultdict
 
         started = time.perf_counter()
         sys_before = system_snapshot()
@@ -842,6 +856,9 @@ class TranscriptChunkEmbedder(BaseExtractor):
                 results.append({
                     "device": self.device,
                     "version": self.VERSION,
+                    "model_name": self.model_name,
+                    "model_version": str(self.model_version),
+                    "weights_digest": self.weights_digest,
                     "system": {
                         "pre_init": self._init_metrics.get("pre_init"),
                         "post_init": self._init_metrics.get("post_init"),
@@ -852,21 +869,7 @@ class TranscriptChunkEmbedder(BaseExtractor):
                         },
                     },
                     "timings_s": {"total": round(total_s, 3)},
-                    "result": {
-                        "features_flat": {
-                            "tp_tchunk_present": 0.0,
-                            "tp_tchunk_sources_count": 0.0,
-                            "tp_tchunk_whisper_present": 0.0,
-                            "tp_tchunk_youtube_auto_present": 0.0,
-                            "tp_tchunk_whisper_chunks": 0.0,
-                            "tp_tchunk_youtube_chunks": 0.0,
-                            "tp_tchunk_embedding_dim": float("nan"),
-                            "tp_tchunk_conf_present": 0.0,
-                            "tp_tchunk_conf_mean": float("nan"),
-                            "tp_tchunk_conf_min": float("nan"),
-                            "tp_tchunk_conf_max": float("nan"),
-                        }
-                    },
+                    "result": {"features_flat": self._build_features_flat({})},
                     "error": None,
                 })
                 continue
@@ -946,42 +949,7 @@ class TranscriptChunkEmbedder(BaseExtractor):
                 self._gpu_used_mb(sys_after),
             )
 
-            features_flat = {
-                "tp_tchunk_present": 1.0 if results_by_source else 0.0,
-                "tp_tchunk_sources_count": float(len(results_by_source)),
-                "tp_tchunk_whisper_present": 1.0 if ("whisper" in results_by_source) else 0.0,
-                "tp_tchunk_youtube_auto_present": 1.0 if ("youtube_auto" in results_by_source) else 0.0,
-                "tp_tchunk_whisper_chunks": float(
-                    results_by_source.get("whisper", {}).get("n_chunks", 0) if isinstance(results_by_source.get("whisper"), dict) else 0
-                ),
-                "tp_tchunk_youtube_chunks": float(
-                    results_by_source.get("youtube_auto", {}).get("n_chunks", 0) if isinstance(results_by_source.get("youtube_auto"), dict) else 0
-                ),
-                "tp_tchunk_embedding_dim": float(
-                    results_by_source.get("whisper", {}).get("embedding_dim", float("nan"))
-                    if isinstance(results_by_source.get("whisper"), dict)
-                    else (results_by_source.get("youtube_auto", {}).get("embedding_dim", float("nan")) if isinstance(results_by_source.get("youtube_auto"), dict) else float("nan"))
-                ),
-            }
-
-            # Confidence metrics (from whisper if available)
-            wd = results_by_source.get("whisper", {})
-            if isinstance(wd, dict) and wd.get("conf_present", 0.0) > 0.5:
-                features_flat["tp_tchunk_conf_present"] = float(wd.get("conf_present", 0.0) or 0.0)
-                features_flat["tp_tchunk_conf_mean"] = float(wd.get("conf_mean", float("nan")))
-                features_flat["tp_tchunk_conf_min"] = float(wd.get("conf_min", float("nan")))
-                features_flat["tp_tchunk_conf_max"] = float(wd.get("conf_max", float("nan")))
-            else:
-                features_flat["tp_tchunk_conf_present"] = 0.0
-                features_flat["tp_tchunk_conf_mean"] = float("nan")
-                features_flat["tp_tchunk_conf_min"] = float("nan")
-                features_flat["tp_tchunk_conf_max"] = float("nan")
-
-            features_flat["tp_tchunk_batch_size"] = float(int(self.batch_size))
-            features_flat["tp_tchunk_max_chunk_tokens_model"] = float(int(self.max_chunk_tokens_model))
-            features_flat["tp_tchunk_overlap_ratio"] = float(self.overlap_ratio)
-            features_flat["tp_tchunk_max_chunks_total"] = float(int(self.max_chunks_total))
-            features_flat["tp_tchunk_cache_enabled"] = 1.0 if self.cache_enabled else 0.0
+            features_flat = self._build_features_flat(results_by_source)
 
             results.append({
                 "device": self.device,

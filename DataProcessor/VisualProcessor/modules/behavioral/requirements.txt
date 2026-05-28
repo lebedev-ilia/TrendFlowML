@@ -1,0 +1,2 @@
+# Dependencies for behavioral module
+# Add module-specific dependencies here

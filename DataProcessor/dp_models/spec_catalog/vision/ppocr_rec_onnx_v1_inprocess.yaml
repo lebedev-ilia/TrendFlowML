@@ -1,0 +1,20 @@
+model_name: ppocr_rec_onnx_v1_inprocess
+model_version: "v1"
+role: ocr_recognizer
+runtime: inprocess
+engine: onnxruntime_onnx
+precision: fp32
+device_policy: auto
+weights_digest: auto
+local_artifacts:
+  # NOTE: model pack is intentionally local-only (no-network). Put files under DP_MODELS_ROOT.
+  - path: bundled_models/visual/ocr/ppocr_rec_onnx_v1/model.onnx
+    kind: file
+  - path: bundled_models/visual/ocr/ppocr_rec_onnx_v1/dict.txt
+    kind: file
+runtime_params:
+  # Select which declared local artifact is the ONNX model.
+  onnx_model_relpath: bundled_models/visual/ocr/ppocr_rec_onnx_v1/model.onnx
+  # Providers are auto-selected by provider based on device + available EPs.
+
+

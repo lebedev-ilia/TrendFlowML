@@ -1,5 +1,7 @@
 ## Component: `car_semantics` (semantic head, v1)
 
+**Описание фич / melt / QA:** `docs/FEATURE_DESCRIPTION.md` · `utils/validate_car_semantics.py`
+
 ### Назначение
 
 `car_semantics` распознает автомобили в видео:
@@ -224,20 +226,47 @@ POST http://localhost:8001/objects/batch_add
 
 **Artifact filename**: `car_semantics.npz` (фиксированное имя, `ARTIFACT_FILENAME`)
 
-**Schema version**: `car_semantics_npz_v1`
+**Schema version**: `car_semantics_npz_v2`
 
-Ключи (v1):
+Контракт (Audit v3, semantic-head v1):
+- **K фиксирован**: `K=5`
+- **No threshold gating**: `top‑K` не режется порогами (порог используется только для `*_is_confident_top1`)
+- **NaN/-1 policy**: `*_topk_scores = NaN` если нет значения, `*_topk_ids = -1` если нет id
+- **Deterministic label-space**: label-space фиксируется через `GET /categories/car/labels` и хешируется в `meta.db_digest`
+
+Ключи (v2):
 - `frame_indices (N,) int32`
 - `times_s (N,) float32`
-- `track_ids (T,) int32` - ID треков
-- `track_topk_car_ids (T, 3) int32` - Top‑3 автомобилей на трек
-- `track_topk_scores (T, 3) float32` - Similarity scores
-- `track_topk_makes (T, 3) str` - Make для top‑3
-- `track_topk_models (T, 3) str` - Model для top‑3
-- `track_topk_segments (T, 3) str` - Segment для top‑3
-- `frame_topk_car_ids (N, 3) int32` - Top‑3 автомобилей на кадр
-- `frame_topk_scores (N, 3) float32` - Similarity scores
-- `meta` (object dict): статус + информация о базе автомобилей + models_used
+
+- `semantic_label_names (A,) str`: `"int:name"` (int стабилен в пределах `db_digest`)
+- `semantic_object_ids (A,) str`: UUID из Embedding Service, aligned с `semantic_label_names`
+- `threshold_per_label_arr (A,) float32`: per-label threshold (сейчас NaN)
+- `semantic_label_make (A,) str` *(analytics)*: best-effort make parsed из `name` (dev-only)
+- `semantic_label_model (A,) str` *(analytics)*: best-effort model parsed из `name` (dev-only)
+
+- `track_ids (T,) int32` *(surrogate ids; в Audit v3 tracking upstream удалён)*
+- `track_present_mask (T,) bool`
+- `track_topk_ids (T, K) int32`
+- `track_topk_scores (T, K) float32`
+- `track_is_confident_top1 (T,) bool`
+
+- `frame_topk_ids (N, K) int32`
+- `frame_topk_scores (N, K) float32`
+- `frame_is_confident_top1 (N,) bool`
+
+- `det_present_mask (N, M) bool`
+- `det_topk_ids (N, M, K) int32`
+- `det_topk_scores (N, M, K) float32`
+- `det_is_confident_top1 (N, M) bool`
+
+- QA/debug helpers:
+  - `track_best_frame_pos (T,) int32`
+  - `track_best_det_idx (T,) int32`
+  - `track_best_bbox_xyxy (T, 4) float32`
+  - `track_best_det_score (T,) float32`
+  - `track_best_class_id (T,) int32`
+
+- `meta` (object dict) + `meta_json () str`
 
 **Meta обязательные поля** (baseline contract):
 - `producer`, `producer_version`, `schema_version`, `created_at`
@@ -252,28 +281,19 @@ POST http://localhost:8001/objects/batch_add
   - `saving`: сохранение артефакта
   - `total`: общее время выполнения
 
-### Early validation (Embedding Service)
+### Early validation (Embedding Service / DB)
 
-Компонент выполняет **раннюю проверку доступности Embedding Service**:
-- Проверка health endpoint через `embedding_client._ensure_url()`
-- Тестовый запрос с первым треком (dummy image) для проверки работоспособности search endpoint
-- Если тест не проходит (например, 500 ошибка):
-  - Выдается одно предупреждение вместо множества ошибок
-  - Пропускается обработка всех треков
-  - Заполняются пустые результаты вместо обработки с ошибками
-- Если тест проходит — продолжается обычная обработка
-
-**Преимущества**:
-- Fail-fast: проблемы обнаруживаются до начала обработки всех треков
-- Улучшенный UX: одно предупреждение вместо сотен ошибок
-- Экономия ресурсов: не тратится время на обработку, которая все равно завершится ошибкой
+Компонент выполняет **fail-fast** проверки до обработки:
+- Embedding Service доступен (`/health`)
+- label-space не пустой: `GET /categories/car/labels` возвращает `count>0`
+- строится `db_digest` (SHA256) по label-space metadata (детерминизм + воспроизводимость)
 
 ### No-fallback
 
-- Если Embedding Service недоступен при инициализации → **error** (fail-fast)
-- Если Embedding Service недоступен во время обработки → компонент пропускает все треки с предупреждением
+- Если Embedding Service недоступен → **error** (fail-fast)
+- Если категория `car` пустая → **error** (fail-fast)
 - Если нет `core_object_detections` → **error**
-- Если автомобиль не найден → возвращает пустой результат (не error)
+- Если нет валидных `car` proposals → `status=empty` + `empty_reason="no_car_proposals"`
 
 ### Использование
 
@@ -284,8 +304,8 @@ python main.py \
     --frames-dir /path/to/frames \
     --rs-path /path/to/result_store \
     --embedding-service-url http://localhost:8001 \
-    --topk 3 \
-    --similarity-threshold 0.65 \
+    --topk 5 \
+    --confidence-threshold-top1 0.65 \
     --max-tracks 50 \
     --max-dets-per-frame 3 \
     --pad-ratio 0.15 \
@@ -297,12 +317,14 @@ python main.py \
 - `--frames-dir` (required): Директория с кадрами и `metadata.json`
 - `--rs-path` (required): Путь к result store (например, `result_store/platform/video/run`)
 - `--embedding-service-url` (optional): URL Embedding Service (по умолчанию: `http://localhost:8001` или из `EMBEDDING_SERVICE_URL`)
-- `--topk` (optional): Количество топ результатов (по умолчанию: `3`)
-- `--similarity-threshold` (optional): Минимальный порог similarity (по умолчанию: `0.0`, диапазон: `0.0-1.0`)
+- `--topk`: **фиксирован** контрактом (`5`)
+- `--similarity-threshold`: **DEPRECATED** (используется только как fallback для `--confidence-threshold-top1`)
+- `--confidence-threshold-top1`: threshold для `*_is_confident_top1` (не режет `top‑K`)
 - `--max-tracks` (optional): Максимальное количество треков для обработки (cost control)
 - `--max-dets-per-frame` (optional): Максимальное количество детекций на кадр (cost control)
 - `--pad-ratio` (optional): Коэффициент паддинга для кропов (по умолчанию: `0.15` = 15% с каждой стороны)
 - `--use-sharpness` (optional): Использовать метрику резкости для выбора лучшего кропа
+- `--proposal-classes`: proposals из taxonomy `core_object_detections` (default: `car`)
 
 #### Примеры использования:
 
@@ -493,30 +515,32 @@ RuntimeError: car_semantics | All X tracks failed with Embedding Service errors.
 - Путь: `result_store/<platform_id>/<video_id>/<run_id>/car_semantics/_render/render_context.json`
 
 Этот JSON содержит:
-- **Summary**: статистики по распознаванию автомобилей (frames_count, tracks_count, unique_cars_count, top1_score_mean/std/min/max/median, confident_predictions_count/ratio)
-- **Timeline**: данные по каждому кадру (frame_index, time_sec, top1_car_id, top1_car_name, top1_score, unique_cars_count, topk_scores)
-- **Distributions**: распределения top1_scores и topk_scores (min, max, mean, std, median, percentiles)
-- **Top cars**: топ автомобили по количеству кадров и среднему score с make/model/segment
+- **Summary**: статус, версии, размеры (frames/tracks/labels), `db_digest` prefix, `confidence_threshold_top1`, `stage_timings_ms`
+- **Timeline**: данные по каждому кадру (frame_idx, time_s, top1_label_name/uuid/score, confident)
+- **Distributions**: статистики top‑1/top‑K score на уровне frame/track
+- **Top labels**: топ label’ы по количеству confident frame top‑1
+- **Examples**: примеры треков top/anti-top + кропы в `_render/assets/`
 
 Render-context может быть использован:
 - **LLM** для генерации текстовых описаний распознанных автомобилей в видео
 - **Frontend** для построения графиков и визуализаций (timeline charts, distributions, car pie charts)
 - **Debugging**: быстрая проверка качества распознавания без загрузки NPZ
 
-**HTML debug страница** (опционально):
+**HTML debug страница** (опционально, dev-only):
 - Путь: `result_store/.../car_semantics/_render/render.html`
-- Содержит интерактивные графики (Chart.js):
-  - Timeline: top-1 car scores по времени с цветовой кодировкой автомобилей
-  - Distributions: статистики по top1_scores и topk_scores
-  - Top cars: таблица с топ автомобилями и их метриками (make, model, segment)
-  - Summary metrics: ключевые показатели в удобном формате
+- Offline mini-dashboard (без CDN):
+  - Timeline график (SVG)
+  - Таблица top labels
+  - Таблицы top/anti-top примеров с кропами
 
 **Конфигурация** (в `global_config.yaml`):
 ```yaml
 car_semantics:
   embedding_service_url: "http://localhost:8005"
-  topk: 5
-  similarity_threshold: 0
+  topk: 5  # contract: fixed
+  confidence_threshold_top1: 0.65
+  similarity_threshold: 0.65  # DEPRECATED (fallback for confidence_threshold_top1)
+  proposal_classes: "car"
   max_tracks: ""
   max_dets_per_frame: ""
   pad_ratio: 0.15
@@ -526,5 +550,9 @@ car_semantics:
     enable_html_render: true  # Генерировать HTML debug страницу
 ```
 
-**Примечание**: Render генерируется автоматически после успешной обработки компонента (best-effort: ошибки render не валят основной процесс).
+Audit v3: Render генерируется автоматически после успешной обработки компонента (best-effort: ошибки render не валят основной процесс).
+
+**Важно**:
+- Render **offline** (без CDN/внешних зависимостей).
+- Пишет: `.../car_semantics/_render/render_context.json`, `render.html`, `_render/assets/*.jpg` (кропы примеров).
 

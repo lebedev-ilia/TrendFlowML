@@ -291,21 +291,13 @@ def run_component(
         cmd.extend(["--batch-size", str(batch_size)])
     if component_name == "core_clip":
         cmd.extend(["--runtime", "triton"])
-        cmd.extend(["--triton-http-url", triton_http_url])
-        if component_args.get("triton_image_model_spec"):
-            cmd.extend(["--triton-image-model-spec", component_args["triton_image_model_spec"]])
-        else:
-            cmd.extend(["--triton-image-model-name", component_args.get("triton_image_model_name", "clip_image_224")])
-            if component_args.get("triton_image_model_version"):
-                cmd.extend(["--triton-image-model-version", component_args["triton_image_model_version"]])
-        if component_args.get("triton_text_model_spec"):
-            cmd.extend(["--triton-text-model-spec", component_args["triton_text_model_spec"]])
-        else:
-            cmd.extend(["--triton-text-model-name", component_args.get("triton_text_model_name", "clip_text")])
-            if component_args.get("triton_text_model_version"):
-                cmd.extend(["--triton-text-model-version", component_args["triton_text_model_version"]])
-        cmd.extend(["--triton-image-datatype", component_args.get("triton_image_datatype", "UINT8")])
-        cmd.extend(["--triton-text-datatype", component_args.get("triton_text_datatype", "INT64")])
+        # Audit v3: ModelManager-only specs (no legacy Triton args)
+        if not component_args.get("triton_image_model_spec") or not component_args.get("triton_text_model_spec"):
+            raise ValueError(
+                "core_clip requires both triton_image_model_spec and triton_text_model_spec (ModelManager-only)"
+            )
+        cmd.extend(["--triton-image-model-spec", component_args["triton_image_model_spec"]])
+        cmd.extend(["--triton-text-model-spec", component_args["triton_text_model_spec"]])
         cmd.extend(["--triton-preprocess-preset", component_args.get("triton_preprocess_preset", "openai_clip_224")])
     elif component_name == "core_object_detections":
         # core_object_detections uses ultralytics runtime (not triton) in baseline
@@ -351,10 +343,32 @@ def run_component(
     elif component_name == "ocr_extractor":
         # ocr_extractor doesn't use Triton, uses tesseract
         # Optional arguments
+        if component_args.get("engine"):
+            cmd.extend(["--engine", str(component_args["engine"])])
+        if component_args.get("rec_model_spec"):
+            cmd.extend(["--rec-model-spec", str(component_args["rec_model_spec"])])
+        if component_args.get("ppocr_img_h") is not None:
+            cmd.extend(["--ppocr-img-h", str(component_args["ppocr_img_h"])])
+        if component_args.get("ppocr_img_w") is not None:
+            cmd.extend(["--ppocr-img-w", str(component_args["ppocr_img_w"])])
+        if component_args.get("min_rec_score") is not None:
+            cmd.extend(["--min-rec-score", str(component_args["min_rec_score"])])
+        if component_args.get("proposal_class"):
+            cmd.extend(["--proposal-class", str(component_args["proposal_class"])])
+        if component_args.get("min_det_score") is not None:
+            cmd.extend(["--min-det-score", str(component_args["min_det_score"])])
+        if component_args.get("max_boxes_per_frame") is not None:
+            cmd.extend(["--max-boxes-per-frame", str(component_args["max_boxes_per_frame"])])
+        if component_args.get("max_total_boxes") is not None:
+            cmd.extend(["--max-total-boxes", str(component_args["max_total_boxes"])])
+        if component_args.get("crop_margin_frac") is not None:
+            cmd.extend(["--crop-margin-frac", str(component_args["crop_margin_frac"])])
         if component_args.get("tesseract_lang"):
             cmd.extend(["--tesseract-lang", component_args["tesseract_lang"]])
         if component_args.get("tesseract_psm"):
             cmd.extend(["--tesseract-psm", str(component_args["tesseract_psm"])])
+        if bool(component_args.get("retain_raw_ocr_text")):
+            cmd.extend(["--retain-raw-ocr-text"])
     elif component_name == "brand_semantics":
         # brand_semantics uses Embedding Service
         if component_args.get("embedding_service_url"):
@@ -388,8 +402,14 @@ def run_component(
     start_time = time.perf_counter()
     try:
         env = os.environ.copy()
-        if "TRITON_HTTP_URL" not in env:
-            env["TRITON_HTTP_URL"] = triton_http_url
+        if not str(env.get("TRITON_HTTP_URL") or "").strip():
+            env["TRITON_HTTP_URL"] = str(triton_http_url).strip()
+        if not str(env.get("DP_MODELS_ROOT") or "").strip():
+            # Deterministic local default for bundled assets/caches.
+            dp_root = Path(__file__).resolve().parents[2]
+            cand = dp_root / "dp_models" / "bundled_models"
+            if cand.is_dir():
+                env["DP_MODELS_ROOT"] = str(cand)
 
         result = subprocess.run(
             cmd,
@@ -958,8 +978,6 @@ def main():
     parser.add_argument("--batch-size", type=int, default=16, help="Batch size for components")
     parser.add_argument("--components", nargs="+", default=None, help="Components to run (default: all)")
     # Component-specific Triton model overrides
-    parser.add_argument("--triton-image-model-name", default=None, help="Override Triton image model name for core_clip")
-    parser.add_argument("--triton-text-model-name", default=None, help="Override Triton text model name for core_clip")
     parser.add_argument("--triton-image-model-spec", default=None, help="Override Triton image model spec for core_clip")
     parser.add_argument("--triton-text-model-spec", default=None, help="Override Triton text model spec for core_clip")
     parser.add_argument("--triton-flow-model-name", default=None, help="Override Triton model name for core_optical_flow")
@@ -994,14 +1012,9 @@ def main():
     # clip_image_224, clip_text, midas_256, raft_256
     component_args = {
         "core_clip": {
-            "triton_image_model_spec": args.triton_image_model_spec,
-            "triton_text_model_spec": args.triton_text_model_spec,
-            "triton_image_model_name": args.triton_image_model_name or "clip_image_224",
-            "triton_text_model_name": args.triton_text_model_name or "clip_text",
-            "triton_image_model_version": "1",
-            "triton_text_model_version": "1",
-            "triton_image_datatype": "UINT8",
-            "triton_text_datatype": "INT64",
+            # Audit v3: ModelManager-only specs
+            "triton_image_model_spec": args.triton_image_model_spec or "clip_image_224_triton",
+            "triton_text_model_spec": args.triton_text_model_spec or "clip_text_triton",
             "triton_preprocess_preset": "openai_clip_224",
         },
         "core_object_detections": {
@@ -1027,8 +1040,19 @@ def main():
             "use_hands": True,  # Optional: enable hand landmarks
         },
         "ocr_extractor": {
+            "engine": "tesseract",
+            "rec_model_spec": "ppocr_rec_onnx_v1_inprocess",
+            "ppocr_img_h": 48,
+            "ppocr_img_w": 320,
+            "min_rec_score": 0.0,
+            "proposal_class": "text_region",
+            "min_det_score": 0.5,
+            "max_boxes_per_frame": 5,
+            "max_total_boxes": 5000,
+            "crop_margin_frac": 0.02,
             "tesseract_lang": "eng+rus",
             "tesseract_psm": 6,
+            "retain_raw_ocr_text": False,
         },
         "brand_semantics": {
             "embedding_service_url": os.environ.get("EMBEDDING_SERVICE_URL") or "http://localhost:8001",

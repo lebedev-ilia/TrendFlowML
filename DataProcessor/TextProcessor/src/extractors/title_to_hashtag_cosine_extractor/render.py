@@ -48,7 +48,7 @@ def render_title_to_hashtag_cosine_extractor(
             return float(v)
         return v
     
-    # Extract similarity metric (canonical and legacy)
+    # Extract similarity metric (canonical; legacy tp_title_hashtag_cosine for old NPZ)
     similarity = {}
     if "tp_titlehashcos_cosine" in extractor_features:
         similarity["cosine"] = _clean_value(extractor_features["tp_titlehashcos_cosine"])
@@ -83,7 +83,8 @@ def render_title_to_hashtag_cosine_extractor(
     
     # Summary
     render["summary"] = {
-        "present": bool(extractor_features.get("tp_titlehashcos_present", 0) > 0.5) or bool(extractor_features.get("tp_title_hashtag_cosine_present", 0) > 0.5),
+        "present": bool(extractor_features.get("tp_titlehashcos_present", 0) > 0.5)
+        or bool(extractor_features.get("tp_title_hashtag_cosine_present", 0) > 0.5),
         "cosine": _clean_value(similarity.get("cosine")),
         "title_present": bool(presence.get("title", False)),
         "hashtag_present": bool(presence.get("hashtag", False)),

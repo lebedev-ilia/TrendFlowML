@@ -23,30 +23,85 @@ from typing import Any, Dict, List, Optional, Tuple
 
 import cv2
 import numpy as np
+import hashlib
 
 _vp_root = os.path.dirname(
-    os.path.dirname(os.path.dirname(os.path.dirname(os.path.dirname(__file__))))
+    os.path.dirname(os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__)))))
 )
 if _vp_root not in sys.path:
-    sys.path.append(_vp_root)
+    sys.path.insert(0, _vp_root)
+elif sys.path[0] != _vp_root:
+    try:
+        sys.path.remove(_vp_root)
+    except ValueError:
+        pass
+    sys.path.insert(0, _vp_root)
 
 from utils.frame_manager import FrameManager
 from utils.logger import get_logger  # type: ignore  # noqa: E402
 from utils.utilites import load_metadata  # type: ignore  # noqa: E402
 from utils.meta_builder import apply_models_meta  # type: ignore  # noqa: E402
+from utils.embedding_service_errors import EmbeddingServiceUnavailableError  # type: ignore  # noqa: E402
 
-from crop_utils import crop_with_padding, select_best_crop_for_track
-from embedding_service_client import EmbeddingServiceClient
+
+def _load_crop_utils():
+    import importlib.util
+
+    p = Path(__file__).resolve().parent / "utils" / "crop_utils.py"
+    spec = importlib.util.spec_from_file_location("car_semantics.crop_utils", str(p))
+    if spec is None or spec.loader is None:
+        raise ImportError(f"car_semantics | crop_utils not found: {p}")
+    mod = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(mod)
+    return mod.crop_with_padding, mod.select_best_crop_for_track
+
+
+crop_with_padding, select_best_crop_for_track = _load_crop_utils()
+
+try:
+    from utils.embedding_service_client import EmbeddingServiceClient
+except ImportError:
+    try:
+        from embedding_service_client import EmbeddingServiceClient
+    except ImportError:
+        import importlib.util
+        _current_dir = Path(__file__).parent
+        _utils_path = _current_dir / "utils" / "embedding_service_client.py"
+        if _utils_path.exists():
+            spec = importlib.util.spec_from_file_location("embedding_service_client", str(_utils_path))
+            if spec and spec.loader:
+                _mod = importlib.util.module_from_spec(spec)
+                spec.loader.exec_module(_mod)
+                EmbeddingServiceClient = _mod.EmbeddingServiceClient
+            else:
+                raise RuntimeError("car_semantics | Failed to load EmbeddingServiceClient from utils")
+        else:
+            raise ImportError("car_semantics | embedding_service_client not found. Expected at: %s" % _utils_path)
 
 NAME = "car_semantics"
-VERSION = "0.1"
-SCHEMA_VERSION = "car_semantics_npz_v1"
+VERSION = "0.2"
+SCHEMA_VERSION = "car_semantics_npz_v2"
 ARTIFACT_FILENAME = "car_semantics.npz"
 LOGGER = get_logger(NAME)
 
 # Car category for Embedding Service
 CAR_CATEGORY = "car"
-TOP_K = 3  # Top-3 for make/model/segment
+TOP_K = 5  # Contract: fixed K for semantic heads v1+
+
+
+def _sha256_hex(s: str) -> str:
+    return hashlib.sha256(s.encode("utf-8")).hexdigest()
+
+
+def _atomic_save_npz(out_path: str, **kwargs: Any) -> None:
+    """
+    Atomic NPZ save (tmp -> replace).
+    """
+    out_dir = os.path.dirname(os.path.abspath(out_path)) or "."
+    os.makedirs(out_dir, exist_ok=True)
+    tmp_path = out_path + ".tmp.npz"
+    np.savez_compressed(tmp_path, **kwargs)
+    os.replace(tmp_path, out_path)
 
 
 def _append_state_event_if_possible(*, rs_path: str, event: Dict[str, Any]) -> None:
@@ -203,7 +258,20 @@ def main() -> int:
         "--similarity-threshold",
         type=float,
         default=0.0,
-        help="Minimum similarity threshold (default: 0.0)",
+        help=(
+            "DEPRECATED name (kept for backward compatibility). "
+            "Used ONLY as confidence threshold for *_is_confident_top1 flags. "
+            "Contract: MUST NOT gate top-K results. Range: 0.0-1.0."
+        ),
+    )
+    ap.add_argument(
+        "--confidence-threshold-top1",
+        type=float,
+        default=None,
+        help=(
+            "Confidence threshold for *_is_confident_top1 flags (does NOT gate top-K). "
+            "If not set, falls back to --similarity-threshold for backward compatibility."
+        ),
     )
     ap.add_argument(
         "--max-tracks",
@@ -218,6 +286,15 @@ def main() -> int:
         help="Maximum detections per frame (cost control)",
     )
     ap.add_argument(
+        "--proposal-classes",
+        type=str,
+        default="car",
+        help=(
+            "Comma-separated list of proposal class names from core_object_detections taxonomy "
+            '(default: "car").'
+        ),
+    )
+    ap.add_argument(
         "--pad-ratio",
         type=float,
         default=0.15,
@@ -229,6 +306,30 @@ def main() -> int:
         help="Use sharpness metric for selecting best crop per track",
     )
     args = ap.parse_args()
+
+    # Contract: fixed K (downstream expects consistent shape)
+    if int(args.topk) != int(TOP_K):
+        raise RuntimeError(
+            f"{NAME} | topk must be fixed to {TOP_K} by contract; got {args.topk}"
+        )
+
+    confidence_threshold_top1 = (
+        float(args.confidence_threshold_top1)
+        if args.confidence_threshold_top1 is not None
+        else float(args.similarity_threshold)
+    )
+    if not (0.0 <= confidence_threshold_top1 <= 1.0):
+        raise RuntimeError(
+            f"{NAME} | confidence_threshold_top1 out of range [0,1]: {confidence_threshold_top1}"
+        )
+
+    proposal_classes = [
+        s.strip()
+        for s in str(args.proposal_classes or "").split(",")
+        if str(s).strip()
+    ]
+    if not proposal_classes:
+        raise RuntimeError(f"{NAME} | proposal_classes is empty (contract)")
 
     # Initialize timing dictionary
     timings: Dict[str, float] = {}
@@ -317,54 +418,75 @@ def main() -> int:
             f"frame_indices={len(frame_indices)}, boxes.shape[0]={boxes.shape[0]}"
         )
 
-    # Find car class ID
-    car_class_id = None
-    for cid, cname in class_id_to_name.items():
-        if cname in ["car", "vehicle", "automobile"]:
-            car_class_id = cid
-            break
-
-    if car_class_id is None:
-        LOGGER.warning(
-            f"{NAME} | car class not found in taxonomy, using all detections"
-        )
-
-    # Get tracks (if available) or generate per-detection tracks
-    if "tracks" in detections:
-        tracks = np.asarray(detections.get("tracks"), dtype=np.int32)  # (N, MAX)
-        # Validate tracks shape
-        if tracks.shape != boxes.shape:
-            raise RuntimeError(
-                f"{NAME} | tracks shape {tracks.shape} != boxes shape {boxes.shape}"
-            )
-    else:
-        # WARNING: Generating per-detection track IDs - this breaks tracking!
-        # Each detection will get a unique track ID, which may not be correct.
-        # For proper tracking, tracks should come from core_object_detections.
-        LOGGER.warning(
-            f"{NAME} | tracks not found in detections.npz. "
-            f"Generating per-detection track IDs - this may produce incorrect results. "
-            f"Each detection will be treated as a separate track. "
-            f"Consider ensuring core_object_detections provides proper tracking."
-        )
-        track_counter = 0
-        tracks = np.full_like(class_ids, -1, dtype=np.int32)
-        for i in range(boxes.shape[0]):
-            for j in range(boxes.shape[1]):
-                if valid_mask[i, j]:
-                    tracks[i, j] = track_counter
-                    track_counter += 1
-
-    # Initialize Embedding Service client
-    embedding_client = EmbeddingServiceClient(base_url=args.embedding_service_url)
-    
-    # Baseline contract: fail-fast if Embedding Service is unavailable
-    try:
-        embedding_client._ensure_url()
-    except Exception as e:
+    # Proposal classes (contract): explicit mapping by class name
+    name_to_id = {str(v): int(k) for k, v in class_id_to_name.items()}
+    missing = [c for c in proposal_classes if c not in name_to_id]
+    if missing:
         raise RuntimeError(
-            f"{NAME} | Embedding Service unavailable at {embedding_client.base_url}: {e} (fail-fast)"
-        ) from e
+            f"{NAME} | proposal_classes not found in core_object_detections taxonomy: {missing} "
+            f"(available example: {sorted(list(name_to_id.keys()))[:15]}...)"
+        )
+    allowed_class_ids = sorted({int(name_to_id[c]) for c in proposal_classes})
+
+    proposal_mask = (valid_mask.astype(bool)) & np.isin(class_ids, np.asarray(allowed_class_ids, dtype=np.int32))
+
+    # Initialize Embedding Service client (fail-fast)
+    embedding_client = EmbeddingServiceClient(base_url=args.embedding_service_url)
+    embedding_client._ensure_url()
+
+    # Label-space (fail-fast if empty)
+    labels = embedding_client.get_labels(category=CAR_CATEGORY)
+    if not labels:
+        raise RuntimeError(
+            f"{NAME} | Embedding Service category '{CAR_CATEGORY}' has 0 labels (fail-fast)"
+        )
+
+    # Deterministic label-space (UUID -> stable int)
+    labels_canon = []
+    for r in labels:
+        if not isinstance(r, dict):
+            continue
+        if not r.get("id"):
+            continue
+        labels_canon.append(
+            {
+                "id": str(r.get("id")),
+                "name": str(r.get("name") or ""),
+                "embedding_model": str(r.get("embedding_model") or ""),
+                "embedding_dim": int(r.get("embedding_dim") or 0),
+            }
+        )
+    labels_canon.sort(key=lambda x: x["id"])
+    if not labels_canon:
+        raise RuntimeError(
+            f"{NAME} | Embedding Service returned invalid labels for category='{CAR_CATEGORY}' (fail-fast)"
+        )
+
+    db_digest = _sha256_hex(
+        json.dumps(labels_canon, ensure_ascii=False, sort_keys=True, separators=(",", ":"))
+    )
+    semantic_object_ids = np.asarray([r["id"] for r in labels_canon], dtype="U")
+    semantic_label_names = np.asarray(
+        [f"{i}:{r['name']}" for i, r in enumerate(labels_canon)],
+        dtype="U",
+    )
+    uuid_to_int = {str(r["id"]): int(i) for i, r in enumerate(labels_canon)}
+    A = int(semantic_label_names.shape[0])
+    threshold_per_label_arr = np.full((A,), np.nan, dtype=np.float32)
+
+    # Best-effort parsed taxonomy from label name (analytics/debug only)
+    semantic_label_make = np.empty((A,), dtype="U")
+    semantic_label_model = np.empty((A,), dtype="U")
+    for i in range(A):
+        name = str(labels_canon[i].get("name") or "")
+        if "_" in name:
+            parts = [p for p in name.split("_") if p]
+            make = parts[0] if parts else ""
+            model = "_".join(parts[1:]) if len(parts) > 1 else ""
+        else:
+            make, model = "", name
+        semantic_label_make[i] = make
+        semantic_label_model[i] = model
 
     # Create FrameManager
     frame_manager = FrameManager(
@@ -373,42 +495,36 @@ def main() -> int:
         cache_size=int(meta.get("cache_size", 2)),
     )
 
-    # Group detections by track
-    track_detections: Dict[int, List[Tuple[int, int, float, np.ndarray]]] = (
-        defaultdict(list)
-    )  # track_id -> [(frame_idx, det_idx, score, bbox)]
+    # Build candidate detections (per-detection surrogate tracks; tracking removed upstream)
+    candidates: List[Tuple[float, int, int, float, np.ndarray, int]] = []
+    for frame_pos in range(int(boxes.shape[0])):
+        dets = np.where(proposal_mask[frame_pos])[0].astype(int)
+        if dets.size == 0:
+            continue
+        if args.max_dets_per_frame is not None:
+            k = int(args.max_dets_per_frame)
+            if k > 0 and dets.size > k:
+                ss = scores[frame_pos, dets].astype(np.float32)
+                order = np.argsort(-ss)[:k]
+                dets = dets[order]
+        for det_idx in dets.tolist():
+            bbox = boxes[frame_pos, det_idx].copy()
+            sc = float(scores[frame_pos, det_idx])
+            area = max(1.0, float((bbox[2] - bbox[0]) * (bbox[3] - bbox[1])))
+            metric = sc * area
+            cls = int(class_ids[frame_pos, det_idx])
+            candidates.append((metric, int(frame_pos), int(det_idx), sc, bbox, cls))
 
-    for frame_idx, frame_idx_global in enumerate(frame_indices):
-        for det_idx in range(boxes.shape[1]):
-            if not valid_mask[frame_idx, det_idx]:
-                continue
+    candidates.sort(key=lambda x: float(x[0]), reverse=True)
+    if args.max_tracks is not None:
+        mt = int(args.max_tracks)
+        if mt > 0 and len(candidates) > mt:
+            candidates = candidates[:mt]
 
-            # Filter by class if car_class_id specified
-            if car_class_id is not None:
-                if class_ids[frame_idx, det_idx] != car_class_id:
-                    continue
-
-            track_id = int(tracks[frame_idx, det_idx])
-            if track_id < 0:
-                continue
-
-            score = float(scores[frame_idx, det_idx])
-            bbox = boxes[frame_idx, det_idx].copy()  # (x1, y1, x2, y2)
-
-            track_detections[track_id].append(
-                (frame_idx, det_idx, score, bbox)
-            )
-
-    # Apply cost control: max_tracks
-    if args.max_tracks and len(track_detections) > args.max_tracks:
-        # Sort by track length (number of detections) and keep top tracks
-        sorted_tracks = sorted(
-            track_detections.items(), key=lambda x: len(x[1]), reverse=True
-        )
-        track_detections = dict(sorted_tracks[: args.max_tracks])
-        LOGGER.info(
-            f"{NAME} | Limited to {args.max_tracks} tracks (cost control)"
-        )
+    # Provider status/empty semantics:
+    # - empty is valid only when there are no valid proposals (with correct deps/db)
+    status = "ok" if candidates else "empty"
+    empty_reason = None if candidates else "no_car_proposals"
 
     # Baseline contract: emit process_frames stage
     _emit_stage(
@@ -421,251 +537,126 @@ def main() -> int:
     
     t_process_start = time.perf_counter()
 
-    # Early validation: проверка доступности Embedding Service и тестовый запрос
-    embedding_service_available = True
-    try:
-        # Проверка health endpoint
-        embedding_client._ensure_url()
-        
-        # Тестовый запрос с первым треком для проверки работоспособности search endpoint
-        if track_detections:
-            first_track_id = next(iter(track_detections.keys()))
-            first_detections_list = track_detections[first_track_id]
-            if first_detections_list:
-                # Получаем первый кадр и делаем кроп
-                frame_idx, det_idx, score, bbox = first_detections_list[0]
-                frame_idx_global = frame_indices[frame_idx]
-                try:
-                    test_frame = frame_manager.get(frame_idx_global)
-                    test_crop = crop_with_padding(test_frame, bbox, pad_ratio=args.pad_ratio)
-                    test_results = embedding_client.search(
-                        category=CAR_CATEGORY,
-                        image=test_crop,
-                        top_k=1,  # Минимальный запрос для теста
-                        similarity_threshold=0.0,
-                        max_retries=1,  # Одна попытка для теста
-                        retry_delay=0.5,
+    # Output arrays (NaN/-1 policy)
+    n_frames = int(len(frame_indices))
+    max_dets = int(boxes.shape[1])
+    n_tracks = int(len(candidates))
+
+    track_ids_arr = np.arange(n_tracks, dtype=np.int32)
+    track_present_mask = np.ones((n_tracks,), dtype=bool)
+    track_topk_ids = np.full((n_tracks, TOP_K), -1, dtype=np.int32)
+    track_topk_scores = np.full((n_tracks, TOP_K), np.nan, dtype=np.float32)
+    track_is_confident_top1 = np.zeros((n_tracks,), dtype=bool)
+
+    frame_topk_ids = np.full((n_frames, TOP_K), -1, dtype=np.int32)
+    frame_topk_scores = np.full((n_frames, TOP_K), np.nan, dtype=np.float32)
+    frame_is_confident_top1 = np.zeros((n_frames,), dtype=bool)
+
+    det_present_mask = np.zeros((n_frames, max_dets), dtype=bool)
+    det_topk_ids = np.full((n_frames, max_dets, TOP_K), -1, dtype=np.int32)
+    det_topk_scores = np.full((n_frames, max_dets, TOP_K), np.nan, dtype=np.float32)
+    det_is_confident_top1 = np.zeros((n_frames, max_dets), dtype=bool)
+
+    # QA helpers for offline render assets
+    track_best_frame_pos = np.full((n_tracks,), -1, dtype=np.int32)
+    track_best_det_idx = np.full((n_tracks,), -1, dtype=np.int32)
+    track_best_bbox_xyxy = np.full((n_tracks, 4), np.nan, dtype=np.float32)
+    track_best_det_score = np.full((n_tracks,), np.nan, dtype=np.float32)
+    track_best_class_id = np.full((n_tracks,), -1, dtype=np.int32)
+
+    # Process each candidate detection (surrogate track)
+    for track_pos, (_metric, frame_pos, det_idx, det_score, bbox, cls) in enumerate(candidates):
+        track_best_frame_pos[track_pos] = int(frame_pos)
+        track_best_det_idx[track_pos] = int(det_idx)
+        track_best_bbox_xyxy[track_pos, :] = np.asarray(bbox, dtype=np.float32).reshape(4)
+        track_best_det_score[track_pos] = float(det_score)
+        track_best_class_id[track_pos] = int(cls)
+
+        frame_idx_global = int(frame_indices[int(frame_pos)])
+        try:
+            frame = frame_manager.get(frame_idx_global)
+        except Exception as e:
+            raise RuntimeError(f"{NAME} | failed to load frame {frame_idx_global}: {e}") from e
+
+        crop = crop_with_padding(frame, bbox, pad_ratio=float(args.pad_ratio))
+        try:
+            results = embedding_client.search(
+                category=CAR_CATEGORY,
+                image=crop,
+                top_k=TOP_K,
+                similarity_threshold=0.0,  # contract: no gating
+                max_retries=3,
+                retry_delay=1.0,
+            )
+        except RuntimeError as e:
+            LOGGER.warning(
+                f"{NAME} | Embedding Service search failed for track {track_pos} (degraded to empty): {e}"
+            )
+            results = []
+
+        for k, r in enumerate((results or [])[:TOP_K]):
+            try:
+                obj_id = str(r.get("id") or "")
+                if obj_id not in uuid_to_int:
+                    raise RuntimeError(
+                        f"{NAME} | Embedding Service returned unknown label id={obj_id!r} not present in labels (db_digest mismatch)"
                     )
-                    # Если тест прошел успешно, продолжаем обработку
-                    LOGGER.info(f"{NAME} | Embedding Service test request successful, proceeding with all tracks")
-                except Exception as test_error:
-                    # Тестовый запрос не прошел - сервис недоступен или возвращает ошибки
-                    embedding_service_available = False
-                    LOGGER.warning(
-                        f"{NAME} | Embedding Service test request failed: {test_error}. "
-                        f"Skipping all tracks to avoid repeated errors. "
-                        f"Check Embedding Service status and ensure category '{CAR_CATEGORY}' is configured."
-                    )
-    except Exception as health_error:
-        # Health check не прошел
-        embedding_service_available = False
-        LOGGER.warning(
-            f"{NAME} | Embedding Service health check failed: {health_error}. "
-            f"Skipping all tracks. Check Embedding Service status."
+                lid = int(uuid_to_int[obj_id])
+                sc = float(r.get("similarity", np.nan))
+            except Exception as e:
+                raise RuntimeError(f"{NAME} | invalid search result format: {r!r} ({e})") from e
+            track_topk_ids[track_pos, k] = int(lid)
+            track_topk_scores[track_pos, k] = float(sc)
+
+        # Confidence flags (top1 only)
+        top1_id = int(track_topk_ids[track_pos, 0])
+        top1_sc = float(track_topk_scores[track_pos, 0])
+        track_is_confident_top1[track_pos] = bool(
+            (top1_id >= 0) and np.isfinite(top1_sc) and (top1_sc >= float(confidence_threshold_top1))
         )
 
-    # Process each track (или пропустить, если сервис недоступен)
-    track_results: Dict[
-        int, Tuple[List[Dict[str, Any]], np.ndarray]
-    ] = {}  # track_id -> (search_results, crop)
+        det_present_mask[int(frame_pos), int(det_idx)] = True
+        det_topk_ids[int(frame_pos), int(det_idx), :] = track_topk_ids[track_pos, :]
+        det_topk_scores[int(frame_pos), int(det_idx), :] = track_topk_scores[track_pos, :]
+        det_is_confident_top1[int(frame_pos), int(det_idx)] = track_is_confident_top1[track_pos]
 
-    total_tracks = len(track_detections)
-    processed_tracks = 0
-    failed_tracks = 0  # Count tracks that failed with errors (not empty results)
-    
-    if not embedding_service_available:
-        # Сервис недоступен - пропускаем обработку всех треков
-        LOGGER.warning(
-            f"{NAME} | Embedding Service unavailable, skipping {total_tracks} tracks"
-        )
-        processed_tracks = total_tracks
-    else:
-        # Сервис доступен - обрабатываем все треки
-        for track_id, detections_list in track_detections.items():
-            # Apply cost control: max_dets_per_frame
-            if args.max_dets_per_frame and len(detections_list) > args.max_dets_per_frame:
-                # Sort by score and keep top detections
-                detections_list = sorted(
-                    detections_list, key=lambda x: x[2], reverse=True
-                )[: args.max_dets_per_frame]
-
-            # Select best crop for track
-            crops = []
-            scores_list = []
-            areas_list = []
-
-            for frame_idx, det_idx, score, bbox in detections_list:
-                # Get frame
-                frame_idx_global = frame_indices[frame_idx]
-                try:
-                    frame = frame_manager.get(frame_idx_global)
-                except Exception as e:
-                    LOGGER.warning(
-                        f"{NAME} | Failed to load frame {frame_idx_global}: {e}"
-                    )
-                    continue
-
-                # Crop with padding
-                crop = crop_with_padding(frame, bbox, pad_ratio=args.pad_ratio)
-                crops.append(crop)
-
-                # Calculate area
-                area = (bbox[2] - bbox[0]) * (bbox[3] - bbox[1])
-                areas_list.append(area)
-                scores_list.append(score)
-
-            if not crops:
-                continue
-
-            # Select best crop
-            try:
-                best_idx, best_crop = select_best_crop_for_track(
-                    crops, scores_list, areas_list, use_sharpness=args.use_sharpness
-                )
-            except Exception as e:
-                LOGGER.warning(
-                    f"{NAME} | Failed to select best crop for track {track_id}: {e}"
-                )
-                continue
-
-            # Search in Embedding Service with retry
-            try:
-                results = embedding_client.search(
-                    category=CAR_CATEGORY,
-                    image=best_crop,
-                    top_k=args.topk,
-                    similarity_threshold=args.similarity_threshold,
-                    max_retries=3,
-                    retry_delay=1.0,
-                )
-                if not results:
-                    # Empty results - log warning but continue
-                    LOGGER.warning(
-                        f"{NAME} | Embedding Service returned empty results for track {track_id}"
-                    )
-                track_results[track_id] = (results, best_crop)
-            except Exception as e:
-                failed_tracks += 1
-                LOGGER.error(
-                    f"{NAME} | Embedding Service search failed for track {track_id} after retries: {e}"
-                )
-                # Continue without this track instead of failing completely
-                continue
-            
-            processed_tracks += 1
-            # Baseline contract: granular progress (>=10 updates)
-            if processed_tracks % max(1, (total_tracks // 15)) == 0 or processed_tracks == total_tracks:
-                _emit_progress(
-                    rs_path=args.rs_path,
-                    platform_id=platform_id,
-                    video_id=video_id,
-                    run_id=run_id,
-                    done=processed_tracks,
-                    total=total_tracks,
-                    stage="process_frames",
-                )
+        # progress (>=10 updates)
+        if (track_pos + 1) % max(1, max(n_tracks // 15, 1)) == 0 or (track_pos + 1) == n_tracks:
+            _emit_progress(
+                rs_path=args.rs_path,
+                platform_id=platform_id,
+                video_id=video_id,
+                run_id=run_id,
+                done=int(track_pos + 1),
+                total=int(n_tracks),
+                stage="process_frames",
+            )
 
     t_process_end = time.perf_counter()
     timings["process_frames"] = t_process_end - t_process_start
 
-    # Baseline contract: fail-fast if all tracks failed with errors
-    # (empty results are OK, but errors on all tracks indicate service problem)
-    if total_tracks > 0 and failed_tracks == total_tracks and len(track_results) == 0:
-        raise RuntimeError(
-            f"{NAME} | All {total_tracks} tracks failed with Embedding Service errors. "
-            f"Service may be misconfigured or unavailable. "
-            f"Check Embedding Service logs and ensure it's running correctly."
+    # Frame-level aggregation: deduplicate labels across detections in frame
+    for frame_pos in range(n_frames):
+        best: Dict[int, float] = {}
+        dets = np.where(det_present_mask[frame_pos])[0].astype(int)
+        for det_idx in dets.tolist():
+            for k in range(TOP_K):
+                lid = int(det_topk_ids[frame_pos, det_idx, k])
+                sc = float(det_topk_scores[frame_pos, det_idx, k])
+                if lid < 0 or not np.isfinite(sc):
+                    continue
+                if (lid not in best) or (sc > float(best[lid])):
+                    best[lid] = float(sc)
+        if best:
+            pairs = sorted(best.items(), key=lambda x: float(x[1]), reverse=True)[:TOP_K]
+            for k, (lid, sc) in enumerate(pairs):
+                frame_topk_ids[frame_pos, k] = int(lid)
+                frame_topk_scores[frame_pos, k] = float(sc)
+        top1_id = int(frame_topk_ids[frame_pos, 0])
+        top1_sc = float(frame_topk_scores[frame_pos, 0])
+        frame_is_confident_top1[frame_pos] = bool(
+            (top1_id >= 0) and np.isfinite(top1_sc) and (top1_sc >= float(confidence_threshold_top1))
         )
-
-    # Build output arrays
-    unique_track_ids = sorted(track_results.keys())
-    n_frames = len(frame_indices)
-    n_tracks = len(unique_track_ids)
-
-    # Track-level arrays
-    track_ids_arr = np.asarray(unique_track_ids, dtype=np.int32)  # (T,)
-    track_topk_ids = np.zeros((n_tracks, args.topk), dtype=np.int32)  # (T, K)
-    track_topk_scores = np.zeros((n_tracks, args.topk), dtype=np.float32)  # (T, K)
-    track_topk_makes = np.zeros((n_tracks, args.topk), dtype="U256")  # (T, K)
-    track_topk_models = np.zeros((n_tracks, args.topk), dtype="U256")  # (T, K)
-    track_topk_segments = np.zeros((n_tracks, args.topk), dtype="U256")  # (T, K)
-
-    # Frame-level arrays (aggregate per-frame)
-    frame_topk_ids = np.zeros((n_frames, args.topk), dtype=np.int32)  # (N, K)
-    frame_topk_scores = np.zeros((n_frames, args.topk), dtype=np.float32)  # (N, K)
-
-    # Build semantic_label_names from results
-    all_car_ids: Dict[str, int] = {}  # car_name -> label_id
-    label_id_counter = 0
-
-    for track_idx, track_id in enumerate(unique_track_ids):
-        results, _ = track_results[track_id]
-
-        # Track-level top-K
-        for k, result in enumerate(results[: args.topk]):
-            car_name = result.get("name", "unknown")
-            similarity = float(result.get("similarity", 0.0))
-            car_id = result.get("id", "")
-            metadata = result.get("metadata", {})
-
-            # Map car name to label ID
-            if car_name not in all_car_ids:
-                all_car_ids[car_name] = label_id_counter
-                label_id_counter += 1
-
-            label_id = all_car_ids[car_name]
-            track_topk_ids[track_idx, k] = label_id
-            track_topk_scores[track_idx, k] = similarity
-
-            # Extract make, model, segment
-            make, model, segment = _extract_car_metadata(metadata)
-            track_topk_makes[track_idx, k] = make
-            track_topk_models[track_idx, k] = model
-            track_topk_segments[track_idx, k] = segment
-
-    # Build semantic_label_names array
-    car_names_list = sorted(all_car_ids.keys(), key=lambda x: all_car_ids[x])
-    semantic_label_names = np.asarray(
-        [f"{all_car_ids[name]}:{name}" for name in car_names_list], dtype="U"
-    )
-
-    # Frame-level aggregation (for each frame, find best match from tracks)
-    # Fixed: deduplication by car_name - take best similarity for each car
-    for frame_idx in range(n_frames):
-        frame_idx_global = frame_indices[frame_idx]
-        car_scores: Dict[str, float] = {}  # car_name -> max_similarity
-
-        for track_id, detections_list in track_detections.items():
-            if track_id not in track_results:
-                continue
-
-            # Check if track has detection on this frame
-            has_detection = any(
-                det_frame_idx == frame_idx for det_frame_idx, _, _, _ in detections_list
-            )
-
-            if not has_detection:
-                continue
-
-            results, _ = track_results[track_id]
-            for result in results[: args.topk]:
-                car_name = result.get("name", "unknown")
-                similarity = float(result.get("similarity", 0.0))
-
-                if car_name in all_car_ids:
-                    # Deduplicate: take best similarity for each car
-                    if car_name not in car_scores or similarity > car_scores[car_name]:
-                        car_scores[car_name] = similarity
-
-        # Sort by similarity and take top-K (deduplicated)
-        frame_results = [
-            (similarity, all_car_ids[car_name])
-            for car_name, similarity in car_scores.items()
-        ]
-        frame_results.sort(key=lambda x: x[0], reverse=True)
-        for k, (similarity, label_id) in enumerate(frame_results[: args.topk]):
-            frame_topk_ids[frame_idx, k] = label_id
-            frame_topk_scores[frame_idx, k] = similarity
 
     # Build metadata
     required_run_keys = ["platform_id", "video_id", "run_id", "sampling_policy_version", "config_hash"]
@@ -675,21 +666,33 @@ def main() -> int:
             f"{NAME} | frames metadata missing required run identity keys: {missing}"
         )
     
-    output_meta = {
+    output_meta: Dict[str, Any] = {
         "producer": NAME,
         "producer_version": VERSION,
         "schema_version": SCHEMA_VERSION,
         "created_at": datetime.utcnow().isoformat() + "Z",
-        "status": "ok",
-        "empty_reason": None,
+        "status": status,
+        "empty_reason": empty_reason,
         "embedding_service_url": embedding_client.base_url,
-        "car_category": CAR_CATEGORY,
-        "topk": args.topk,
-        "similarity_threshold": args.similarity_threshold,
-        "pad_ratio": args.pad_ratio,
-        "use_sharpness": args.use_sharpness,
-        "num_tracks": n_tracks,
-        "num_cars": len(all_car_ids),
+        "category": CAR_CATEGORY,
+        "top_k": int(TOP_K),
+        "confidence_threshold_top1": float(confidence_threshold_top1),
+        "proposal_classes": list(proposal_classes),
+        "proposal_class_ids": list(map(int, allowed_class_ids)),
+        "pad_ratio": float(args.pad_ratio),
+        "use_sharpness": bool(args.use_sharpness),
+        "max_tracks": (int(args.max_tracks) if args.max_tracks is not None else None),
+        "max_dets_per_frame": (int(args.max_dets_per_frame) if args.max_dets_per_frame is not None else None),
+        # DB provenance
+        "db_name": "embedding_service",
+        "db_version": "v1",
+        "db_digest": db_digest,
+        "db_path": f"{embedding_client.base_url}/categories/{CAR_CATEGORY}",
+        "labels_count": int(A),
+        # Summary
+        "tracks_total": int(n_tracks),
+        "tracks_present": int(np.sum(track_present_mask)),
+        "dets_present": int(np.sum(det_present_mask)),
     }
     
     # Required run identity fields
@@ -699,20 +702,21 @@ def main() -> int:
     # Required by contract (baseline may use "unknown")
     output_meta["dataprocessor_version"] = str(meta.get("dataprocessor_version") or "unknown")
 
-    # Add models_used (using model_used helper)
+    # PR-3: model system baseline
     from utils.meta_builder import model_used
-    models_used_list = [
-        model_used(
-            model_name="embedding_service",
-            model_version="v1",
-            runtime="http",
-            engine="http",
-            precision="fp32",
-            device="cpu",  # Embedding Service runs on server
-        )
-    ]
-    from utils.meta_builder import apply_models_meta
-    output_meta = apply_models_meta(output_meta, models_used=models_used_list)
+    output_meta = apply_models_meta(
+        output_meta,
+        models_used=[
+            model_used(
+                model_name="embedding_service",
+                model_version="v1",
+                runtime="http",
+                engine="http",
+                precision="fp32",
+                device="cpu",
+            )
+        ],
+    )
     
     # Baseline contract: stage_timings_ms in meta
     timings["saving"] = 0.0  # Will be updated after save
@@ -731,37 +735,68 @@ def main() -> int:
         stage="save",
     )
     
-    t_save_start = time.perf_counter()
-
-    # Save output
     output_dir = os.path.join(str(args.rs_path), NAME)
     os.makedirs(output_dir, exist_ok=True)
     output_path = os.path.join(output_dir, ARTIFACT_FILENAME)
 
-    np.savez_compressed(
-        output_path,
-        frame_indices=fi_np,
-        times_s=times_s,
-        track_ids=track_ids_arr,
-        track_topk_ids=track_topk_ids,
-        track_topk_scores=track_topk_scores,
-        track_topk_makes=track_topk_makes,
-        track_topk_models=track_topk_models,
-        track_topk_segments=track_topk_segments,
-        frame_topk_ids=frame_topk_ids,
-        frame_topk_scores=frame_topk_scores,
-        semantic_label_names=semantic_label_names,
-        meta=np.asarray(output_meta, dtype=object),
-    )
-    
+    def _build_npz_payload(meta_dict: Dict[str, Any]) -> Dict[str, Any]:
+        return {
+            "frame_indices": fi_np,
+            "times_s": times_s,
+            # label space
+            "semantic_label_names": semantic_label_names,
+            "semantic_object_ids": semantic_object_ids,
+            "threshold_per_label_arr": threshold_per_label_arr,
+            "semantic_label_make": semantic_label_make,
+            "semantic_label_model": semantic_label_model,
+            # track axis
+            "track_ids": track_ids_arr,
+            "track_present_mask": track_present_mask,
+            "track_topk_ids": track_topk_ids,
+            "track_topk_scores": track_topk_scores,
+            "track_is_confident_top1": track_is_confident_top1,
+            # frame axis
+            "frame_topk_ids": frame_topk_ids,
+            "frame_topk_scores": frame_topk_scores,
+            "frame_is_confident_top1": frame_is_confident_top1,
+            # per-detection axis
+            "det_present_mask": det_present_mask,
+            "det_topk_ids": det_topk_ids,
+            "det_topk_scores": det_topk_scores,
+            "det_is_confident_top1": det_is_confident_top1,
+            # QA helpers
+            "track_best_frame_pos": track_best_frame_pos,
+            "track_best_det_idx": track_best_det_idx,
+            "track_best_bbox_xyxy": track_best_bbox_xyxy,
+            "track_best_det_score": track_best_det_score,
+            "track_best_class_id": track_best_class_id,
+            # meta
+            "meta": np.asarray(meta_dict, dtype=object),
+            "meta_json": np.asarray(
+                json.dumps(meta_dict, ensure_ascii=False, sort_keys=True),
+                dtype="U",
+            ),
+        }
+
+    # Two-pass write: measure saving time and persist final meta.stage_timings_ms
+    t_save_start = time.perf_counter()
+    _atomic_save_npz(output_path, **_build_npz_payload(output_meta))
     timings["saving"] = time.perf_counter() - t_save_start
     timings["total"] = time.perf_counter() - t0
-    
-    # Update stage_timings_ms with final timings
-    stage_timings_ms = {}
-    for key, value in timings.items():
-        stage_timings_ms[key] = float(value) * 1000.0
-    output_meta["stage_timings_ms"] = stage_timings_ms
+    output_meta["stage_timings_ms"] = {k: float(v) * 1000.0 for k, v in timings.items()}
+    _atomic_save_npz(output_path, **_build_npz_payload(output_meta))
+
+    # Validate artifact (meta + schema if known)
+    from utils.artifact_validator import validate_npz  # type: ignore
+
+    ok, issues, _ = validate_npz(output_path)
+    if not ok:
+        try:
+            os.remove(output_path)
+        except Exception:
+            pass
+        msgs = "; ".join([f"{i.level}:{i.message}" for i in issues if getattr(i, "level", "") == "error"])
+        raise RuntimeError(f"{NAME} | saved artifact failed validation: {msgs}")
 
     # Baseline contract: emit done stage
     _emit_stage(
@@ -774,12 +809,16 @@ def main() -> int:
 
     LOGGER.info(
         f"{NAME} | Saved results: {output_path} "
-        f"(tracks={n_tracks}, cars={len(all_car_ids)}, frames={n_frames})"
+        f"(status={status}, tracks_total={n_tracks}, dets_present={int(np.sum(det_present_mask))}, frames={n_frames}, labels={A})"
     )
 
     return 0
 
 
 if __name__ == "__main__":
-    sys.exit(main())
+    try:
+        raise SystemExit(main())
+    except EmbeddingServiceUnavailableError as ex:
+        print(f"{NAME}: {ex}", file=sys.stderr)
+        raise SystemExit(1) from None
 

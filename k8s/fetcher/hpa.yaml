@@ -1,0 +1,44 @@
+apiVersion: autoscaling/v2
+kind: HorizontalPodAutoscaler
+metadata:
+  name: fetcher-hpa
+spec:
+  scaleTargetRef:
+    apiVersion: apps/v1
+    kind: Deployment
+    name: fetcher-worker
+  minReplicas: 1      # Минимум 1 worker
+  maxReplicas: 50     # Максимум 50 worker'ов
+  metrics:
+  # Масштабирование по CPU
+  - type: Resource
+    resource:
+      name: cpu
+      target:
+        type: Utilization
+        averageUtilization: 70  # Масштабировать при 70% CPU
+  # Масштабирование по памяти
+  - type: Resource
+    resource:
+      name: memory
+      target:
+        type: Utilization
+        averageUtilization: 80  # Масштабировать при 80% памяти
+  behavior:
+    scaleDown:
+      stabilizationWindowSeconds: 300  # Ждать 5 минут перед уменьшением
+      policies:
+      - type: Percent
+        value: 50  # Уменьшать максимум на 50% за раз
+        periodSeconds: 60
+    scaleUp:
+      stabilizationWindowSeconds: 0  # Масштабировать вверх сразу
+      policies:
+      - type: Percent
+        value: 100  # Увеличивать до 100% за раз
+        periodSeconds: 15
+      - type: Pods
+        value: 4    # Или добавить 4 под'а за раз
+        periodSeconds: 15
+      selectPolicy: Max  # Выбрать максимальное значение
+

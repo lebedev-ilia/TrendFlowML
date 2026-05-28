@@ -1,0 +1,58 @@
+{
+  "schema_system_version": "vp_schema_v1",
+  "schema_version": "speaker_diarization_extractor_npz_v2",
+  "producer": "speaker_diarization_extractor",
+  "artifact_kind": "npz",
+  "allow_extra_keys": false,
+  "meta": {
+    "required_keys": [
+      "producer",
+      "producer_version",
+      "schema_version",
+      "created_at",
+      "platform_id",
+      "video_id",
+      "run_id",
+      "config_hash",
+      "sampling_policy_version",
+      "dataprocessor_version",
+      "status",
+      "empty_reason",
+      "models_used",
+      "model_signature",
+      "stage_timings_ms"
+    ],
+    "optional_keys": [
+      "device_used",
+      "scheduler_knobs",
+      "resource_metrics",
+      "error",
+      "diarization_contract_version",
+      "features_enabled",
+      "model_name",
+      "weights_digest"
+    ]
+  },
+  "fields": {
+    "feature_names": { "required": true, "tier": "model_facing", "dtype": "object", "shape": ["F"] },
+    "feature_values": { "required": true, "tier": "model_facing", "dtype": "float32", "shape": ["F"] },
+
+    "segment_start_sec": { "required": true, "tier": "analytics", "dtype": "float32", "shape": ["N"] },
+    "segment_end_sec": { "required": true, "tier": "analytics", "dtype": "float32", "shape": ["N"] },
+    "segment_center_sec": { "required": true, "tier": "analytics", "dtype": "float32", "shape": ["N"] },
+    "segment_mask": { "required": true, "tier": "analytics", "dtype": "bool", "shape": ["N"] },
+
+    "turn_start_sec": { "required": true, "tier": "analytics", "dtype": "float32", "shape": ["K"] },
+    "turn_end_sec": { "required": true, "tier": "analytics", "dtype": "float32", "shape": ["K"] },
+    "turn_speaker_id": { "required": true, "tier": "analytics", "dtype": "int32", "shape": ["K"] },
+    "turn_mask": { "required": true, "tier": "analytics", "dtype": "bool", "shape": ["K"] },
+
+    "speaker_ids": { "required": true, "tier": "analytics", "dtype": "int32", "shape": ["S"] },
+    "speaker_duration_sec": { "required": true, "tier": "analytics", "dtype": "float32", "shape": ["S"] },
+    "speaker_time_ratio": { "required": true, "tier": "analytics", "dtype": "float32", "shape": ["S"] },
+    "speaker_turns_count_by_speaker": { "required": true, "tier": "analytics", "dtype": "int32", "shape": ["S"] },
+
+    "meta": { "required": true, "tier": "debug", "dtype": "object", "shape": [] }
+  }
+}
+

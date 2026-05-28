@@ -120,6 +120,12 @@ Mapping к исходнику:
 - Если `ffmpeg`/`ffprobe` отсутствуют в PATH — Segmenter **падает** (fail-fast).
 - Segmenter также пишет `audio/segments.json` — **источник истины** для time‑domain окон аудио‑экстракторов (Tier‑0).
 
+Важно (Audit v3):
+- Если у входного видео **нет audio stream** (контейнер без аудио дорожки), это **валидный empty**, а не ERROR:
+  - Segmenter **не** создаёт `audio/audio.wav`,
+  - Segmenter всё равно пишет `audio/segments.json` с `audio_present=false`, `empty_reason` и пустым `families={}`.
+  - Downstream процессоры (AudioProcessor) обязаны трактовать это как `status="empty"` и **не падать**.
+
 ### 9.1) Аудио-метаданные без ffprobe (fallback)
 
 - Если `ffprobe` доступен, Segmenter использует его для `duration_sec`/`sample_rate`.
@@ -136,11 +142,14 @@ Mapping к исходнику:
 Схема:
 - `schema_version="audio_segments_v1"`
 - `sample_rate`, `total_samples`, `audio_duration_sec`, `video_duration_sec`
+- `audio_present: bool` (Audit v3)
+- `empty_reason: str | null` (Audit v3; каноничный словарь см. `ARTIFACTS_AND_SCHEMAS.md`)
 - `families`:
   - `primary`: короткие окна вокруг time‑anchors (по умолчанию якоря берутся из `core_clip` sampling, иначе — равномерно по union time-axis). Используется для `loudness_extractor`.
   - `clap`: короткие окна на **универсальной нелинейной кривой** (см. ниже). Используется для `clap_extractor`.
   - `tempo`: длинные sliding windows (`window_sec/stride_sec`) для устойчивого BPM. Используется для `tempo_extractor`. Количество окон также задаётся **универсальной нелинейной кривой**.
-  - `asr`: длинные sliding windows (`window_sec/stride_sec`) для ASR chunking (Whisper/Triton). Используется для `asr_extractor`.
+  - `asr`: sliding windows (`window_sec/stride_sec`) для ASR chunking. Используется для `asr_extractor`.
+    - Audit v3: допускаются профили/политики (например `profile="semantic"|"proxy"`) и cap (`max_windows`) как **явные параметры sampling policy** (без fallback логики).
   - `diarization`: фиксированные окна (`window_sec/stride_sec`) для speaker diarization (speaker embeddings). Используется для `speaker_diarization_extractor`.
   - `emotion`: более длинные перекрывающиеся окна (`window_sec/stride_sec`) для emotion diarization (качество). Используется для `emotion_diarization_extractor`.
   - `source_separation`: длинные окна (`window_sec/stride_sec`) для source separation shares (CPU/feature heavy). Используется для `source_separation_extractor`.
@@ -156,5 +165,8 @@ Mapping к исходнику:
 
 Политика:
 - Если Segmenter обнаруживает существенный drift между `audio_duration_sec` и `video_duration_sec` — это **ERROR** (no-fallback), чтобы не ломать мультимодальную синхронизацию.
+
+Empty policy:
+- Если `audio_present=false`, то drift-policy **не применяется** (нет аудио для сравнения), а `families` обязано быть пустым.
 
 

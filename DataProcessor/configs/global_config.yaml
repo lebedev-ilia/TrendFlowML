@@ -38,7 +38,7 @@ processors:
     extractors:
       # Tier-0 baseline extractors
       clap:
-        enabled: false
+        enabled: true
         # Индивидуальные настройки параллелизма и батчинга для CLAP
         parallelism:
           preprocess_workers: 4  # Количество воркеров для параллельной загрузки/предобработки сегментов (null = auto, по умолчанию 4)
@@ -49,7 +49,7 @@ processors:
           enable_html_render: true  # Генерировать HTML debug страницу
       
       tempo:
-        enabled: false
+        enabled: true
         # Индивидуальные настройки параллелизма для Tempo (CPU extractor)
         parallelism:
           segment_workers: 8  # Количество параллельных воркеров для обработки сегментов (null = auto, по умолчанию 1)
@@ -60,7 +60,7 @@ processors:
           enable_html_render: true  # Генерировать HTML debug страницу
       
       loudness:
-        enabled: false
+        enabled: true
         # Индивидуальные настройки параллелизма для Loudness (CPU extractor)
         parallelism:
           segment_workers: 8  # Количество параллельных воркеров для обработки сегментов (null = auto, по умолчанию 1)
@@ -72,7 +72,7 @@ processors:
       
       # ASR extractor
       asr:
-        enabled: false
+        enabled: true
         model_size: "small"  # small|medium|large
         # Decoding controls (Whisper DecodingOptions)
         decode:
@@ -107,7 +107,7 @@ processors:
       
       # Speaker diarization
       speaker_diarization:
-        enabled: false  # Requires HUGGINGFACE_TOKEN environment variable
+        enabled: true  # Requires HUGGINGFACE_TOKEN environment variable
         model_size: "small"  # small|large
         batch_size: null  # Размер батча для inference (None = auto, >100 segments → split)
         clustering_method: "agglomerative"  # agglomerative|kmeans|auto
@@ -131,12 +131,12 @@ processors:
       
       # Emotion diarization
       emotion_diarization:
-        enabled: false
+        enabled: true
         model_size: "large"  # small|large
-        batch_size: 16  # Размер батча для обработки сегментов
+        batch_size: 4  # Размер батча для обработки сегментов (снижено для ~6 GiB VRAM)
         silence_peak_threshold: 1e-3
         silence_rms_threshold: 1e-4
-        process_full_audio: true  # Если true, обрабатывает все аудио целиком (не по сегментам). Использует run() вместо run_segments()
+        process_full_audio: false  # Audit v3: must stay false; emotion runs on Segmenter families.emotion only (run_segments).
         # Индивидуальные настройки параллелизма для Emotion Diarization (GPU extractor in-process)
         parallelism:
           preprocess_workers: 4  # Количество воркеров для параллельной загрузки/предобработки сегментов
@@ -155,9 +155,10 @@ processors:
       
       # Source separation
       source_separation:
-        enabled: false
+        enabled: true
+        # device: "cpu"  # optional: cpu|cuda — только для этого экстрактора (по умолчанию как audio.device)
         model_size: "large"  # large (единственный поддерживаемый размер)
-        batch_size: 8  # Размер батча для обработки окон
+        batch_size: 2  # Размер батча для обработки окон (снижено для ~6 GiB VRAM)
         silence_peak_threshold: 1e-3  # Порог peak для детекции тишины
         silence_rms_threshold: 1e-4  # Порог RMS для детекции тишины
         # Индивидуальные настройки параллелизма для Source Separation (GPU extractor inprocess)
@@ -179,7 +180,7 @@ processors:
       
       # Speech analysis (bundle extractor)
       speech_analysis:
-        enabled: false
+        enabled: true
         pitch_enabled: false  # Включить анализ высоты тона (требует включения extractor "pitch" или pitch_result)
         silence_peak_threshold: 1e-3  # Порог peak для детекции тишины
         silence_rms_threshold: 1e-4  # Порог RMS для детекции тишины
@@ -201,7 +202,7 @@ processors:
       
       # Spectral extractor
       spectral:
-        enabled: false
+        enabled: true
         sample_rate: 22050
         hop_length: 512
         n_fft: 2048
@@ -225,7 +226,7 @@ processors:
       
       # Quality extractor
       quality:
-        enabled: false
+        enabled: true
         sample_rate: 22050
         frame_len_ms: 50.0
         hop_ms: 25.0
@@ -249,7 +250,7 @@ processors:
       
       # MFCC extractor
       mfcc:
-        enabled: false
+        enabled: true
         sample_rate: 22050
         n_mfcc: 13
         n_fft: 2048
@@ -277,7 +278,7 @@ processors:
       
       # Mel extractor
       mel:
-        enabled: false
+        enabled: true
         sample_rate: 22050
         hop_length: 512
         n_fft: 2048
@@ -305,7 +306,7 @@ processors:
       
       # Onset extractor
       onset:
-        enabled: false
+        enabled: true
         sample_rate: 22050
         hop_length: 512
         pre_max: 3
@@ -337,7 +338,7 @@ processors:
       
       # Chroma extractor
       chroma:
-        enabled: false
+        enabled: true
         sample_rate: 22050
         hop_length: 512
         n_fft: 4096
@@ -366,7 +367,7 @@ processors:
       
       # Rhythmic extractor
       rhythmic:
-        enabled: false
+        enabled: true
         sample_rate: 22050
         hop_length: 512
         average_channels: true
@@ -386,7 +387,7 @@ processors:
       
       # Pitch extractor
       pitch:
-        enabled: false  # По умолчанию отключен, требуется для voice_quality и speech_analysis с pitch метриками
+        enabled: true  # По умолчанию отключен, требуется для voice_quality и speech_analysis с pitch метриками
         sample_rate: 22050
         fmin: 50.0  # Минимальная частота f0 (Hz)
         fmax: 2000.0  # Максимальная частота f0 (Hz)
@@ -411,7 +412,7 @@ processors:
       
       # Voice quality extractor
       voice_quality:
-        enabled: false
+        enabled: true
         sample_rate: 16000
         hnr_frame_ms: 20.0
         rms_mask_threshold: 1e-4
@@ -437,7 +438,7 @@ processors:
       
       # HPSS extractor
       hpss:
-        enabled: false
+        enabled: true
         kernel_size: 31
         margin: 2
         power: 2.0
@@ -459,7 +460,7 @@ processors:
       
       # Key extractor
       key:
-        enabled: false
+        enabled: true
         sample_rate: 22050
         hop_length: 512
         chroma_type: "cqt"  # cqt|stft
@@ -479,7 +480,7 @@ processors:
       
       # Band energy extractor
       band_energy:
-        enabled: false
+        enabled: true
         sample_rate: 22050
         n_fft: 2048
         hop_length: 512
@@ -497,7 +498,7 @@ processors:
       
       # Spectral entropy extractor
       spectral_entropy:
-        enabled: false
+        enabled: true
         sample_rate: 22050
         n_fft: 2048
         hop_length: 512
@@ -518,7 +519,7 @@ processors:
   text:
     enabled: false  # Включите и укажите input_json для использования
     required: false
-    input_json: /home/ilya/Рабочий стол/TrendFlowML/example/example_text_documents/video_document_1.json  # Путь к VideoDocument JSON (обязателен если enabled=true)
+    input_json: /media/ilya/Новый том/TrendFlowML/example/example_text_documents/video_document_1.json  # Путь к VideoDocument JSON (обязателен если enabled=true)
     feature_flags:
       enable_embeddings: true  # GPU-heavy text embedders
       include_primary_embedding: true  # Include primary_embedding in NPZ
@@ -530,7 +531,7 @@ processors:
       enabled: false  # Enable batch processing optimizations (GPU batching + CPU parallelism)
       max_workers: 4  # Number of parallel workers for CPU extractors (null = auto, typically os.cpu_count())
       enable_gpu_batching: true  # Use extract_batch() for GPU extractors with supports_batch=True
-      enable_cpu_parallel: true  # Parallelize CPU extractors across documents using ThreadPoolExecutor
+      enable_cpu_parallel: true  # Multi-doc: parallelize CPU extractors across documents. Single-doc MainProcessor.run(): also runs consecutive LexicalStatsExtractor + ASRTextProxyExtractor in one thread pool when both are on CPU (safe read-only pair).
       # Note: batch processing is currently used internally for optimization;
       # CLI still processes one document at a time, but extractors use batch-aware implementations
     
@@ -538,7 +539,7 @@ processors:
     extractors:
       # Lexical static features
       lexico_static_features:
-        enabled: false
+        enabled: true
         feature_flags:
           enable_title: true
           enable_description: true
@@ -553,7 +554,7 @@ processors:
       
       # Tags extractor
       tags_extractor:
-        enabled: false
+        enabled: true
         feature_flags:
           enable_extract_hashtags: true
           mutate_doc_clean_texts: true
@@ -569,7 +570,7 @@ processors:
       
       # ASR text proxy audio features
       asr_text_proxy_audio_features:
-        enabled: false
+        enabled: true
         feature_flags:
           enable_basic: true
           enable_noise: true
@@ -581,7 +582,7 @@ processors:
       
       # Title embedder
       title_embedder:
-        enabled: false  # Requires --enable-embeddings
+        enabled: true  # Requires --enable-embeddings
         model_name: "intfloat/multilingual-e5-large"
         cache_enabled: false
         cache_ttl_days: 30.0
@@ -599,7 +600,7 @@ processors:
       
       # Description embedder
       description_embedder:
-        enabled: false  # Requires --enable-embeddings
+        enabled: true  # Requires --enable-embeddings
         model_name: "intfloat/multilingual-e5-large"
         cache_enabled: false
         cache_ttl_days: 30.0
@@ -618,7 +619,7 @@ processors:
       
       # Hashtag embedder
       hashtag_embedder:
-        enabled: false  # Requires --enable-embeddings
+        enabled: true  # Requires --enable-embeddings
         model_name: "intfloat/multilingual-e5-large"
         cache_enabled: false
         cache_ttl_days: 7.0
@@ -641,7 +642,7 @@ processors:
       
       # Transcript chunk embedder
       transcript_chunk_embedder:
-        enabled: false  # Requires --enable-embeddings
+        enabled: true  # Requires --enable-embeddings
         model_name: "intfloat/multilingual-e5-large"
         tokenizer_spec_name: "shared_tokenizer_v1"
         cache_enabled: false
@@ -665,7 +666,7 @@ processors:
       
       # Comments embedder
       comments_embedder:
-        enabled: false  # Requires --enable-embeddings
+        enabled: true  # Requires --enable-embeddings
         model_name: "intfloat/multilingual-e5-large"
         cache_enabled: false
         cache_ttl_days: 7.0
@@ -687,7 +688,7 @@ processors:
       
       # Transcript aggregator
       transcript_aggregator:
-        enabled: false  # Requires transcript_chunk_embedder
+        enabled: true  # Requires transcript_chunk_embedder
         model_name: "intfloat/multilingual-e5-large"
         device: "cuda"
         decay_rate: 0.01
@@ -703,7 +704,7 @@ processors:
       
       # Comments aggregator
       comments_aggregator:
-        enabled: false  # Requires comments_embedder
+        enabled: true  # Requires comments_embedder
         model_name: "intfloat/multilingual-e5-large"
         feature_flags:
           compute_mean: true
@@ -715,8 +716,8 @@ processors:
       
       # Cosine metrics extractor
       cosine_metrics_extractor:
-        enabled: false
-        transcript_source_priority: ["combined", "whisper", "youtube_auto"]
+        enabled: true
+        transcript_source_priority: ["whisper", "youtube_auto"]
         comments_mode: "aggregates"
         feature_flags:
           compute_title_desc: true
@@ -733,7 +734,7 @@ processors:
       
       # Embedding pair top-k extractor
       embedding_pair_topk_extractor:
-        enabled: false
+        enabled: true
         top_k: 10
         top_k_slots: 5
         transcript_source_priority: ["whisper", "youtube_auto"]
@@ -756,8 +757,8 @@ processors:
       
       # Embedding stats extractor
       embedding_stats_extractor:
-        enabled: false
-        transcript_source_priority: ["whisper", "youtube_auto"]
+        enabled: true
+        transcript_source_priority: ["whisper"]
         top_k_slots: 8
         topk: 8
         min_chunks_required: 2
@@ -768,9 +769,9 @@ processors:
         require_topic_distribution: false
         emit_extra_metrics: false
       
-      # Embedding shift indicator extractor
+      # Embedding shift indicator extractor (Audit v3: 27 tp_embshift_*; full Text preflight: consider require_transcript_chunks: true)
       embedding_shift_indicator_extractor:
-        enabled: false
+        enabled: true
         n_window_chunks: 2
         cosine_threshold: 0.85
         transcript_source_priority: ["whisper", "youtube_auto"]
@@ -783,7 +784,7 @@ processors:
       
       # Embedding source ID extractor
       embedding_source_id_extractor:
-        enabled: false
+        enabled: true
         vector_store_uri: "faiss://semantic_titles_v1"
         model_version: "unknown"
         primary_source_policy: "transcript_first"  # transcript_first|title_first|description_first|title_only|transcript_only
@@ -791,7 +792,7 @@ processors:
       
       # Speaker turn embeddings aggregator
       speaker_turn_embeddings_aggregator:
-        enabled: false
+        enabled: true
         model_name: "intfloat/multilingual-e5-large"
         device: "cuda"
         fp16: true
@@ -808,18 +809,18 @@ processors:
         dedup_turn_texts: true
         emit_extra_metrics: false
       
-      # Title to hashtag cosine extractor
+      # Title to hashtag cosine extractor (enabled: list inclusion only; no in-extractor enabled flag)
       title_to_hashtag_cosine_extractor:
-        enabled: false
+        enabled: true
         require_title_embedding: false
         require_hashtag_embedding: false
       
-      # Top-K similar titles extractor
+      # Top-K similar titles extractor (Audit v3: 29 tp_topktitles_*; full Text preflight: consider require_title_embedding: true)
       topk_similar_titles_extractor:
-        enabled: false
+        enabled: true
         corpus_spec_name: "similar_titles_corpus_v1"
         k: 5
-        export_topk_mode: "ids_and_scores"  # ids_and_scores|ids_only|scores_only
+        export_topk_mode: "ids_and_scores"  # none|ids_only|ids_and_scores
         max_export_k: 50
         require_title_embedding: false
         require_faiss: false
@@ -833,9 +834,9 @@ processors:
         cache_ttl_s: 3600.0
         cache_max_entries: 2
       
-      # Title embedding cluster entropy extractor
+      # Title embedding cluster entropy extractor (Audit v3: top_k_slots clamped to max 8 in code)
       title_embedding_cluster_entropy_extractor:
-        enabled: false
+        enabled: true
         clusters_spec_name: "semantic_clusters_v1"
         top_k_slots: 5
         temperature: 0.1
@@ -845,9 +846,9 @@ processors:
         use_faiss: true
         emit_extra_metrics: false
       
-      # Semantic cluster extractor
+      # Semantic cluster extractor (Audit v3: 31 keys tp_semclust_*; DAG: title+description+hashtag embedders)
       semantic_cluster_extractor:
-        enabled: false
+        enabled: true
         clusters_spec_name: "semantic_clusters_v1"
         primary_source: "title"  # title|description|hashtag
         allow_fallback_sources: null  # list[str] subset of {title,description,hashtag}
@@ -859,8 +860,8 @@ processors:
       
       # QA embedding pairs extractor
       qa_embedding_pairs_extractor:
-        enabled: false
-        model_name: "sentence-transformers/all-MiniLM-L6-v2"
+        enabled: true
+        model_name: "intfloat/multilingual-e5-large"
         device: "cuda"
         fp16: true
         batch_size: 64
@@ -889,7 +890,7 @@ processors:
       
       # Semantics topics keyphrases extractor
       semantics_topics_keyphrases:
-        enabled: false
+        enabled: true
         device: "cuda" # > x8 ускорение чем на CPU
         feature_flags:
           enable_topic_distribution: true
@@ -914,10 +915,11 @@ processors:
         cache_enabled: true
         cache_ttl_s: 604800.0  # 7 days
         cache_max_total_mb: 512
+        emit_extra_metrics: false
   
   # VisualProcessor
   visual:
-    enabled: true  # Всегда включен
+    enabled: true
     required: true
     # Batch processing configuration (Stage 2+) - глобальные настройки для batch mode
     batch_processing:
@@ -934,11 +936,11 @@ processors:
       # Core providers (базовые провайдеры)
       core_providers:
         core_clip: true
-        core_depth_midas: false
+        core_depth_midas: true
         core_optical_flow: true
-        core_object_detections: true
+        core_object_detections: false
         ocr_extractor: false
-        core_face_landmarks: true
+        core_face_landmarks: false
         content_domain: false
         franchise_recognition: false
         brand_semantics: false
@@ -948,8 +950,8 @@ processors:
       
       # Modules (модули обработки)
       modules:
-        cut_detection: true
-        scene_classification: true
+        cut_detection: false
+        scene_classification: false
         video_pacing: false
         uniqueness: false
         shot_quality: false
@@ -959,10 +961,8 @@ processors:
         behavioral: false
         optical_flow: false
         action_recognition: false
-
-        color_light: true
+        color_light: false
         frames_composition: false
-        
         high_level_semantic: false
         micro_emotion: false
         similarity_metrics: false
@@ -975,6 +975,9 @@ processors:
         rs_path: null
         max_parallel_modules: 1
         gpu_max_concurrent: "auto"  # auto|number
+        # Triton endpoint (Audit v3): used by dp_models Triton specs via ${TRITON_HTTP_URL}
+        # VisualProcessor will export this value into subprocess env as TRITON_HTTP_URL if not already set.
+        triton_http_url: "http://localhost:8000"
       
       # Core provider configurations
       core_clip:
@@ -986,22 +989,9 @@ processors:
         weights_digest: "unknown"
         engine: "torch"  # Used only for inprocess runtime
         precision: "fp16"  # fp16|fp32
-        # Triton configuration (recommended path via ModelManager)
-        triton_image_model_spec: null  # ModelManager spec name (e.g., "clip_image_triton"), null = use legacy path
-        triton_text_model_spec: null  # ModelManager spec name (e.g., "clip_text_triton"), null = use legacy path
-        # Legacy Triton configuration (used if model_spec is null)
-        triton_http_url: "http://localhost:8000"  # Triton HTTP endpoint (or use TRITON_HTTP_URL env var)
-        triton_image_model_name: "clip_image_224"  # Triton model name for image embeddings (clip_image_224|clip_image_336|clip_image_448)
-        triton_image_model_version: null  # Triton model version (null = latest)
-        triton_image_input_name: "INPUT__0"
-        triton_image_output_name: "OUTPUT__0"
-        triton_image_datatype: "UINT8"  # FP32|UINT8 (UINT8 for ensemble with preprocess, FP32 for direct ONNX)
-        triton_text_model_name: "clip_text"  # Triton model name for text embeddings
-        triton_text_model_version: null  # Triton model version (null = latest)
-        triton_text_input_name: "INPUT__0"
-        triton_text_output_name: "OUTPUT__0"
-        triton_text_datatype: "INT64"
-        triton_timeout_sec: 240
+        # Triton configuration (Audit v3 FINAL): ModelManager-only specs (no legacy triton_* args)
+        triton_image_model_spec: "clip_image_224_triton"
+        triton_text_model_spec: "clip_text_triton"
         disable_text_cache: false  # Text embeddings cache: computed once per model size (224/336/448) and reused for all videos
         # Cache location: DP_MODELS_ROOT/cache/core_clip_text_embeddings/size_{224|336|448}/{cache_key}.npz
         # Cache includes: embeddings, prompts_version, model_size, created_at (versioned for reproducibility)
@@ -1015,13 +1005,8 @@ processors:
         triton_preprocess_preset: "midas_256"
         out_width: 256
         out_height: 256
-        triton_http_url: "http://localhost:8000"
-        triton_model_spec: ""
-        triton_model_name: "midas_256"
-        triton_model_version: ""
-        triton_input_name: "INPUT__0"
-        triton_output_name: "OUTPUT__0"
-        triton_datatype: "UINT8"
+        # Triton configuration (Audit v3): prefer ModelManager-only specs (no direct triton_http_url/model_name required)
+        triton_model_spec: "midas_256_triton"
         model_version: "unknown"
         weights_digest: "unknown"
         precision: "fp32"
@@ -1033,18 +1018,15 @@ processors:
       core_optical_flow:
         runtime: "triton"
         triton_preprocess_preset: "raft_256"
-        triton_http_url: "http://localhost:8000"
-        triton_model_spec: ""
-        triton_model_name: "raft_256"
-        triton_model_version: ""
-        triton_input0_name: "INPUT0__0"
-        triton_input1_name: "INPUT1__0"
-        triton_output_name: "OUTPUT__0"
-        triton_datatype: "UINT8"
+        # Triton configuration (Audit v3): prefer ModelManager-only spec
+        triton_model_spec: "raft_256_triton"
         model_version: "unknown"
         weights_digest: "unknown"
         precision: "fp32"
         batch_size: 16
+        render:
+          enable_render: true
+          enable_html_render: true
       
       core_object_detections:
         runtime: "ultralytics"  # ultralytics
@@ -1074,7 +1056,7 @@ processors:
         face_detection_min_frames: 20
         face_detection_max_frames: 200
         face_detection_model_selection: 0
-        face_detection_min_confidence: 0.5
+        face_detection_min_confidence: 0.4
         face_mesh_window_radius: ""
         pose_static_image_mode: false
         pose_model_complexity: 2
@@ -1086,11 +1068,13 @@ processors:
         hands_model_complexity: 1
         hands_min_detection_confidence: 0.5
         hands_min_tracking_confidence: 0.5
-        face_mesh_static_image_mode: false
+        # Important for sparse sampling (~4 fps): tracking between frames is unreliable.
+        # Force per-frame face detection to improve recall and landmark stability.
+        face_mesh_static_image_mode: true
         face_mesh_max_num_faces: 1
         face_mesh_refine_landmarks: true
-        face_mesh_min_detection_confidence: 0.5
-        face_mesh_min_tracking_confidence: 0.5
+        face_mesh_min_detection_confidence: 0.4
+        face_mesh_min_tracking_confidence: 0.4
         enable_async: true
         enable_parallel: true
         num_workers: 2
@@ -1132,6 +1116,15 @@ processors:
           enable_html_render: true
       
       ocr_extractor:
+        # OCR engine selection:
+        # - "ppocr_rec_onnx" (recommended): better recognition quality, offline via dp_models + onnxruntime
+        # - "tesseract": CLI-based, lower quality on many real-world overlays
+        engine: "ppocr_rec_onnx"
+        # Used when engine=ppocr_rec_onnx (dp_models ModelManager spec).
+        rec_model_spec: "ppocr_rec_onnx_v1_inprocess"
+        ppocr_img_h: 48
+        ppocr_img_w: 320
+        min_rec_score: 0.0
         proposal_class: "text_region"
         min_det_score: 0.5
         max_boxes_per_frame: 5
@@ -1139,6 +1132,8 @@ processors:
         crop_margin_frac: 0.02
         tesseract_lang: "eng+rus"
         tesseract_psm: 6
+        # Privacy: default false (store only hashes/lengths, not raw text)
+        retain_raw_ocr_text: false
         render:
           enable_render: true  # Generate render-context JSON (for LLM/frontend)
           enable_html_render: true  # Generate HTML debug page
@@ -1201,6 +1196,8 @@ processors:
         hard_cuts_cascade: true  # Enable cascade mode for hard cuts
         hard_cuts_cascade_keep_top_p: 0.25  # Keep top-p histogram pairs in cascade mode
         hard_cuts_cascade_hist_margin: 0.0  # Histogram margin in cascade mode
+        # Max allowed gap (seconds) between consecutive sampled timestamps; 0 = disable check.
+        max_sampling_gap_sec: 30.0
         prefer_core_optical_flow: true  # Prefer reusing core_optical_flow/flow.npz
         require_core_optical_flow: true  # Require core_optical_flow aligned artifact
         write_model_facing_npz: true  # Write model-facing NPZ
@@ -1355,17 +1352,77 @@ processors:
           enable_render: true  # Generate render-context JSON (for LLM/frontend)
           enable_html_render: true  # Generate HTML debug page
 
-      color_light:
-        max_frames_per_scene: 350  # Максимальное количество кадров для обработки на сцену
-        stride: 5  # Шаг для выборки кадров (deprecated, используется frame_indices из metadata)
+      micro_emotion:
+        # Основные параметры микромимики и OpenFace
+        fps: 30
+        microexpr_smoothing_sigma: 0.05
+        microexpr_delta_threshold: 0.4
+        microexpr_max_duration_frames: 15
+        microexpr_min_peak_distance_frames: 6
+        gaze_centered_threshold: 10.0
+        pca_components: 3
+        au_confidence_threshold: 0.5
+        # OpenFace runtime (Docker, GPU-only по политике модуля)
+        docker_image: "openface/openface:latest"
+        openface_batch_size: 64
+        device: "cuda"
+        feature_groups: "default"
+        progress_every_frames: 50
         render:
           enable_render: true  # Generate render-context JSON (for LLM/frontend)
           enable_html_render: true  # Generate HTML debug page
+
+      color_light:
+        # NOTE (Audit v3): sampling контролируется Segmenter, параметры ниже оставлены для совместимости.
+        max_frames_per_scene: 350  # DEPRECATED
+        stride: 5  # DEPRECATED
+        # Debug gating: 1=yes (default), 0=no (уменьшает размер NPZ, убирая `frames`/`scenes`)
+        store_debug_objects: 1
+        render:
+          enable_render: true  # Generate render-context JSON (for LLM/frontend)
+          enable_html_render: true  # Generate HTML debug page
+
+      text_scoring:
+        # OCR source and multimodal alignment configuration
+        ocr_npz: null  # Optional explicit path override; null = auto-discovery via ResultStore
+        use_face_data: false  # Use core_face_landmarks for multimodal alignment (strict dependency if true)
+        alignment_window_seconds: 0.5  # Time window for motion/attention alignment around text (seconds)
+        motion_weight: 0.0  # Weight of motion signal in multimodal alignment
+        face_weight: 1.0  # Weight of face signal in multimodal alignment (used when use_face_data=true)
+        audio_weight: 0.0  # Placeholder for future audio alignment (kept for API compatibility)
+        min_ocr_confidence: 0.4  # Minimum OCR confidence threshold
+
+        # Privacy and optional noisy features
+        retain_raw_ocr_text: false  # If false → store only hashed/length information for OCR texts
+        enable_text_peaks: false  # Enable text_emphasis_peak_* features (often noisy)
+        enable_language_entropy: false  # Enable ocr_language_entropy feature (language mix)
+        enable_text_movement_speed: false  # Enable text_movement_speed feature (bbox motion)
+
+        render:
+          enable_render: true  # Generate render-context JSON for frontend/LLM
+          enable_html_render: true  # Generate HTML debug page for this component
 
       frames_composition:
         feature_set: "default"  # Feature set preset: default|ml|all
         features: null  # Comma-separated feature groups to enable (overrides --feature-set). Groups: anchors,balance,symmetry,negative_space,complexity,leading_lines,depth,objects,faces,style
         num_workers: null  # Per-frame compute workers (CPU, null = auto, typically min(8, os.cpu_count()))
+        render:
+          enable_render: true  # Generate render-context JSON (for LLM/frontend)
+          enable_html_render: true  # Generate HTML debug page
+
+      high_level_semantic:
+        # Группы фич, которые будут включены (core,scenes,events,audio,emotion,text)
+        feature_groups: null  # null = использовать дефолтные группы в модуле
+        # Политики обязательности внешних процессоров (Text/Audio)
+        require_cut_detection_model_facing: false
+        require_text_processor: false
+        require_audio_loudness: false
+        require_audio_tempo: false
+        require_audio_clap: false
+        # Настройки чувствительности и прогресса
+        progress_every_frames: 50
+        semantic_jump_topk_events: 256
+        semantic_jump_min_strength: 0.25
         render:
           enable_render: true  # Generate render-context JSON (for LLM/frontend)
           enable_html_render: true  # Generate HTML debug page

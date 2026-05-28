@@ -158,6 +158,7 @@ def _process_batch(
     enable_embeddings: bool,
     include_primary_embedding: bool,
     store_raw_payload: bool,
+    require_known_schema: bool,
 ) -> int:
     """
     Обрабатывает несколько документов в batch режиме.
@@ -312,7 +313,7 @@ def _process_batch(
                 _atomic_save_npz(tmp_npz_path, **npz_data)
                 
                 # Validate before atomic move
-                v_ok, issues, meta = validate_npz(tmp_npz_path)
+                v_ok, issues, meta = validate_npz(tmp_npz_path, require_known_schema=require_known_schema)
                 if not v_ok:
                     status = "error"
                     notes = "artifact validation failed: " + "; ".join(i.message for i in issues[:5])
@@ -391,7 +392,7 @@ def _payload_summary(*, doc: Any, payload: Dict[str, Any]) -> Dict[str, Any]:
         emb_info = embid.get("embedding_source_id") if isinstance(embid, dict) and isinstance(embid.get("embedding_source_id"), dict) else None
         if isinstance(emb_info, dict):
             out = {}
-            for k in ("vector_id", "vector_store_uri", "embedding_relpath", "model_version", "primary_source"):
+            for k in ("vector_id", "vector_store_uri", "embedding_relpath", "model_name", "model_version", "primary_source"):
                 v = emb_info.get(k)
                 if isinstance(v, str) and v:
                     out[k] = v
@@ -458,7 +459,7 @@ def main() -> int:
         type=str,
         default=None,
         help="JSON dict mapping devices to extractor class names. Example: "
-             '\'{"cpu":["LexicalStatsExtractor","TagsExtractor"],"cpu2":["ASRTextProxyExtractor"]}\'',
+             '\'{"cpu":["TagsExtractor","LexicalStatsExtractor","ASRTextProxyExtractor"]}\'',
     )
     parser.add_argument(
         "--extractor-params-json",
@@ -519,6 +520,16 @@ def main() -> int:
         action="store_true",
         help="Disable CPU parallelism optimizations (use sequential processing for CPU extractors).",
     )
+    parser.add_argument(
+        "--debug",
+        action="store_true",
+        help="Enable DEBUG level logging for detailed extractor execution information.",
+    )
+    parser.add_argument(
+        "--require-known-schema",
+        action="store_true",
+        help="Fail NPZ validation if meta.schema_version has no machine schema in the registry (Audit v3 strict).",
+    )
     args = parser.parse_args()
 
     video_id = args.video_id or os.path.splitext(os.path.basename(args.input_json))[0]
@@ -534,6 +545,7 @@ def main() -> int:
                 "extractor_params_json": args.extractor_params_json,
                 "disabled_extractors": disabled,
                 "strict_extractors": (not bool(args.no_strict_extractors)),
+                "require_known_schema": bool(args.require_known_schema),
             },
             sort_keys=True,
             ensure_ascii=False,
@@ -554,12 +566,13 @@ def main() -> int:
     os.makedirs(sub_artifacts_dir, exist_ok=True)
 
     # Setup structured logging
+    log_level = logging.DEBUG if args.debug else logging.INFO
     log_dir = args.log_dir or os.path.join(run_rs_path, "_logs")
     if args.log_dir or not sys.stderr.isatty():
         os.makedirs(log_dir, exist_ok=True)
         log_file = os.path.join(log_dir, "text_processor.log")
         logging.basicConfig(
-            level=logging.INFO,
+            level=log_level,
             format="%(asctime)s [%(levelname)s] %(name)s: %(message)s",
             handlers=[
                 logging.FileHandler(log_file, encoding="utf-8"),
@@ -568,7 +581,7 @@ def main() -> int:
         )
     else:
         logging.basicConfig(
-            level=logging.INFO,
+            level=log_level,
             format="%(asctime)s [%(levelname)s] %(name)s: %(message)s",
             handlers=[logging.StreamHandler(sys.stderr)],
         )
@@ -588,8 +601,10 @@ def main() -> int:
         },
     )
 
-    # Default devices config: CPU-only by default (baseline-safe).
-    devices_config: Dict[str, List[str]] = {"cpu": ["LexicalStatsExtractor", "TagsExtractor", "ASRTextProxyExtractor"]}
+    # Default devices config: CPU-only; TagsExtractor first (matches dependency DAG / Audit v3 preflight).
+    devices_config: Dict[str, List[str]] = {
+        "cpu": ["TagsExtractor", "LexicalStatsExtractor", "ASRTextProxyExtractor"],
+    }
     extractor_params: Dict[str, Dict[str, Any]] = {}
 
     # Optional JSON override (preferred for website-driven configs).
@@ -672,18 +687,29 @@ def main() -> int:
             enable_embeddings=bool(args.enable_embeddings),
             include_primary_embedding=bool(args.include_primary_embedding),
             store_raw_payload=bool(args.store_raw_payload),
+            require_known_schema=bool(args.require_known_schema),
         )
     
     # Single document mode (original logic)
     started_at = _utc_iso_now()
     t0 = time.time()
+    subproc_wall_t0_text: Optional[float] = None
+    _tw = os.environ.get("DP_TEXT_WALL_T0", "").strip()
+    if _tw:
+        try:
+            subproc_wall_t0_text = float(_tw)
+        except ValueError:
+            subproc_wall_t0_text = None
     status = "ok"
     empty_reason: Optional[str] = None
     err: Optional[str] = None
     payload: Dict[str, Any] = {}
     doc = None
+    t_after_load = t0
+    t_after_run = t0
     try:
         doc = load_document_from_json(input_paths[0])
+        t_after_load = time.time()
         logger.info(f"TextProcessor: loaded document from {input_paths[0]}")
         processor = MainProcessor(
             devices_config=devices_config,
@@ -697,6 +723,7 @@ def main() -> int:
             batch_enable_cpu_parallel=not getattr(args, "no_batch_cpu_parallel", False),
         )
         payload = processor.run(doc) or {}
+        t_after_run = time.time()
         # Use status from MainProcessor if available
         if "status" in payload:
             status = str(payload["status"])
@@ -709,6 +736,7 @@ def main() -> int:
                     err = payload.get("error") or "unknown_error"
         logger.info(f"TextProcessor: MainProcessor.run() completed with status={status}")
     except Exception as e:
+        t_after_run = time.time()
         status = "error"
         err = str(e)
         logger.error(f"TextProcessor: exception in MainProcessor.run(): {err}", exc_info=True)
@@ -801,6 +829,8 @@ def main() -> int:
     # Validate NPZ before writing (in-memory validation via temporary file).
     # Create temporary NPZ, validate it, then atomically move to final location.
     tmp_npz_path = None
+    v_ok = True
+    notes: Optional[str] = None
     try:
         fd, tmp_npz_path = tempfile.mkstemp(prefix=Path(out_path).name + ".", suffix=".npz", dir=comp_dir)
         os.close(fd)
@@ -836,8 +866,7 @@ def main() -> int:
         )
         
         # Validate before atomic move
-        v_ok, issues, meta = validate_npz(tmp_npz_path)
-        notes = None
+        v_ok, issues, meta = validate_npz(tmp_npz_path, require_known_schema=bool(args.require_known_schema))
         if not v_ok:
             status = "error"
             notes = "artifact validation failed: " + "; ".join(i.message for i in issues[:5])
@@ -879,7 +908,17 @@ def main() -> int:
             render_path = os.path.join(comp_dir, "_render", "render_context.json")
         except Exception as e:
             # Best-effort: do not fail run if render fails
-            logger.warning(f"Failed to generate render-context for TextProcessor: {e}")
+            import traceback
+            tb_str = ''.join(traceback.format_exception(type(e), e, e.__traceback__))
+            logger.error(
+                f"Failed to generate render-context for TextProcessor:\n"
+                f"  Error: {str(e)}\n"
+                f"  Type: {type(e).__name__}\n"
+                f"  Traceback:\n{tb_str}",
+                exc_info=False  # уже вывели traceback вручную
+            )
+
+    t_after_render = time.time()
 
     # Register NPZ + sub-artifacts (*.npy) + render for this run.
     artifacts = [{"path": out_path, "type": "npz"}]
@@ -905,6 +944,68 @@ def main() -> int:
                     artifacts.append({"path": html_path, "type": "html_report"})
     except Exception:
         pass
+
+    sum_extractor_ms = 0
+    if isinstance(payload, dict) and isinstance(payload.get("timings_by_extractor"), dict):
+        for _en, td in payload["timings_by_extractor"].items():
+            if isinstance(td, dict):
+                for v in td.values():
+                    if isinstance(v, (int, float)):
+                        sum_extractor_ms += int(float(v) * 1000.0)
+    _mrun = int((t_after_run - t_after_load) * 1000.0)
+    _post = int((t_after_render - t_after_run) * 1000.0)
+    _td = {
+        "load_document_ms": int((t_after_load - t0) * 1000.0),
+        "main_processor_run_ms": _mrun,
+        "post_run_npz_validate_render_ms": _post,
+        "sum_extractor_timings_ms": sum_extractor_ms,
+        "main_processor_orchestration_overhead_ms": max(0, _mrun - sum_extractor_ms),
+        "text_processor_internal_wall_ms": int((t_after_render - t0) * 1000.0),
+        "note": "duration_ms on text_processor manifest row is full wall from internal t0 through NPZ/render; extractors only cover MainProcessor.run phase.",
+    }
+    if subproc_wall_t0_text is not None:
+        _sw = int((time.time() - subproc_wall_t0_text) * 1000.0)
+        _td["text_subprocess_wall_ms"] = _sw
+        _td["subprocess_residual_ms"] = max(0, _sw - _td["text_processor_internal_wall_ms"])
+    manifest.run_meta["text_processor_timings_ms"] = _td
+    logger.info("TextProcessor | wall timing breakdown (ms): %s", json.dumps(_td, ensure_ascii=False))
+
+    # Per-extractor rows for API / E2E (kind=text), до сводного text_processor
+    if isinstance(payload, dict):
+        sbe = payload.get("status_by_extractor")
+        if isinstance(sbe, dict) and sbe:
+            tbe = payload.get("timings_by_extractor") if isinstance(payload.get("timings_by_extractor"), dict) else {}
+            ebe = payload.get("errors_by_extractor") if isinstance(payload.get("errors_by_extractor"), dict) else {}
+            for ext_name, st in sbe.items():
+                if not isinstance(ext_name, str) or not ext_name:
+                    continue
+                st_l = str(st).strip().lower() if st is not None else "ok"
+                if st_l in ("ok", "success"):
+                    mst = "ok"
+                elif st_l == "empty":
+                    mst = "empty"
+                elif st_l == "error":
+                    mst = "error"
+                else:
+                    mst = "ok"
+                tdict = tbe.get(ext_name) if isinstance(tbe.get(ext_name), dict) else {}
+                dur_ms = 0
+                for v in tdict.values():
+                    if isinstance(v, (int, float)):
+                        dur_ms += int(float(v) * 1000.0)
+                err_part = None
+                if mst == "error":
+                    raw_e = ebe.get(ext_name)
+                    err_part = str(raw_e) if raw_e is not None else None
+                manifest.upsert_component(
+                    ManifestComponent(
+                        name=ext_name,
+                        kind="text",
+                        status=mst,
+                        duration_ms=max(0, dur_ms),
+                        error=err_part,
+                    )
+                )
 
     manifest.upsert_component(
         ManifestComponent(

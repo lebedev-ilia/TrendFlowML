@@ -7,7 +7,9 @@ import uuid
 import hashlib
 import time
 import re
+import json
 from pathlib import Path
+import numpy as np
 
 # ANSI color codes
 class Colors:
@@ -34,6 +36,20 @@ class Colors:
     BG_MAGENTA = '\033[45m'
     BG_CYAN = '\033[46m'
     BG_WHITE = '\033[47m'
+
+def _best_effort_torch_cuda_empty_cache_in_parent() -> None:
+    """После тяжёлого Audio/Text subprocess — сбросить кэш alloc CUDA в процессе DataProcessor main."""
+    try:
+        import torch  # type: ignore
+
+        if torch.cuda.is_available():
+            torch.cuda.empty_cache()
+            ipc = getattr(torch.cuda, "ipc_collect", None)
+            if callable(ipc):
+                ipc()
+    except Exception:
+        pass
+
 
 def _is_tty() -> bool:
     """Проверяет, является ли stdout терминалом (для включения цветов)."""
@@ -93,11 +109,11 @@ def _print_info(text: str, indent: int = 4):
     indent_str = " " * indent
     print(f"{indent_str}{_colorize('→', Colors.BLUE)} {_colorize(text, Colors.DIM)}")
 
-def _format_log_line(line: str, processor: str = None) -> str:
+def _format_log_line(line: str, processor: str = None) -> str | None:
     """Форматирует строку лога из subprocess."""
     line = line.strip()
     if not line:
-        return ""
+        return None
     
     # Определяем тип сообщения по префиксам
     if "[Segmenter]" in line or "[Segmenter.run]" in line:
@@ -134,6 +150,56 @@ def _format_log_line(line: str, processor: str = None) -> str:
             path_match = re.search(r'from (.+)$', line)
             path = _shorten_path(path_match.group(1) if path_match else "")
             return f"  {_colorize('→', Colors.BLUE)} {_colorize('TextProcessor', Colors.MAGENTA)}: загружен документ из {_colorize(path, Colors.DIM)}"
+        elif "starting" in line.lower() and "extractor" in line.lower():
+            count_match = re.search(r'(\d+) extractor', line)
+            count = count_match.group(1) if count_match else "?"
+            return f"  {_colorize('→', Colors.BLUE)} {_colorize('TextProcessor', Colors.MAGENTA)}: запуск {_colorize(count, Colors.CYAN)} экстракторов"
+        elif "running" in line.lower() and "extractor" in line.lower() or "embedder" in line.lower():
+            # Format: "TextProcessor: [1/4] running LexicalStatsExtractor (device=cpu)"
+            # Игнорируем строки с params (слишком длинные и дублируются)
+            if "params=" in line.lower():
+                return None  # Пропускаем строки с параметрами
+            extractor_match = re.search(r'running (\w+(?:Extractor|Embedder))', line)
+            progress_match = re.search(r'\[(\d+)/(\d+)\]', line)
+            device_match = re.search(r'device=(\w+)', line)
+            extractor = extractor_match.group(1) if extractor_match else "extractor"
+            progress = progress_match.group(0) if progress_match else ""
+            device = device_match.group(1) if device_match else "cpu"
+            device_color = Colors.CYAN if device == "cuda" else Colors.DIM
+            return f"    {_colorize('→', Colors.BLUE)} {_colorize(progress, Colors.CYAN)} {_colorize(extractor, Colors.YELLOW)} {_colorize(f'({device})', device_color)}"
+        elif "completed" in line.lower() and ("extractor" in line.lower() or "embedder" in line.lower()):
+            # Format: "TextProcessor: [1/4] LexicalStatsExtractor completed (ok) (0.123s) (16 features)"
+            extractor_match = re.search(r'(\w+(?:Extractor|Embedder))', line)
+            progress_match = re.search(r'\[(\d+)/(\d+)\]', line)
+            status_match = re.search(r'\((ok|empty|error)\)', line)
+            time_match = re.search(r'\(([\d.]+)s\)', line)
+            features_match = re.search(r'\((\d+) features?\)', line)
+            extractor = extractor_match.group(1) if extractor_match else "extractor"
+            progress = progress_match.group(0) if progress_match else ""
+            status = status_match.group(1) if status_match else "ok"
+            time_str = time_match.group(1) if time_match else ""
+            features_str = features_match.group(1) if features_match else None
+            status_color = Colors.GREEN if status == "ok" else (Colors.YELLOW if status == "empty" else Colors.RED)
+            status_icon = "✓" if status == "ok" else ("○" if status == "empty" else "✗")
+            # Компактное форматирование: [progress] extractor time [features]
+            time_part = f"{_colorize(time_str, Colors.DIM)}s" if time_str else ""
+            features_part = f" {_colorize(f'({features_str} feat)', Colors.DIM)}" if features_str else ""
+            return f"    {_colorize(status_icon, status_color)} {_colorize(progress, Colors.CYAN)} {_colorize(extractor, Colors.YELLOW)} {time_part}{features_part}"
+        elif "failed" in line.lower() or "raised exception" in line.lower() or "traceback:" in line.lower():
+            # Обработка ошибок с traceback
+            if "traceback:" in line.lower():
+                # Это строка с traceback - показываем как есть, но с цветом
+                return f"    {_colorize(line.strip(), Colors.RED)}"
+            extractor_match = re.search(r'(\w+Extractor|\w+Embedder)', line)
+            progress_match = re.search(r'\[(\d+)/(\d+)\]', line)
+            extractor = extractor_match.group(1) if extractor_match else "extractor"
+            progress = progress_match.group(0) if progress_match else ""
+            # Извлекаем детали ошибки
+            error_match = re.search(r'error:\s*(.+?)(?:\n|$)', line, re.IGNORECASE)
+            error_msg = error_match.group(1).strip() if error_match else "unknown error"
+            if len(error_msg) > 100:
+                error_msg = error_msg[:97] + "..."
+            return f"    {_colorize('✗', Colors.RED)} {_colorize(progress, Colors.CYAN)} {_colorize(extractor, Colors.YELLOW)} {_colorize('failed', Colors.RED)}: {_colorize(error_msg, Colors.RED)}"
         elif "completed with status" in line.lower():
             status_match = re.search(r'status=(\w+)', line)
             status = status_match.group(1) if status_match else "unknown"
@@ -151,10 +217,15 @@ def _format_log_line(line: str, processor: str = None) -> str:
             path_match = re.search(r'to (.+)$', line) or re.search(r': (.+)$', line)
             if path_match:
                 path = _shorten_path(path_match.group(1))
-                extractor_match = re.search(r'extractors\.(\w+)\.', line)
+                # Пытаемся извлечь имя экстрактора из пути или строки
+                extractor_match = re.search(r'extractors\.(\w+)\.', line) or re.search(r'/(\w+)_report\.html', path) or re.search(r'/(\w+)/render', path)
                 extractor = extractor_match.group(1) if extractor_match else "renderer"
-                return f"    {_colorize('✓', Colors.GREEN)} {_colorize(extractor, Colors.YELLOW)}: отчет сохранен → {_colorize(path, Colors.DIM)}"
-        return f"    {_colorize(line, Colors.DIM)}"
+                # Красивое имя экстрактора (замена подчеркиваний на пробелы)
+                extractor_display = extractor.replace("_", " ").replace("extractor", "").replace("embedder", "").strip()
+                if not extractor_display:
+                    extractor_display = extractor
+                return f"    {_colorize('✓', Colors.GREEN)} {_colorize(extractor_display, Colors.YELLOW)}: отчет сохранен → {_colorize(path, Colors.DIM)}"
+        return None  # Пропускаем технические строки renderer
     
     elif "[extract_audio]" in line or "[process_video_union]" in line:
         if "saved" in line.lower() or "already exists" in line.lower():
@@ -163,6 +234,42 @@ def _format_log_line(line: str, processor: str = None) -> str:
                 path = _shorten_path(path_match.group(1))
                 return f"    {_colorize('✓', Colors.GREEN)} {_colorize(path, Colors.DIM)}"
         return f"    {_colorize(line, Colors.DIM)}"
+
+    # VisualProcessor / другие CLI с единым форматом логов:
+    # "2026-02-12 23:40:07,261 INFO: VisualProcessor | main | core_provider core_clip start"
+    m = re.match(
+        r"^(?P<ts>\d{4}-\d{2}-\d{2} [0-9:,]+)\s+(?P<level>[A-Z]+):\s+(?P<msg>.*)$",
+        line,
+    )
+    if m:
+        ts = m.group("ts")
+        level = m.group("level")
+        msg = m.group("msg")
+
+        # Выделяем namespace VisualProcessor / Segmenter / AudioProcessor и т.п.
+        parts = [p.strip() for p in msg.split("|")]
+        namespace = None
+        scope = None
+        core_msg = msg
+
+        if len(parts) >= 2:
+            namespace = parts[0]            # например, "VisualProcessor"
+            scope = parts[1]                # например, "main"
+            core_msg = " | ".join(parts[2:]) if len(parts) > 2 else ""
+
+        # Менее информативные части убираем: оставляем единый шаблон
+        #   TS [LEVEL] [NAMESPACE/SCOPE] message
+        ns_scope = None
+        if namespace and scope:
+            ns_scope = f"{namespace}/{scope}"
+        elif namespace:
+            ns_scope = namespace
+
+        level_str = f"[{level}]"
+        if ns_scope:
+            return f"    {ts} {level_str} {_colorize(f'[{ns_scope}]', Colors.CYAN)} {core_msg}"
+        # fallback: без namespace
+        return f"    {ts} {level_str} {core_msg}"
     
     # Общие паттерны
     if "error" in line.lower() or "failed" in line.lower() or "exception" in line.lower():
@@ -195,10 +302,12 @@ def _run_subprocess_with_formatted_output(cmd: list, processor_name: str = None,
     
     # Читаем вывод построчно и форматируем
     output_lines = []
+    last_formatted = None  # Для фильтрации дубликатов
     for line in process.stdout:
         formatted = _format_log_line(line, processor_name)
-        if formatted:
+        if formatted and formatted != last_formatted:  # Пропускаем дубликаты
             print(formatted)
+            last_formatted = formatted
         output_lines.append(line)
     
     # Ждем завершения процесса
@@ -216,6 +325,95 @@ def _run_subprocess_with_formatted_output(cmd: list, processor_name: str = None,
         raise subprocess.CalledProcessError(returncode, cmd, result.stdout, result.stderr)
     
     return result
+
+
+def _dp_strip_ansi_for_error_text(s: str) -> str:
+    return re.sub(r"\x1b\[[0-9;]*m", "", s or "")
+
+
+def _line_is_error_candidate(ln: str) -> bool:
+    """Строка похожа на сообщение об ошибке (не рутинный INFO)."""
+    s = _dp_strip_ansi_for_error_text(ln)
+    if re.search(r"\[(?:ERROR|CRITICAL)\]", s, re.I):
+        return True
+    if "Traceback (most recent call last)" in s:
+        return True
+    if re.search(
+        r"\b(?:CalledProcessError|FileNotFoundError|RuntimeError|ValueError|KeyError|"
+        r"OSError|ImportError|ModuleNotFoundError|AssertionError|KeyboardInterrupt)\b",
+        s,
+    ):
+        return True
+    if (
+        re.search(r"\b(?:Error|Exception)\s*:\s*\S", s)
+        and not re.search(r"\[INFO\]", s, re.I)
+    ):
+        return True
+    if re.search(r"^\s*(?:raise |During handling of the)", s):
+        return True
+    if re.search(r"\b(?:FAIL|FATAL|fatal error)\b", s, re.I) and not re.search(
+        r"\[INFO\]", s, re.I
+    ):
+        return True
+    return False
+
+
+def _line_is_benign_tail_noise(ln: str) -> bool:
+    """Успешные/шумные INFO в конце лога, которые не объясняют ненулевой exit."""
+    s = _dp_strip_ansi_for_error_text(ln)
+    if not re.search(r"\[INFO\]", s, re.I):
+        return False
+    if re.search(
+        r"(?:saved to|HTML render|render saved|Cosine metrics|Writing |Wrote |"
+        r"completed successfully|MainProcessor initialized|Initializing MainProcessor|"
+        r"Initializing .*?extractors|extractors\.\.\.)",
+        s,
+        re.I,
+    ):
+        return True
+    return False
+
+
+def _subprocess_output_error_detail(
+    completed: subprocess.CompletedProcess,
+    *,
+    tail_non_empty_lines: int = 14,
+    max_chars: int = 1400,
+) -> str:
+    """
+    Сообщение для run_state/API при ненулевом коде: exit + фрагмент stdout.
+    Предпочитаем строки с ERROR/Traceback/исключениями; отбрасываем хвост из «успешных» INFO.
+    """
+    rc = int(completed.returncode or 0)
+    if rc == 0:
+        return ""
+    raw = (completed.stdout or "").replace("\r\n", "\n").replace("\r", "\n").strip()
+    if not raw:
+        return f"exit={rc} (no subprocess output captured)"
+    lines = [_dp_strip_ansi_for_error_text(ln.strip()) for ln in raw.splitlines() if ln.strip()]
+    if not lines:
+        return f"exit={rc}"
+
+    cand_idx = [i for i, ln in enumerate(lines) if _line_is_error_candidate(ln)]
+    if cand_idx:
+        i = cand_idx[-1]
+        lo = max(0, i - 3)
+        hi = min(len(lines), i + tail_non_empty_lines)
+        snip = lines[lo:hi]
+    else:
+        window = lines[-max(80, tail_non_empty_lines * 5) :]
+        meaningful = [ln for ln in window if not _line_is_benign_tail_noise(ln)]
+        snip = (
+            meaningful[-tail_non_empty_lines:]
+            if meaningful
+            else window[-tail_non_empty_lines:]
+        )
+
+    msg = " · ".join(snip)
+    msg = re.sub(r"\s+", " ", msg).strip()
+    if len(msg) > max_chars:
+        msg = msg[: max_chars - 3] + "…"
+    return f"exit={rc}: {msg}"
 
 _path = os.path.dirname(__file__)
 
@@ -335,6 +533,11 @@ if __name__ == "__main__":
     parser.add_argument('--analysis-fps', type=float, default=None, help="Analysis fps for Segmenter metadata (default: use source_fps)")
     parser.add_argument('--analysis-width', type=int, default=None, help="Resize width for analysis timeline (optional)")
     parser.add_argument('--analysis-height', type=int, default=None, help="Resize height for analysis timeline (optional)")
+    # Segmenter sampling knobs (Audit v3): ASR windows
+    parser.add_argument("--segmenter-asr-sampling-profile", type=str, default="semantic", choices=["semantic", "proxy"], help="Segmenter: ASR windows profile for families.asr")
+    parser.add_argument("--segmenter-asr-window-sec", type=float, default=None, help="Segmenter: override ASR window_sec (seconds)")
+    parser.add_argument("--segmenter-asr-stride-sec", type=float, default=None, help="Segmenter: override ASR stride_sec (seconds)")
+    parser.add_argument("--segmenter-asr-max-windows", type=int, default=None, help="Segmenter: optional cap for ASR windows")
 
     # Output directory arguments (aliases for convenience)
     output_group = parser.add_mutually_exclusive_group()
@@ -344,6 +547,17 @@ if __name__ == "__main__":
     parser.add_argument('--run-audio', action='store_true', help='Also run AudioProcessor Tier-0 extractors (clap/tempo/loudness) into the same per-run result_store')
     parser.add_argument('--audio-device', type=str, default="auto", choices=["auto", "cpu", "cuda"])
     parser.add_argument('--audio-extractors', type=str, default="clap,tempo,loudness", help='Comma-separated audio extractor keys for AudioProcessor (clap,tempo,loudness)')
+    # AudioProcessor feature flags passthrough (subset; audit v3 requires token-only ASR->Text path)
+    parser.add_argument("--asr-enable-token-sequences", action="store_true", help="AudioProcessor/asr: enable token_ids_by_segment (needed for privacy-safe Text autogen)")
+    parser.add_argument("--asr-enable-token-counts", action="store_true", help="AudioProcessor/asr: enable token_counts")
+    parser.add_argument("--asr-enable-token-total", action="store_true", help="AudioProcessor/asr: enable token_total")
+    parser.add_argument("--asr-enable-token-density", action="store_true", help="AudioProcessor/asr: enable token_density_per_sec")
+    parser.add_argument("--asr-enable-speech-rate", action="store_true", help="AudioProcessor/asr: enable speech_rate_wpm")
+    parser.add_argument("--asr-enable-lang-distribution", action="store_true", help="AudioProcessor/asr: enable lang_distribution")
+    parser.add_argument("--asr-enable-segments-with-speech", action="store_true", help="AudioProcessor/asr: enable segments_with_speech")
+    parser.add_argument("--asr-enable-avg-segment-duration", action="store_true", help="AudioProcessor/asr: enable avg_segment_duration_sec")
+    parser.add_argument("--asr-enable-token-variance", action="store_true", help="AudioProcessor/asr: enable token_variance")
+    parser.add_argument("--asr-save-segment-text", action="store_true", help="AudioProcessor/asr: persist raw segment text (debug-only)")
     # Scheduler-controlled knobs for AudioProcessor (L2/L3)
     parser.add_argument('--audio-segment-parallelism', type=int, default=None, help='AudioProcessor: concurrent segment workers (if supported)')
     parser.add_argument('--audio-max-inflight', type=int, default=None, help='AudioProcessor: max in-flight segment tasks (safety cap)')
@@ -462,6 +676,15 @@ if __name__ == "__main__":
     visual_cfg_path = args.visual_cfg_path
     visual_cfg_temp_file = None  # Для временного файла из inline конфига
     
+    # Если visual отключён и нет inline конфига — создаём минимальный конфиг для Segmenter (audio-only)
+    if not args.run_visual and not visual_inline_config and (not os.path.exists(visual_cfg_path) or not os.path.isfile(visual_cfg_path)):
+        fd, visual_cfg_temp_file = tempfile.mkstemp(suffix=".yaml", prefix="visual_cfg_minimal_", dir=tempfile.gettempdir())
+        os.close(fd)
+        with open(visual_cfg_temp_file, "w", encoding="utf-8") as f:
+            yaml.safe_dump({"core_providers": {}, "modules": {}}, f, sort_keys=False, allow_unicode=True)
+        visual_cfg_path = visual_cfg_temp_file
+        _cleanup_files.append(visual_cfg_temp_file)
+    
     # Если есть inline конфиг из глобального конфига, создаем временный файл для Segmenter
     if visual_inline_config:
         # Segmenter ожидает формат с core_providers и modules на верхнем уровне
@@ -493,6 +716,9 @@ if __name__ == "__main__":
                     pass
                 visual_cfg_temp_file = None
             visual_cfg_path = str(vis.get("cfg_path"))
+            # Important: if profile overrides visual cfg path, VisualProcessor runtime must use the file-based cfg,
+            # not the inline_config from global_config.
+            visual_inline_config = None
 
         procs = profile.get("processors") or {}
         if isinstance(procs, dict):
@@ -506,9 +732,36 @@ if __name__ == "__main__":
                 args.run_text = True
             if isinstance(text_cfg, dict) and text_cfg.get("enabled") is False:
                 args.run_text = False
+            visual_cfg = procs.get("visual") or {}
+            if isinstance(visual_cfg, dict) and visual_cfg.get("enabled") is True:
+                args.run_visual = True
+            if isinstance(visual_cfg, dict) and visual_cfg.get("enabled") is False:
+                args.run_visual = False
+
+    # Optional override: orchestration.processors in global YAML (after profile).
+    # Lets unified configs / E2E runs force a subset even when profile enables all processors.
+    if global_config_parser:
+        orch = (global_config_parser.config or {}).get("orchestration") or {}
+        op = orch.get("processors") if isinstance(orch, dict) else None
+        if isinstance(op, dict):
+            if op.get("audio") is True:
+                args.run_audio = True
+            elif op.get("audio") is False:
+                args.run_audio = False
+            if op.get("text") is True:
+                args.run_text = True
+            elif op.get("text") is False:
+                args.run_text = False
+            if op.get("visual") is True:
+                args.run_visual = True
+            elif op.get("visual") is False:
+                args.run_visual = False
 
     # Загружаем конфиг VisualProcessor: приоритет inline конфигу из глобального конфига
-    if visual_inline_config:
+    # Если visual отключён — не загружаем файл (для audio-only профилей)
+    if not args.run_visual:
+        vp_cfg_for_hash = {}
+    elif visual_inline_config:
         vp_cfg_for_hash = visual_inline_config
     else:
         with open(visual_cfg_path, "r", encoding="utf-8") as f:
@@ -626,6 +879,15 @@ if __name__ == "__main__":
         seg_cmd.extend(["--analysis-width", str(args.analysis_width)])
     if args.analysis_height is not None:
         seg_cmd.extend(["--analysis-height", str(args.analysis_height)])
+    # Forward ASR sampling knobs to Segmenter
+    if args.segmenter_asr_sampling_profile:
+        seg_cmd.extend(["--asr-sampling-profile", str(args.segmenter_asr_sampling_profile)])
+    if args.segmenter_asr_window_sec is not None:
+        seg_cmd.extend(["--asr-window-sec", str(float(args.segmenter_asr_window_sec))])
+    if args.segmenter_asr_stride_sec is not None:
+        seg_cmd.extend(["--asr-stride-sec", str(float(args.segmenter_asr_stride_sec))])
+    if args.segmenter_asr_max_windows is not None:
+        seg_cmd.extend(["--asr-max-windows", str(int(args.segmenter_asr_max_windows))])
     _print_header("Segmenter")
     _print_step("Запуск Segmenter", "OK", _shorten_path(args.video_path))
     t0 = time.time()
@@ -682,11 +944,13 @@ if __name__ == "__main__":
                 "platform_id": args.platform_id,
                 "video_id": video_id,
                 "run_id": run_id,
+                "status": "running",
                 "config_hash": config_hash,
                 "sampling_policy_version": args.sampling_policy_version,
                 "dataprocessor_version": str(args.dataprocessor_version),
                 "created_at": created_at,
                 "frames_dir": os.path.join(os.path.abspath(args.output), video_id, "video"),
+                "root_path": os.path.abspath(_path),
             },
         )
         manifest.flush()
@@ -734,6 +998,27 @@ if __name__ == "__main__":
             # Fallback на CLI аргументы (обратная совместимость)
             audio_cmd.extend(["--device", args.audio_device])
             audio_cmd.extend(["--extractors", args.audio_extractors])
+            # Forward ASR flags if present
+            if args.asr_enable_token_sequences:
+                audio_cmd.append("--asr-enable-token-sequences")
+            if args.asr_enable_token_counts:
+                audio_cmd.append("--asr-enable-token-counts")
+            if args.asr_enable_token_total:
+                audio_cmd.append("--asr-enable-token-total")
+            if args.asr_enable_token_density:
+                audio_cmd.append("--asr-enable-token-density")
+            if args.asr_enable_speech_rate:
+                audio_cmd.append("--asr-enable-speech-rate")
+            if args.asr_enable_lang_distribution:
+                audio_cmd.append("--asr-enable-lang-distribution")
+            if args.asr_enable_segments_with_speech:
+                audio_cmd.append("--asr-enable-segments-with-speech")
+            if args.asr_enable_avg_segment_duration:
+                audio_cmd.append("--asr-enable-avg-segment-duration")
+            if args.asr_enable_token_variance:
+                audio_cmd.append("--asr-enable-token-variance")
+            if args.asr_save_segment_text:
+                audio_cmd.append("--asr-save-segment-text")
             if args.audio_segment_parallelism is not None:
                 audio_cmd.extend(["--segment-parallelism", str(int(args.audio_segment_parallelism))])
             if args.audio_max_inflight is not None:
@@ -746,10 +1031,37 @@ if __name__ == "__main__":
         _print_header("AudioProcessor")
         _print_step("Запуск AudioProcessor", "OK")
         t0 = time.time()
-        # Передаем DP_MODELS_ROOT в окружение subprocess
+        # Передаем DP_MODELS_ROOT и HF cache в окружение subprocess (emotion_diarization, speaker_diarization)
         audio_env = {}
         if dp_models_root:
             audio_env["DP_MODELS_ROOT"] = dp_models_root
+            # HF cache: bundled hf_cache/hub или default ~/.cache/huggingface (для WavLM и др.)
+            # Используем realpath для symlink'ов (bundled_models/hf_cache/hub -> ~/.cache/huggingface/hub)
+            # чтобы transformers/huggingface_hub корректно находили модели в offline режиме
+            hf_cache_dir = os.path.join(dp_models_root, "hf_cache")
+            hf_hub = os.path.join(hf_cache_dir, "hub")
+            hf_hub_resolved = os.path.realpath(hf_hub) if os.path.exists(hf_hub) else hf_hub
+            default_hf = os.path.join(os.path.expanduser("~"), ".cache", "huggingface")
+            default_hub = os.path.join(default_hf, "hub")
+
+            def _hf_has_models(path):
+                if not path or not os.path.isdir(path):
+                    return False
+                try:
+                    return any(p.startswith("models--") for p in os.listdir(path))
+                except OSError:
+                    return False
+
+            if _hf_has_models(hf_hub_resolved):
+                audio_env["HF_HOME"] = os.path.dirname(hf_hub_resolved)
+                audio_env["HF_HUB_CACHE"] = hf_hub_resolved
+                audio_env["TRANSFORMERS_CACHE"] = hf_hub_resolved
+            elif _hf_has_models(default_hub):
+                audio_env["HF_HOME"] = default_hf
+                audio_env["HF_HUB_CACHE"] = default_hub
+                audio_env["TRANSFORMERS_CACHE"] = default_hub
+        # Wall clock anchor for AudioProcessor subprocess (run_cli logs manifest.run_meta breakdown).
+        audio_env["DP_AUDIO_WALL_T0"] = str(t0)
         r = _run_subprocess_with_formatted_output(audio_cmd, processor_name="AudioProcessor", check=False, env=audio_env)
         audio_duration_ms = int((time.time() - t0) * 1000)
         if r.returncode == 0:
@@ -762,26 +1074,33 @@ if __name__ == "__main__":
                 st,
                 finished_at=time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime()),
                 duration_ms=audio_duration_ms,
-                error=None if r.returncode == 0 else f"exit={r.returncode}",
+                error=None if r.returncode == 0 else _subprocess_output_error_detail(r),
                 error_code=None if r.returncode == 0 else "non_zero_exit",
             )
             run_state_mgr.merge_processor_state("audio", proc_mgrs["audio"].state)
         if audio_required and r.returncode != 0:
             raise RuntimeError(f"AudioProcessor failed for required=true (exit={r.returncode})")
+        _best_effort_torch_cuda_empty_cache_in_parent()
 
-    # 1.6) TextProcessor (optional): write per-run NPZ artifact into the same result_store
     if args.run_text:
         text_required = False
         if global_config_parser:
             text_required = global_config_parser.is_processor_required("text")
         elif isinstance(profile, dict):
             text_required = bool(((profile.get("processors") or {}).get("text") or {}).get("required") is True)
-        
-        # Определяем input: из глобального конфига или CLI аргументов
+
+        # Определяем input: CLI → profile.processors.text.input_json → global-config
         text_input_json = args.text_input_json
         text_input_dir = args.text_input_dir
         text_input_json_list = args.text_input_json_list
-        
+
+        if isinstance(profile, dict) and not (
+            text_input_json or text_input_dir or text_input_json_list
+        ):
+            ptxt = (profile.get("processors") or {}).get("text") or {}
+            if isinstance(ptxt, dict) and ptxt.get("input_json"):
+                text_input_json = str(ptxt["input_json"])
+
         if global_config_parser:
             text_cfg = global_config_parser.get_processor_config("text")
             if text_cfg and text_cfg.get("input_json") and not (text_input_json or text_input_dir or text_input_json_list):
@@ -791,7 +1110,9 @@ if __name__ == "__main__":
         def _autogen_text_input_from_asr(*, run_rs_path: str, platform_id: str, video_id: str) -> str | None:
             """
             Best-effort: build a minimal VideoDocument JSON for TextProcessor from AudioProcessor ASR artifact.
-            Requires AudioProcessor to persist per-segment text (AudioProcessor: --asr-save-segment-text).
+            Privacy-first behavior (Audit v3):
+            - Prefer token IDs (shared_tokenizer_v1) if present: no raw text is stored in the JSON.
+            - Do NOT store raw per-segment transcript text in the JSON (token-only contract).
             """
             try:
                 npz_path = os.path.join(run_rs_path, "asr_extractor", "asr_extractor_features.npz")
@@ -830,23 +1151,64 @@ if __name__ == "__main__":
                         return v
                     return None
 
-                seg_texts = _get_any("segment_texts_by_segment")
+                # Prefer audio duration from Segmenter contract (source-of-truth): frames_dir/audio/segments.json
+                audio_duration_sec = None
+                try:
+                    manifest_path = os.path.join(run_rs_path, "manifest.json")
+                    if os.path.exists(manifest_path):
+                        with open(manifest_path, "r", encoding="utf-8") as f:
+                            man = json.load(f) or {}
+                        frames_dir = ((man.get("run") or {}).get("frames_dir"))
+                        if frames_dir:
+                            # frames_dir points to .../<video_id>/video; audio lives next to it: .../<video_id>/audio
+                            seg_path = os.path.join(str(Path(str(frames_dir)).resolve().parent), "audio", "segments.json")
+                            if os.path.exists(seg_path):
+                                with open(seg_path, "r", encoding="utf-8") as f:
+                                    segp = json.load(f) or {}
+                                audio_duration_sec = segp.get("audio_duration_sec")
+                except Exception:
+                    audio_duration_sec = None
+
                 seg_st = _get_any("segment_start_sec")
                 seg_en = _get_any("segment_end_sec")
-
-                if not (isinstance(seg_texts, list) and isinstance(seg_st, list) and isinstance(seg_en, list)):
-                    return None
-                if not (len(seg_texts) == len(seg_st) == len(seg_en)) or len(seg_texts) == 0:
+                if not (isinstance(seg_st, list) and isinstance(seg_en, list)) or (len(seg_st) != len(seg_en)):
                     return None
 
-                asr_segments: list[dict] = []
-                for t, st, en in zip(seg_texts, seg_st, seg_en):
-                    tt = str(t or "").strip()
-                    if not tt:
-                        continue
-                    asr_segments.append({"text": tt, "start_sec": float(st), "end_sec": float(en)})
-                if not asr_segments:
-                    return None
+                # Preferred: token IDs (privacy-safe, no raw text in JSON)
+                token_ids_by_segment = _get_any("token_ids_by_segment")
+                token_ids_clean: list[list[int]] = []
+                full_token_ids: list[int] = []
+                if isinstance(token_ids_by_segment, list) and token_ids_by_segment:
+                    for tok_arr in token_ids_by_segment:
+                        if isinstance(tok_arr, np.ndarray):
+                            ids = [int(x) for x in tok_arr.reshape(-1).tolist()]
+                        elif isinstance(tok_arr, (list, tuple)):
+                            ids = [int(x) for x in tok_arr]
+                        else:
+                            continue
+                        token_ids_clean.append(ids)
+                        full_token_ids.extend(ids)
+
+                # Best-effort metadata (optional, token-only ASR payload)
+                lang_code_by_segment = _get_any("lang_code_by_segment")
+                lang_conf_by_segment = _get_any("lang_conf_by_segment")
+                segment_quality_by_segment = _get_any("segment_quality_by_segment")
+                asr_text_contract_version = _get_any("asr_text_contract_version")
+
+                asr_payload = None
+                if token_ids_clean and isinstance(seg_st, list) and isinstance(seg_en, list) and len(token_ids_clean) == len(seg_st) == len(seg_en):
+                    asr_payload = {
+                        "schema_version": "asr_payload_v2",
+                        "tokenizer_spec": "shared_tokenizer_v1",
+                        "asr_text_contract_version": asr_text_contract_version,
+                        "token_ids_by_segment": token_ids_clean,
+                        "segment_start_sec": [float(x) for x in seg_st],
+                        "segment_end_sec": [float(x) for x in seg_en],
+                        "segment_center_sec": [float(x) for x in (_get_any("segment_center_sec") or [])] if isinstance(_get_any("segment_center_sec"), list) else None,
+                        "lang_code_by_segment": (lang_code_by_segment if isinstance(lang_code_by_segment, list) else None),
+                        "lang_conf_by_segment": (lang_conf_by_segment if isinstance(lang_conf_by_segment, list) else None),
+                        "segment_quality_by_segment": (segment_quality_by_segment if isinstance(segment_quality_by_segment, list) else None),
+                    }
 
                 doc = {
                     "schema_version": "video_document_v1",
@@ -855,9 +1217,10 @@ if __name__ == "__main__":
                     "title": "",
                     "description": "",
                     "transcripts": {},
-                    "transcripts_token_ids": {},
-                    "audio_duration_sec": None,
-                    "asr": {"segments": asr_segments},
+                    "transcripts_token_ids": ({"whisper": full_token_ids} if full_token_ids else {}),
+                    # Required by some TextProcessor extractors (e.g. ASRTextProxyExtractor).
+                    "audio_duration_sec": (float(audio_duration_sec) if audio_duration_sec is not None else None),
+                    "asr": asr_payload,
                     "comments": [],
                 }
 
@@ -880,7 +1243,8 @@ if __name__ == "__main__":
         if not (text_input_json or text_input_dir or text_input_json_list):
             raise ValueError(
                 "TextProcessor requires input (specify --text-input-json, --text-input-dir, or --text-input-json-list, "
-                "or set in --global-config). If you want DataProcessor to auto-generate input from ASR, run AudioProcessor with --asr-save-segment-text."
+                "or set in --global-config). If you want DataProcessor to auto-generate input from ASR, "
+                "run AudioProcessor with --asr-enable-token-sequences (preferred, privacy-safe) or --asr-save-segment-text (debug-only)."
             )
         
         text_cmd = [
@@ -925,9 +1289,14 @@ if __name__ == "__main__":
             count = len(text_input_json_list.split(","))
             input_desc = f"list: {count} documents"
         _print_step("Запуск TextProcessor", "OK", input_desc)
-        t0 = time.time()
-        r = _run_subprocess_with_formatted_output(text_cmd, processor_name="TextProcessor", check=False)
-        text_duration_ms = int((time.time() - t0) * 1000)
+        text_t0 = time.time()
+        r = _run_subprocess_with_formatted_output(
+            text_cmd,
+            processor_name="TextProcessor",
+            check=False,
+            env={"DP_TEXT_WALL_T0": str(text_t0)},
+        )
+        text_duration_ms = int((time.time() - text_t0) * 1000)
         if r.returncode == 0:
             _print_step("TextProcessor завершен", "OK", f"время: {text_duration_ms}ms")
         else:
@@ -938,12 +1307,13 @@ if __name__ == "__main__":
                 st,
                 finished_at=time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime()),
                 duration_ms=text_duration_ms,
-                error=None if r.returncode == 0 else f"exit={r.returncode}",
+                error=None if r.returncode == 0 else _subprocess_output_error_detail(r),
                 error_code=None if r.returncode == 0 else "non_zero_exit",
             )
             run_state_mgr.merge_processor_state("text", proc_mgrs["text"].state)
         if text_required and r.returncode != 0:
             raise RuntimeError(f"TextProcessor failed for required=true (exit={r.returncode})")
+        _best_effort_torch_cuda_empty_cache_in_parent()
 
     # 2) VisualProcessor: generate a temp cfg overriding global paths/ids
     if args.run_visual:
@@ -1053,6 +1423,9 @@ if __name__ == "__main__":
                         for c in comps:
                             if not isinstance(c, dict):
                                 continue
+                            # Visual в manifest: module + core (не audio/text).
+                            if str(c.get("kind") or "").lower() not in ("module", "core"):
+                                continue
                             name = c.get("name")
                             st = c.get("status")
                             if not isinstance(name, str) or not name:
@@ -1063,6 +1436,10 @@ if __name__ == "__main__":
                                 sst = Status.empty
                             elif st == "error":
                                 sst = Status.error
+                            elif st == "running":
+                                sst = Status.running
+                            elif st == "skipped":
+                                sst = Status.skipped
                             else:
                                 sst = Status.error
                             proc_mgrs["visual"].upsert_component(
@@ -1092,6 +1469,30 @@ if __name__ == "__main__":
                         pass
     
     # Global cleanup для всех временных файлов
+    # Best-effort: finalize manifest run status.
+    try:
+        vp_root = Path(__file__).resolve().parent / "VisualProcessor"
+        if str(vp_root) not in sys.path:
+            sys.path.insert(0, str(vp_root))
+        from utils.manifest import RunManifest  # type: ignore
+
+        manifest_path = os.path.join(run_rs_path, "manifest.json")
+        RunManifest(path=manifest_path, run_meta={"status": "success"}).flush()
+    except Exception:
+        pass
+
+    # Best-effort: write a compact manifest summary into _reports/.
+    try:
+        summary_script = os.path.join(_path, "scripts", "summarize_run_manifest.py")
+        if os.path.exists(summary_script):
+            _run_subprocess_with_formatted_output(
+                [sys.executable, summary_script, "--manifest", os.path.join(run_rs_path, "manifest.json")],
+                processor_name="ManifestSummary",
+                check=False,
+            )
+    except Exception:
+        pass
+
     for cleanup_file in _cleanup_files:
         if cleanup_file and os.path.exists(cleanup_file):
             try:

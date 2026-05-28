@@ -1,0 +1,2 @@
+# Dependencies for uniqueness module
+# Add module-specific dependencies here

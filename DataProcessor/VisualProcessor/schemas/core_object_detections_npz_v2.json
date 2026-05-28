@@ -1,0 +1,65 @@
+{
+  "schema_system_version": "vp_schema_v1",
+  "schema_version": "core_object_detections_npz_v2",
+  "producer": "core_object_detections",
+  "artifact_kind": "npz",
+  "allow_extra_keys": false,
+  "meta": {
+    "required_keys": [
+      "producer",
+      "producer_version",
+      "schema_version",
+      "created_at",
+      "platform_id",
+      "video_id",
+      "run_id",
+      "config_hash",
+      "sampling_policy_version",
+      "dataprocessor_version",
+      "status",
+      "empty_reason",
+      "models_used",
+      "model_signature",
+      "stage_timings_ms"
+    ],
+    "optional_keys": [
+      "impl",
+      "model",
+      "box_threshold",
+      "batch_size",
+      "device",
+      "total_frames",
+      "total_detections"
+    ]
+  },
+  "fields": {
+    "meta": { "required": true, "tier": "debug", "dtype": "object", "shape": [] },
+    "meta_json": { "required": true, "tier": "debug", "dtype": "str", "shape": [], "description": "meta as JSON string (cross-venv safe)" },
+
+    "frame_indices": { "required": true, "tier": "model_facing", "dtype": "int32", "shape": ["N"] },
+    "times_s": { "required": true, "tier": "model_facing", "dtype": "float32", "shape": ["N"] },
+
+    "boxes": { "required": true, "tier": "model_facing", "dtype": "float32", "shape": ["N", "M", 4] },
+    "boxes_norm": { "required": true, "tier": "model_facing", "dtype": "float32", "shape": ["N", "M", 4] },
+    "centers_norm": { "required": true, "tier": "model_facing", "dtype": "float32", "shape": ["N", "M", 2] },
+    "areas_frac": { "required": true, "tier": "model_facing", "dtype": "float32", "shape": ["N", "M"] },
+    "scores": { "required": true, "tier": "model_facing", "dtype": "float32", "shape": ["N", "M"] },
+    "class_ids": { "required": true, "tier": "model_facing", "dtype": "int32", "shape": ["N", "M"] },
+    "valid_mask": { "required": true, "tier": "model_facing", "dtype": "bool", "shape": ["N", "M"] },
+    "class_names": { "required": true, "tier": "analytics", "dtype": "str", "shape": [41], "description": "stable mapping 'id:name' for 0..40" },
+
+    "det_count": { "required": true, "tier": "analytics", "dtype": "int32", "shape": ["N"] },
+    "person_count": { "required": true, "tier": "analytics", "dtype": "int32", "shape": ["N"] },
+    "text_region_count": { "required": true, "tier": "analytics", "dtype": "int32", "shape": ["N"] },
+    "logo_region_count": { "required": true, "tier": "analytics", "dtype": "int32", "shape": ["N"] },
+
+    "sum_person_area_frac": { "required": true, "tier": "analytics", "dtype": "float32", "shape": ["N"] },
+    "max_person_area_frac": { "required": true, "tier": "analytics", "dtype": "float32", "shape": ["N"] },
+    "sum_text_area_frac": { "required": true, "tier": "analytics", "dtype": "float32", "shape": ["N"] },
+    "max_text_area_frac": { "required": true, "tier": "analytics", "dtype": "float32", "shape": ["N"] },
+    "sum_logo_area_frac": { "required": true, "tier": "analytics", "dtype": "float32", "shape": ["N"] },
+    "max_logo_area_frac": { "required": true, "tier": "analytics", "dtype": "float32", "shape": ["N"] }
+  }
+}
+
+

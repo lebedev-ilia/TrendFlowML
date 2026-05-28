@@ -9,9 +9,85 @@ from src.core.base_extractor import BaseExtractor
 from src.core.metrics import system_snapshot, process_memory_bytes
 from src.core.path_utils import default_artifacts_dir
 
+# Machine schema (Audit v3): fixed export slots; config top_k_slots may be clamped.
+SCHEMA_MAX_TOP_K_SLOTS = 8
+
+# Stable key order for features_flat — must match embedding_pair_topk_extractor_output_v1.json
+_FEATURES_FLAT_KEYS: Tuple[str, ...] = (
+    "tp_embpair_present",
+    "tp_embpair_enabled",
+    "tp_embpair_disabled_by_policy",
+    "tp_embpair_title_present",
+    "tp_embpair_desc_present",
+    "tp_embpair_transcript_chunks_present",
+    "tp_embpair_used_legacy_key_flag",
+    "tp_embpair_dim_mismatch_flag",
+    "tp_embpair_unsafe_relpath_flag",
+    "tp_embpair_nan_inf_flag",
+    "tp_embpair_zero_norm_flag",
+    "tp_embpair_top_k",
+    "tp_embpair_top_k_slots",
+    "tp_embpair_schema_slots_max",
+    "tp_embpair_top_k_slots_requested",
+    "tp_embpair_top_k_slots_clamped",
+    "tp_embpair_title_desc_cosine",
+    "tp_embpair_title_desc_present",
+    "tp_embpair_title_transcript_topk_present",
+    "tp_embpair_compute_title_desc_enabled",
+    "tp_embpair_compute_title_transcript_topk_enabled",
+    "tp_embpair_export_topk_slots_enabled",
+    "tp_embpair_export_topk_indices_enabled",
+    "tp_embpair_export_topk_summary_enabled",
+    "tp_embpair_use_faiss_mode_auto",
+    "tp_embpair_use_faiss_mode_never",
+    "tp_embpair_use_faiss_mode_always",
+    "tp_embpair_min_corpus_for_faiss",
+    "tp_embpair_require_faiss_enabled",
+    "tp_embpair_require_title_embedding_enabled",
+    "tp_embpair_require_description_embedding_enabled",
+    "tp_embpair_require_transcript_chunks_enabled",
+    "tp_pairtopk_present",
+    "tp_pairtopk_top_k",
+    "tp_pairtopk_title_desc_cosine",
+    "tp_embpair_title_transcript_top1",
+    "tp_pairtopk_title_transcript_top1",
+    "tp_embpair_title_transcript_top1_idx",
+    "tp_embpair_title_transcript_top2",
+    "tp_pairtopk_title_transcript_top2",
+    "tp_embpair_title_transcript_top2_idx",
+    "tp_embpair_title_transcript_top3",
+    "tp_pairtopk_title_transcript_top3",
+    "tp_embpair_title_transcript_top3_idx",
+    "tp_embpair_title_transcript_top4",
+    "tp_pairtopk_title_transcript_top4",
+    "tp_embpair_title_transcript_top4_idx",
+    "tp_embpair_title_transcript_top5",
+    "tp_pairtopk_title_transcript_top5",
+    "tp_embpair_title_transcript_top5_idx",
+    "tp_embpair_title_transcript_top6",
+    "tp_pairtopk_title_transcript_top6",
+    "tp_embpair_title_transcript_top6_idx",
+    "tp_embpair_title_transcript_top7",
+    "tp_pairtopk_title_transcript_top7",
+    "tp_embpair_title_transcript_top7_idx",
+    "tp_embpair_title_transcript_top8",
+    "tp_pairtopk_title_transcript_top8",
+    "tp_embpair_title_transcript_top8_idx",
+    "tp_embpair_title_transcript_topk_max",
+    "tp_embpair_title_transcript_topk_mean",
+    "tp_pairtopk_title_transcript_topk_max",
+    "tp_pairtopk_title_transcript_topk_mean",
+    "tp_embpair_n_chunks",
+    "tp_embpair_transcript_source_whisper",
+    "tp_embpair_transcript_source_youtube_auto",
+    "tp_embpair_transcript_source_combined",
+    "tp_embpair_use_faiss_mode",
+    "tp_embpair_require_faiss",
+)
+
 
 class EmbeddingPairTopKExtractor(BaseExtractor):
-    VERSION = "1.2.0"
+    VERSION = "1.3.0"
 
     def __init__(
         self,
@@ -37,10 +113,16 @@ class EmbeddingPairTopKExtractor(BaseExtractor):
         require_transcript_chunks: bool = False,
         emit_extra_metrics: bool = False,
     ) -> None:
+        init_sys_before = system_snapshot()
+        init_mem_before = process_memory_bytes()
+
         self.artifacts_dir = Path(artifacts_dir).expanduser().resolve() if artifacts_dir else default_artifacts_dir()
         self.enabled = bool(enabled)
         self.top_k = int(max(1, top_k))
-        self.top_k_slots = int(max(1, top_k_slots))
+        req_slots = int(max(1, int(top_k_slots)))
+        self.top_k_slots_requested = req_slots
+        self.top_k_slots = min(req_slots, SCHEMA_MAX_TOP_K_SLOTS)
+        self.top_k_slots_clamped = bool(req_slots > SCHEMA_MAX_TOP_K_SLOTS)
         self.temperature = float(temperature)
         self.device = str(device or "cpu")
         # Feature gating
@@ -57,7 +139,7 @@ class EmbeddingPairTopKExtractor(BaseExtractor):
         self.require_description_embedding = bool(require_description_embedding)
         self.require_transcript_chunks = bool(require_transcript_chunks)
 
-        # Transcript source priority (deterministic policy)
+        # Transcript source priority (deterministic policy). `combined` supported if present in tp_artifacts.
         if isinstance(transcript_source_priority, str):
             pr = [p.strip() for p in transcript_source_priority.split(",") if p.strip()]
         else:
@@ -72,6 +154,29 @@ class EmbeddingPairTopKExtractor(BaseExtractor):
                 "EmbeddingPairTopKExtractor: cross-encoder rerank is disabled by policy "
                 "(requires raw transcript chunk texts + dp_models spec)."
             )
+
+        init_sys_after = system_snapshot()
+        init_mem_after = process_memory_bytes()
+        self._init_metrics: Dict[str, Any] = {
+            "pre_init": init_sys_before,
+            "post_init": init_sys_after,
+            "ram_peak_bytes": max(init_mem_before, init_mem_after),
+        }
+
+    def _gpu_peak_mb(self, sys_after: Any) -> int:
+        def _g(snap: Any) -> int:
+            try:
+                g = (snap or {}).get("gpu") or {}
+                arr = g.get("gpus") or []
+                return max([int(x.get("memory_used_mb", 0)) for x in arr] or [0])
+            except Exception:
+                return 0
+
+        return max(
+            _g(self._init_metrics.get("pre_init")),
+            _g(self._init_metrics.get("post_init")),
+            _g(sys_after),
+        )
 
     @staticmethod
     def _safe_join_artifacts_dir(base_dir: Path, relpath: str) -> Path:
@@ -172,6 +277,120 @@ class EmbeddingPairTopKExtractor(BaseExtractor):
         except Exception:
             return None, False
 
+    @staticmethod
+    def _pack_features_flat(values: Dict[str, float]) -> Dict[str, float]:
+        out: Dict[str, float] = {}
+        for k in _FEATURES_FLAT_KEYS:
+            if k not in values:
+                raise KeyError(f"embedding_pair_topk_extractor: missing features_flat key {k!r}")
+            out[k] = float(values[k])
+        return out
+
+    def _shell_features_disabled(self) -> Dict[str, float]:
+        nan = float("nan")
+        d: Dict[str, float] = {
+            "tp_embpair_present": 0.0,
+            "tp_embpair_enabled": float(bool(self.enabled)),
+            "tp_embpair_disabled_by_policy": 1.0,
+            "tp_embpair_title_present": 0.0,
+            "tp_embpair_desc_present": 0.0,
+            "tp_embpair_transcript_chunks_present": 0.0,
+            "tp_embpair_used_legacy_key_flag": 0.0,
+            "tp_embpair_dim_mismatch_flag": 0.0,
+            "tp_embpair_unsafe_relpath_flag": 0.0,
+            "tp_embpair_nan_inf_flag": 0.0,
+            "tp_embpair_zero_norm_flag": 0.0,
+            "tp_embpair_top_k": float(int(self.top_k)),
+            "tp_embpair_top_k_slots": float(int(self.top_k_slots)),
+            "tp_embpair_schema_slots_max": float(int(SCHEMA_MAX_TOP_K_SLOTS)),
+            "tp_embpair_top_k_slots_requested": float(int(self.top_k_slots_requested)),
+            "tp_embpair_top_k_slots_clamped": 1.0 if self.top_k_slots_clamped else 0.0,
+            "tp_embpair_title_desc_cosine": nan,
+            "tp_embpair_title_desc_present": 0.0,
+            "tp_embpair_title_transcript_topk_present": 0.0,
+            "tp_embpair_compute_title_desc_enabled": float(bool(self.compute_title_desc)),
+            "tp_embpair_compute_title_transcript_topk_enabled": float(bool(self.compute_title_transcript_topk)),
+            "tp_embpair_export_topk_slots_enabled": float(bool(self.export_topk_slots)),
+            "tp_embpair_export_topk_indices_enabled": float(bool(self.export_topk_indices)),
+            "tp_embpair_export_topk_summary_enabled": float(bool(self.export_topk_summary)),
+            "tp_embpair_use_faiss_mode_auto": 1.0 if (self.use_faiss_mode == "auto") else 0.0,
+            "tp_embpair_use_faiss_mode_never": 1.0 if (self.use_faiss_mode == "never") else 0.0,
+            "tp_embpair_use_faiss_mode_always": 1.0 if (self.use_faiss_mode == "always") else 0.0,
+            "tp_embpair_min_corpus_for_faiss": float(int(self.min_corpus_for_faiss)),
+            "tp_embpair_require_faiss_enabled": float(bool(self.require_faiss)),
+            "tp_embpair_require_title_embedding_enabled": float(bool(self.require_title_embedding)),
+            "tp_embpair_require_description_embedding_enabled": float(bool(self.require_description_embedding)),
+            "tp_embpair_require_transcript_chunks_enabled": float(bool(self.require_transcript_chunks)),
+            "tp_pairtopk_present": 0.0,
+            "tp_pairtopk_top_k": float(int(self.top_k)),
+            "tp_pairtopk_title_desc_cosine": nan,
+        }
+        for i in range(1, SCHEMA_MAX_TOP_K_SLOTS + 1):
+            d[f"tp_embpair_title_transcript_top{i}"] = nan
+            d[f"tp_pairtopk_title_transcript_top{i}"] = nan
+            d[f"tp_embpair_title_transcript_top{i}_idx"] = nan
+        d["tp_embpair_title_transcript_topk_max"] = nan
+        d["tp_embpair_title_transcript_topk_mean"] = nan
+        d["tp_pairtopk_title_transcript_topk_max"] = nan
+        d["tp_pairtopk_title_transcript_topk_mean"] = nan
+        self._apply_extra_metrics_block(d, chunks=None, transcript_source_used=None)
+        return d
+
+    def _apply_extra_metrics_block(
+        self,
+        d: Dict[str, float],
+        *,
+        chunks: Optional[np.ndarray],
+        transcript_source_used: Optional[str],
+    ) -> None:
+        nan = float("nan")
+        if not self.emit_extra_metrics:
+            d["tp_embpair_n_chunks"] = nan
+            d["tp_embpair_transcript_source_whisper"] = nan
+            d["tp_embpair_transcript_source_youtube_auto"] = nan
+            d["tp_embpair_transcript_source_combined"] = nan
+            d["tp_embpair_use_faiss_mode"] = nan
+            d["tp_embpair_require_faiss"] = nan
+            return
+        n_chunks = float(int(chunks.shape[0])) if isinstance(chunks, np.ndarray) and chunks.ndim == 2 else nan
+        src = transcript_source_used
+        d["tp_embpair_n_chunks"] = float(n_chunks)
+        d["tp_embpair_transcript_source_whisper"] = float(src == "whisper")
+        d["tp_embpair_transcript_source_youtube_auto"] = float(src == "youtube_auto")
+        d["tp_embpair_transcript_source_combined"] = float(src == "combined")
+        d["tp_embpair_use_faiss_mode"] = float(0.0 if self.use_faiss_mode == "never" else (1.0 if self.use_faiss_mode == "always" else 0.5))
+        d["tp_embpair_require_faiss"] = float(bool(self.require_faiss))
+
+    def _build_extract_return(
+        self,
+        *,
+        sys_after: Any,
+        mem_before: int,
+        mem_after: int,
+        total_s: float,
+        features_flat: Dict[str, float],
+    ) -> Dict[str, Any]:
+        gpu_peak_mb = self._gpu_peak_mb(sys_after)
+        return {
+            "device": self.device,
+            "version": self.VERSION,
+            "model_name": None,
+            "model_version": None,
+            "weights_digest": None,
+            "system": {
+                "pre_init": self._init_metrics.get("pre_init"),
+                "post_init": self._init_metrics.get("post_init"),
+                "post_process": sys_after,
+                "peaks": {
+                    "ram_peak_mb": int(max(self._init_metrics.get("ram_peak_bytes", 0), mem_before, mem_after) / 1024 / 1024),
+                    "gpu_peak_mb": int(gpu_peak_mb),
+                },
+            },
+            "timings_s": {"total": round(total_s, 3)},
+            "result": {"features_flat": self._pack_features_flat(features_flat)},
+            "error": None,
+        }
+
     def extract(self, doc: Any) -> Dict[str, Any]:
         import time
 
@@ -183,68 +402,13 @@ class EmbeddingPairTopKExtractor(BaseExtractor):
             sys_after = system_snapshot()
             mem_after = process_memory_bytes()
             total_s = time.perf_counter() - t0
-            # stable empty output
-            features_flat: Dict[str, float] = {
-                "tp_embpair_present": 0.0,
-                "tp_embpair_enabled": float(bool(self.enabled)),
-                "tp_embpair_disabled_by_policy": 1.0,
-                "tp_embpair_title_present": 0.0,
-                "tp_embpair_desc_present": 0.0,
-                "tp_embpair_transcript_chunks_present": 0.0,
-                "tp_embpair_used_legacy_key_flag": 0.0,
-                "tp_embpair_dim_mismatch_flag": 0.0,
-                "tp_embpair_unsafe_relpath_flag": 0.0,
-                "tp_embpair_nan_inf_flag": 0.0,
-                "tp_embpair_zero_norm_flag": 0.0,
-                "tp_embpair_top_k": float(int(self.top_k)),
-                "tp_embpair_top_k_slots": float(int(self.top_k_slots)),
-                "tp_embpair_title_desc_cosine": float("nan"),
-                "tp_embpair_title_desc_present": 0.0,
-                "tp_embpair_title_transcript_topk_present": 0.0,
-                "tp_embpair_compute_title_desc_enabled": float(bool(self.compute_title_desc)),
-                "tp_embpair_compute_title_transcript_topk_enabled": float(bool(self.compute_title_transcript_topk)),
-                "tp_embpair_export_topk_slots_enabled": float(bool(self.export_topk_slots)),
-                "tp_embpair_export_topk_indices_enabled": float(bool(self.export_topk_indices)),
-                "tp_embpair_export_topk_summary_enabled": float(bool(self.export_topk_summary)),
-                "tp_embpair_use_faiss_mode_auto": 1.0 if (self.use_faiss_mode == "auto") else 0.0,
-                "tp_embpair_use_faiss_mode_never": 1.0 if (self.use_faiss_mode == "never") else 0.0,
-                "tp_embpair_use_faiss_mode_always": 1.0 if (self.use_faiss_mode == "always") else 0.0,
-                "tp_embpair_min_corpus_for_faiss": float(int(self.min_corpus_for_faiss)),
-                "tp_embpair_require_faiss_enabled": float(bool(self.require_faiss)),
-                "tp_embpair_require_title_embedding_enabled": float(bool(self.require_title_embedding)),
-                "tp_embpair_require_description_embedding_enabled": float(bool(self.require_description_embedding)),
-                "tp_embpair_require_transcript_chunks_enabled": float(bool(self.require_transcript_chunks)),
-                # legacy minimal aliases
-                "tp_pairtopk_present": 0.0,
-                "tp_pairtopk_top_k": float(int(self.top_k)),
-                "tp_pairtopk_title_desc_cosine": float("nan"),
-                "tp_pairtopk_title_transcript_topk_max": float("nan"),
-                "tp_pairtopk_title_transcript_topk_mean": float("nan"),
-                "tp_embpair_title_transcript_topk_max": float("nan"),
-                "tp_embpair_title_transcript_topk_mean": float("nan"),
-            }
-            for i in range(self.top_k_slots):
-                features_flat[f"tp_embpair_title_transcript_top{i+1}"] = float("nan")
-                features_flat[f"tp_pairtopk_title_transcript_top{i+1}"] = float("nan")
-                features_flat[f"tp_embpair_title_transcript_top{i+1}_idx"] = float("nan")
-
-            return {
-                "device": self.device,
-                "version": self.VERSION,
-                "model_version": None,
-                "system": {
-                    "pre_init": sys_before,
-                    "post_init": sys_before,
-                    "post_process": sys_after,
-                    "peaks": {
-                        "ram_peak_mb": int(max(mem_before, mem_after) / 1024 / 1024),
-                        "gpu_peak_mb": 0,
-                    },
-                },
-                "timings_s": {"total": round(total_s, 3)},
-                "result": {"features_flat": features_flat},
-                "error": None,
-            }
+            return self._build_extract_return(
+                sys_after=sys_after,
+                mem_before=mem_before,
+                mem_after=mem_after,
+                total_s=total_s,
+                features_flat=self._shell_features_disabled(),
+            )
 
         dim_mismatch_flag = 0.0
         unsafe_relpath_flag = 0.0
@@ -382,6 +546,7 @@ class EmbeddingPairTopKExtractor(BaseExtractor):
 
         # features_flat: only numeric scalars (top-k list summarized)
         present = 1.0 if (bool(title_desc_present) or bool(title_transcript_present)) else 0.0
+        nan = float("nan")
         features_flat: Dict[str, float] = {
             "tp_embpair_present": float(present),
             "tp_embpair_enabled": float(bool(self.enabled)),
@@ -396,6 +561,9 @@ class EmbeddingPairTopKExtractor(BaseExtractor):
             "tp_embpair_zero_norm_flag": float(zero_norm_flag),
             "tp_embpair_top_k": float(int(self.top_k)),
             "tp_embpair_top_k_slots": float(int(self.top_k_slots)),
+            "tp_embpair_schema_slots_max": float(int(SCHEMA_MAX_TOP_K_SLOTS)),
+            "tp_embpair_top_k_slots_requested": float(int(self.top_k_slots_requested)),
+            "tp_embpair_top_k_slots_clamped": 1.0 if self.top_k_slots_clamped else 0.0,
             "tp_embpair_title_desc_cosine": float(title_desc_cos),
             "tp_embpair_title_desc_present": float(title_desc_present),
             "tp_embpair_title_transcript_topk_present": float(title_transcript_present),
@@ -412,81 +580,57 @@ class EmbeddingPairTopKExtractor(BaseExtractor):
             "tp_embpair_require_title_embedding_enabled": float(bool(self.require_title_embedding)),
             "tp_embpair_require_description_embedding_enabled": float(bool(self.require_description_embedding)),
             "tp_embpair_require_transcript_chunks_enabled": float(bool(self.require_transcript_chunks)),
-            # Back-compat aliases (old names)
+            # Back-compat aliases (old names) — tp_pairtopk_present stays title-transcript-only (Q4-A)
             "tp_pairtopk_present": float(title_transcript_present),
             "tp_pairtopk_top_k": float(int(self.top_k)),
             "tp_pairtopk_title_desc_cosine": float(title_desc_cos),
         }
 
-        # Export slots top1..topKSlots as stable feature schema.
+        # Export slots top1..top8 (fixed schema)
         topk_vals: list[float] = []
         topk_idx_vals: list[float] = []
         if topk_scores is not None and topk_scores.size > 0:
             topk_vals = [float(x) for x in topk_scores[: self.top_k_slots]]
         if topk_indices is not None and topk_indices.size > 0:
             topk_idx_vals = [float(int(x)) for x in topk_indices[: self.top_k_slots]]
-        while len(topk_vals) < self.top_k_slots:
-            topk_vals.append(float("nan"))
-        while len(topk_idx_vals) < self.top_k_slots:
-            topk_idx_vals.append(float("nan"))
+        while len(topk_vals) < SCHEMA_MAX_TOP_K_SLOTS:
+            topk_vals.append(nan)
+        while len(topk_idx_vals) < SCHEMA_MAX_TOP_K_SLOTS:
+            topk_idx_vals.append(nan)
 
-        # Always keep stable keys, even if export flags are false.
-        for i in range(self.top_k_slots):
-            features_flat.setdefault(f"tp_embpair_title_transcript_top{i+1}", float("nan"))
-            features_flat.setdefault(f"tp_pairtopk_title_transcript_top{i+1}", float("nan"))
-            features_flat.setdefault(f"tp_embpair_title_transcript_top{i+1}_idx", float("nan"))
+        for i in range(1, SCHEMA_MAX_TOP_K_SLOTS + 1):
+            features_flat[f"tp_embpair_title_transcript_top{i}"] = nan
+            features_flat[f"tp_pairtopk_title_transcript_top{i}"] = nan
+            features_flat[f"tp_embpair_title_transcript_top{i}_idx"] = nan
 
         if self.export_topk_slots:
-            for i in range(self.top_k_slots):
-                features_flat[f"tp_embpair_title_transcript_top{i+1}"] = float(topk_vals[i])
-                # old aliases
-                features_flat[f"tp_pairtopk_title_transcript_top{i+1}"] = float(topk_vals[i])
+            for i in range(1, self.top_k_slots + 1):
+                idx = i - 1
+                features_flat[f"tp_embpair_title_transcript_top{i}"] = float(topk_vals[idx])
+                features_flat[f"tp_pairtopk_title_transcript_top{i}"] = float(topk_vals[idx])
 
         if self.export_topk_indices:
-            for i in range(self.top_k_slots):
-                features_flat[f"tp_embpair_title_transcript_top{i+1}_idx"] = float(topk_idx_vals[i])
+            for i in range(1, self.top_k_slots + 1):
+                idx = i - 1
+                features_flat[f"tp_embpair_title_transcript_top{i}_idx"] = float(topk_idx_vals[idx])
 
-        # stable summary keys
-        features_flat.setdefault("tp_embpair_title_transcript_topk_max", float("nan"))
-        features_flat.setdefault("tp_embpair_title_transcript_topk_mean", float("nan"))
-        features_flat.setdefault("tp_pairtopk_title_transcript_topk_max", float("nan"))
-        features_flat.setdefault("tp_pairtopk_title_transcript_topk_mean", float("nan"))
+        features_flat["tp_embpair_title_transcript_topk_max"] = nan
+        features_flat["tp_embpair_title_transcript_topk_mean"] = nan
+        features_flat["tp_pairtopk_title_transcript_topk_max"] = nan
+        features_flat["tp_pairtopk_title_transcript_topk_mean"] = nan
         if self.export_topk_summary:
             finite = [x for x in (topk_scores.tolist() if isinstance(topk_scores, np.ndarray) else []) if np.isfinite(x)]
-            features_flat["tp_embpair_title_transcript_topk_max"] = float(np.max(finite)) if finite else float("nan")
-            features_flat["tp_embpair_title_transcript_topk_mean"] = float(np.mean(finite)) if finite else float("nan")
-            # aliases
+            features_flat["tp_embpair_title_transcript_topk_max"] = float(np.max(finite)) if finite else nan
+            features_flat["tp_embpair_title_transcript_topk_mean"] = float(np.mean(finite)) if finite else nan
             features_flat["tp_pairtopk_title_transcript_topk_max"] = float(features_flat["tp_embpair_title_transcript_topk_max"])
             features_flat["tp_pairtopk_title_transcript_topk_mean"] = float(features_flat["tp_embpair_title_transcript_topk_mean"])
 
-        if self.emit_extra_metrics:
-            n_chunks = float(int(chunks.shape[0])) if isinstance(chunks, np.ndarray) and chunks.ndim == 2 else float("nan")
-            features_flat.update(
-                {
-                    "tp_embpair_n_chunks": float(n_chunks),
-                    "tp_embpair_transcript_source_whisper": float(transcript_source_used == "whisper"),
-                    "tp_embpair_transcript_source_youtube_auto": float(transcript_source_used == "youtube_auto"),
-                    "tp_embpair_use_faiss_mode": float(0.0 if self.use_faiss_mode == "never" else (1.0 if self.use_faiss_mode == "always" else 0.5)),
-                    "tp_embpair_require_faiss": float(bool(self.require_faiss)),
-                }
-            )
+        self._apply_extra_metrics_block(features_flat, chunks=chunks, transcript_source_used=transcript_source_used)
 
-        return {
-            "device": self.device,
-            "version": self.VERSION,
-            "model_version": None,
-            "system": {
-                "pre_init": sys_before,
-                "post_init": sys_before,
-                "post_process": sys_after,
-                "peaks": {
-                    "ram_peak_mb": int(max(mem_before, mem_after) / 1024 / 1024),
-                    "gpu_peak_mb": 0,
-                },
-            },
-            "timings_s": {"total": round(total_s, 3)},
-            "result": {"features_flat": features_flat},
-            "error": None,
-        }
-
-
+        return self._build_extract_return(
+            sys_after=sys_after,
+            mem_before=mem_before,
+            mem_after=mem_after,
+            total_s=total_s,
+            features_flat=features_flat,
+        )

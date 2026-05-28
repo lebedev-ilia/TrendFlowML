@@ -59,9 +59,11 @@ POST http://localhost:8001/search
 
 **Artifact filename**: `content_domain.npz` (фиксированное имя, `ARTIFACT_FILENAME`)
 
-**Schema version**: `content_domain_npz_v1`
+**Schema version**: `content_domain_npz_v2`
 
-Ключи (v1):
+Краткий аудит фич / melt / QA: **`docs/FEATURE_DESCRIPTION.md`**, валидатор артефакта: `utils/validate_content_domain.py`.
+
+Ключи (v2):
 - `frame_indices (N,) int32` (строго = `core_clip.frame_indices`)
 - `times_s (N,) float32`
 - `semantic_label_names (A,) str` (`"id:name"`)
@@ -72,7 +74,11 @@ POST http://localhost:8001/search
 - `track_is_confident_top1 (1,) bool`
 - `frame_topk_ids (N,5) int32`, `frame_topk_scores (N,5) float32`
 - `frame_is_confident_top1 (N,) bool`
-- `meta` (object dict): стандартный meta + `db_*` + thresholds + `models_used`/`model_signature` (включая chaining от `core_clip`)
+- `meta` (object dict) + `meta_json () str`: стандартный meta + `db_*` + thresholds + `models_used`/`model_signature` (включая chaining от `core_clip`)
+
+Схемы:
+- Human schema: `SCHEMA.md` (рядом с компонентом)
+- Machine schema: `VisualProcessor/schemas/content_domain_npz_v2.json`
 
 **Meta обязательные поля** (baseline contract):
 - `producer`, `producer_version`, `schema_version`, `created_at`
@@ -91,7 +97,7 @@ POST http://localhost:8001/search
 
 - Если нет `core_clip.frame_indices` или `union_timestamps_sec` → **error**.
 - Если `core_clip/embeddings.npz` не покрывает все required `frame_indices` → **error**.
-- Empty допускается только если база доменов пуста (что считается ошибкой) — в v1 **empty не ожидается**.
+- Если domain db отсутствует/битая/пустая → **error (fail-fast)**.
 
 ### Progress / state events
 
@@ -136,7 +142,8 @@ POST http://localhost:8001/search
 | `--clip-text-model-spec` | str | `clip_text_triton` | Spec name из ModelManager для CLIP text encoder |
 | `--triton-http-url` | str | `None` | Triton HTTP URL (может быть установлен через `TRITON_HTTP_URL` env var) |
 | `--topk` | int | `5` | Количество топ доменов для каждого кадра (фиксировано: 5) |
-| `--threshold-global` | float | `0.23` | Глобальный порог для `is_confident_top1` |
+| `--threshold-global` | float | `0.23` | **DEPRECATED** fallback для `--confidence-threshold-top1` |
+| `--confidence-threshold-top1` | float | `None` | Порог для `*_is_confident_top1` (не режет top‑K) |
 | `--thresholds-json` | str | `None` | Путь к JSON файлу с порогами для каждого домена |
 
 **Конфигурация в `global_config.yaml`**:
@@ -204,13 +211,12 @@ Render-context может быть использован:
 - **Frontend** для построения графиков и визуализаций (timeline charts, distributions, domain pie charts)
 - **Debugging**: быстрая проверка качества классификации доменов без загрузки NPZ
 
-**HTML debug страница** (опционально):
+**HTML debug страница** (опционально, dev-only):
 - Путь: `result_store/.../content_domain/_render/render.html`
-- Содержит интерактивные графики (Chart.js):
-  - Timeline: top-1 domain scores по времени с цветовой кодировкой доменов
-  - Distributions: статистики по top1_scores и topk_scores
-  - Top domains: таблица с топ доменами и их метриками
-  - Summary metrics: ключевые показатели в удобном формате
+- Offline mini-dashboard (без CDN):
+  - Timeline (SVG)
+  - Таблица top domains
+  - Дистрибуции score’ов
 
 **Конфигурация** (в `global_config.yaml`):
 ```yaml
@@ -220,7 +226,7 @@ content_domain:
     enable_html_render: true  # Генерировать HTML debug страницу
 ```
 
-**Примечание**: Render генерируется автоматически после успешной обработки компонента (best-effort: ошибки render не валят основной процесс).
+Audit v3: Render генерируется автоматически после успешной обработки компонента (best-effort: ошибки render не валят основной процесс).
 
 ### Бенчмарки / resource_costs
 

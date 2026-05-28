@@ -30,6 +30,12 @@ import torchaudio
 from src.core.base_extractor import BaseExtractor, ExtractorResult
 from src.core.audio_utils import AudioUtils
 
+from .utils.resource_profile import (
+    prefix_snapshot,
+    resource_profile_enabled,
+    snapshot_process_resources,
+)
+
 logger = logging.getLogger(__name__)
 
 # Contract version for downstream extractors compatibility validation
@@ -40,7 +46,7 @@ class MFCCExtractor(BaseExtractor):
     """Экстрактор MFCC признаков с поддержкой GPU."""
 
     name = "mfcc"
-    version = "2.0.0"
+    version = "2.1.1"
     description = "Извлечение MFCC (Mel-frequency cepstral coefficients) признаков"
     category = "spectral"
     dependencies = ["torch", "torchaudio"]
@@ -61,8 +67,8 @@ class MFCCExtractor(BaseExtractor):
         n_mels: int = 128,
         fmin: float = 0.0,
         fmax: Optional[float] = None,
-        # Feature gating flags (per-feature control, default: all False)
-        enable_basic_features: bool = False,
+        # Feature gating flags (Audit v3 defaults: basic_features=True, rest False)
+        enable_basic_features: bool = True,
         enable_deltas: bool = False,
         enable_time_series: bool = False,
         enable_normalization: bool = False,  # MFCC normalization (z-score)
@@ -388,6 +394,9 @@ class MFCCExtractor(BaseExtractor):
         Progress reporting: обновление прогресса для каждого этапа.
         """
         start_time = time.time()
+        t_total0 = time.perf_counter()
+        stage_timings_ms: Dict[str, float] = {}
+        mfcc_resource_profile: Optional[Dict[str, Any]] = None
         try:
             if not self._validate_input(input_uri):
                 error_code = self._classify_error(ValueError("Invalid input"), "audio_load_failed")
@@ -399,46 +408,77 @@ class MFCCExtractor(BaseExtractor):
 
             self._log_extraction_start(input_uri)
 
+            if resource_profile_enabled():
+                try:
+                    mfcc_resource_profile = {
+                        **prefix_snapshot("at_start", snapshot_process_resources()),
+                    }
+                except Exception:
+                    mfcc_resource_profile = None
+
             # Загружаем аудио
             if self.progress_callback:
                 self.progress_callback("mfcc", 0, 5, "Loading audio")
+            t0 = time.perf_counter()
             waveform, sample_rate = self.audio_utils.load_audio(input_uri, target_sr=self.sample_rate)
+            stage_timings_ms["load_audio_ms"] = (time.perf_counter() - t0) * 1000.0
 
             # Опциональная нормализация аудио
             if self.enable_audio_normalization:
+                t0 = time.perf_counter()
                 waveform = self.audio_utils.normalize_audio(waveform)
+                stage_timings_ms["normalize_audio_ms"] = (time.perf_counter() - t0) * 1000.0
+            else:
+                stage_timings_ms["normalize_audio_ms"] = 0.0
 
             # Улучшенная эвристика выбора CPU/GPU
             duration_sec = waveform.shape[1] / float(sample_rate)
             use_gpu = self._should_use_gpu(input_uri, duration_sec)
             if use_gpu:
+                t0 = time.perf_counter()
                 waveform = self.audio_utils._move_to_device(waveform)
+                stage_timings_ms["to_device_ms"] = (time.perf_counter() - t0) * 1000.0
+            else:
+                stage_timings_ms["to_device_ms"] = 0.0
 
             # Извлекаем MFCC
             if self.progress_callback:
                 self.progress_callback("mfcc", 1, 5, "Extracting MFCC features")
+            t0 = time.perf_counter()
             mfcc_features = self._extract_mfcc_features(waveform, prefer_gpu=use_gpu)
+            stage_timings_ms["extract_mfcc_ms"] = (time.perf_counter() - t0) * 1000.0
 
             # Вычисляем статистики
             if self.progress_callback:
                 self.progress_callback("mfcc", 2, 5, "Computing statistics")
+            t0 = time.perf_counter()
             mfcc_stats = self._compute_mfcc_statistics(mfcc_features)
+            stage_timings_ms["compute_statistics_ms"] = (time.perf_counter() - t0) * 1000.0
 
             # Вычисляем дополнительные метрики
             if self.progress_callback:
                 self.progress_callback("mfcc", 3, 5, "Computing additional metrics")
+            t0 = time.perf_counter()
             additional_metrics = self._compute_additional_metrics(mfcc_features)
+            stage_timings_ms["compute_additional_metrics_ms"] = (time.perf_counter() - t0) * 1000.0
 
             # Сохраняем большие временные серии в .npy (per-run storage)
             if self.progress_callback:
                 self.progress_callback("mfcc", 4, 5, "Saving artifacts")
+            t0 = time.perf_counter()
             features = self._build_payload(mfcc_features, mfcc_stats, additional_metrics, sample_rate, duration_sec)
-            features = self._save_time_series_artifacts(features, input_uri, tmp_path)
+            stage_timings_ms["build_payload_ms"] = (time.perf_counter() - t0) * 1000.0
+
+            t0 = time.perf_counter()
+            features = self._save_artifacts(features, mfcc_features, input_uri, tmp_path)
+            stage_timings_ms["save_artifacts_ms"] = (time.perf_counter() - t0) * 1000.0
 
             # Валидация выходных данных
             if self.progress_callback:
                 self.progress_callback("mfcc", 5, 5, "Validating output")
+            t0 = time.perf_counter()
             is_valid, error_msg = self._validate_output(features)
+            stage_timings_ms["validate_output_ms"] = (time.perf_counter() - t0) * 1000.0
             if not is_valid:
                 error_code = self._classify_error(ValueError(error_msg), "validation_failed")
                 raise ValueError(f"mfcc | {error_msg} (error_code={error_code})")
@@ -456,17 +496,20 @@ class MFCCExtractor(BaseExtractor):
                 enabled_features.append("time_series")
             features["_features_enabled"] = enabled_features
 
-            # Add stage timings to payload (for meta/stage_timings_ms)
-            processing_time = time.time() - start_time
-            features["stage_timings_ms"] = {
-                "load_audio_ms": 0.0,  # Audio loading is part of extraction
-                "extract_mfcc_ms": float(processing_time * 1000.0),
-                "compute_statistics_ms": 0.0,  # Statistics computation is part of extraction
-                "save_artifacts_ms": 0.0,  # Artifact saving is part of extraction
-                "validate_output_ms": 0.0,  # Validation is part of extraction
-                "total_ms": float(processing_time * 1000.0),
-            }
+            stage_timings_ms["total_ms"] = (time.perf_counter() - t_total0) * 1000.0
+            features["stage_timings_ms"] = stage_timings_ms
 
+            if mfcc_resource_profile is not None:
+                try:
+                    mfcc_resource_profile = {
+                        **(mfcc_resource_profile or {}),
+                        **prefix_snapshot("at_end", snapshot_process_resources()),
+                    }
+                except Exception:
+                    pass
+            features["mfcc_resource_profile"] = mfcc_resource_profile
+
+            processing_time = time.time() - start_time
             self._log_extraction_success(input_uri, processing_time)
             return self._create_result(success=True, payload=features, processing_time=processing_time)
 
@@ -486,9 +529,13 @@ class MFCCExtractor(BaseExtractor):
         """
         Segmenter-driven MFCC extraction: compute MFCC on provided windows (families.mfcc).
 
-        Progress reporting: каждые 10% сегментов (если progress_callback установлен).
+        Audit v3: strict alignment — pre-allocated arrays, segment_mask for failed segments,
+        canonical time axis (segment_start_sec, segment_end_sec, segment_center_sec).
         """
         start_time = time.time()
+        t_total0 = time.perf_counter()
+        stage_timings_ms: Dict[str, float] = {}
+        mfcc_resource_profile: Optional[Dict[str, Any]] = None
         try:
             if not self._validate_input(input_uri):
                 error_code = self._classify_error(ValueError("Invalid input"), "audio_load_failed")
@@ -501,87 +548,159 @@ class MFCCExtractor(BaseExtractor):
                 raise ValueError("mfcc | segments is empty (no-fallback)")
 
             total_segments = len(segments)
+            stage_timings_ms["load_segments_ms"] = 0.0
 
-            # Progress reporting: каждые 10%
+            if resource_profile_enabled():
+                try:
+                    mfcc_resource_profile = {
+                        **prefix_snapshot("at_start", snapshot_process_resources()),
+                    }
+                except Exception:
+                    mfcc_resource_profile = None
             progress_report_interval = max(1, total_segments // 10) if total_segments >= 10 else 1
             last_reported_pct = -1
 
-            # Process segments
-            mfcc_features_all: List[np.ndarray] = []
-            mfcc_stats_all: List[Dict[str, Any]] = []
-            additional_metrics_all: List[Dict[str, Any]] = []
-            segment_centers: List[float] = []
-            segment_durations: List[float] = []
+            # Strict alignment (Audit v3): pre-allocate arrays, no skipping
+            segment_start_sec = np.zeros(total_segments, dtype=np.float32)
+            segment_end_sec = np.zeros(total_segments, dtype=np.float32)
+            segment_center_sec = np.zeros(total_segments, dtype=np.float32)
+            segment_mask = np.zeros(total_segments, dtype=bool)
 
+            mfcc_mean_by_segment = np.full((total_segments, self.n_mfcc), np.nan, dtype=np.float32)
+            mfcc_energy_by_segment = np.full(total_segments, np.nan, dtype=np.float32)
+            delta_mean_by_segment = np.full((total_segments, self.n_mfcc), np.nan, dtype=np.float32) if self.enable_deltas else None
+            valid_delta_means: List[np.ndarray] = []
+            valid_delta_stds: List[np.ndarray] = []
+            valid_delta_delta_means: List[np.ndarray] = []
+            valid_delta_delta_stds: List[np.ndarray] = []
+
+            valid_means: List[np.ndarray] = []
+            valid_stds: List[np.ndarray] = []
+            valid_mins: List[np.ndarray] = []
+            valid_maxs: List[np.ndarray] = []
+            valid_energies: List[float] = []
+            valid_centroids: List[float] = []
+            valid_bandwidths: List[float] = []
+            valid_stabilities: List[float] = []
+            mfcc_concat_for_debug: List[np.ndarray] = []
+
+            t0 = time.perf_counter()
             for seg_idx, seg in enumerate(segments):
-                # Progress reporting
                 if self.progress_callback and seg_idx % progress_report_interval == 0:
                     pct = int((seg_idx / total_segments) * 100)
                     if pct != last_reported_pct:
                         self.progress_callback("mfcc", seg_idx, total_segments, f"Processing segment {seg_idx+1}/{total_segments}")
                         last_reported_pct = pct
 
-                # Load segment
-                start_sample = int(seg.get("start_sample", 0))
-                end_sample = int(seg.get("end_sample", 0))
-                center_sec = float(seg.get("center_sec", 0.0))
+                st = float(seg.get("start_sec", 0.0))
+                en = float(seg.get("end_sec", 0.0))
+                c = float(seg.get("center_sec", (st + en) * 0.5))
+                segment_start_sec[seg_idx] = st
+                segment_end_sec[seg_idx] = en
+                segment_center_sec[seg_idx] = c
 
-                waveform, _sr = self.audio_utils.load_audio_segment(
-                    input_uri,
-                    start_sample=start_sample,
-                    end_sample=end_sample,
-                    target_sr=self.sample_rate,
-                )
+                if not np.isfinite(st) or not np.isfinite(en) or en <= st:
+                    continue
 
-                # Опциональная нормализация аудио
-                if self.enable_audio_normalization:
-                    waveform = self.audio_utils.normalize_audio(waveform)
+                try:
+                    start_sample = int(seg.get("start_sample", 0))
+                    end_sample = int(seg.get("end_sample", 0))
 
-                # Улучшенная эвристика выбора CPU/GPU
-                duration_sec = float((end_sample - start_sample) / self.sample_rate)
-                use_gpu = self._should_use_gpu(input_uri, duration_sec)
-                if use_gpu:
-                    waveform = self.audio_utils._move_to_device(waveform)
+                    waveform, _sr = self.audio_utils.load_audio_segment(
+                        input_uri,
+                        start_sample=start_sample,
+                        end_sample=end_sample,
+                        target_sr=self.sample_rate,
+                    )
 
-                # Extract MFCC features for segment
-                mfcc_features = self._extract_mfcc_features(waveform, prefer_gpu=use_gpu)
+                    if self.enable_audio_normalization:
+                        waveform = self.audio_utils.normalize_audio(waveform)
 
-                # Compute statistics
-                mfcc_stats = self._compute_mfcc_statistics(mfcc_features)
+                    duration_sec = float((end_sample - start_sample) / self.sample_rate)
+                    use_gpu = self._should_use_gpu(input_uri, duration_sec)
+                    if use_gpu:
+                        waveform = self.audio_utils._move_to_device(waveform)
 
-                # Compute additional metrics
-                additional_metrics = self._compute_additional_metrics(mfcc_features)
+                    mfcc_features = self._extract_mfcc_features(waveform, prefer_gpu=use_gpu)
+                    mfcc_np = self.audio_utils.to_numpy(mfcc_features)
+                    if mfcc_np.ndim == 3:
+                        mfcc_np = mfcc_np[0]
+                    if mfcc_np.ndim != 2 or mfcc_np.shape[0] != self.n_mfcc:
+                        raise RuntimeError(f"mfcc | invalid mfcc shape: {getattr(mfcc_np, 'shape', None)}")
 
-                # Store results
-                mfcc_features_all.append(self.audio_utils.to_numpy(mfcc_features))
-                mfcc_stats_all.append(mfcc_stats)
-                additional_metrics_all.append(additional_metrics)
-                segment_centers.append(center_sec)
-                segment_durations.append(duration_sec)
+                    mfcc_stats = self._compute_mfcc_statistics(mfcc_features)
+                    additional_metrics = self._compute_additional_metrics(mfcc_features)
 
-            # Final progress report
+                    if self.enable_basic_features and isinstance(mfcc_stats.get("mfcc_mean"), (list, np.ndarray)):
+                        mean_arr = np.asarray(mfcc_stats["mfcc_mean"], dtype=np.float32)
+                        if mean_arr.size == self.n_mfcc:
+                            mfcc_mean_by_segment[seg_idx, :] = mean_arr
+                            valid_means.append(mean_arr)
+                            if "mfcc_std" in mfcc_stats:
+                                valid_stds.append(np.asarray(mfcc_stats["mfcc_std"], dtype=np.float32))
+                            if "mfcc_min" in mfcc_stats:
+                                valid_mins.append(np.asarray(mfcc_stats["mfcc_min"], dtype=np.float32))
+                            if "mfcc_max" in mfcc_stats:
+                                valid_maxs.append(np.asarray(mfcc_stats["mfcc_max"], dtype=np.float32))
+
+                    mfcc_energy_by_segment[seg_idx] = float(additional_metrics.get("mfcc_energy", np.nan))
+                    valid_energies.append(float(additional_metrics.get("mfcc_energy", 0.0)))
+                    valid_centroids.append(float(additional_metrics.get("mfcc_centroid", 0.0)))
+                    valid_bandwidths.append(float(additional_metrics.get("mfcc_bandwidth", 0.0)))
+                    valid_stabilities.append(float(additional_metrics.get("mfcc_stability", 0.0)))
+
+                    if self.enable_deltas and isinstance(mfcc_stats.get("delta_mean"), (list, np.ndarray)):
+                        delta_arr = np.asarray(mfcc_stats["delta_mean"], dtype=np.float32)
+                        if delta_arr.size == self.n_mfcc and delta_mean_by_segment is not None:
+                            delta_mean_by_segment[seg_idx, :] = delta_arr
+
+                    if self.enable_time_series:
+                        mfcc_concat_for_debug.append(mfcc_np.astype(np.float32))
+
+                    segment_mask[seg_idx] = True
+                except Exception as e:
+                    logger.warning(f"mfcc | Segment {seg_idx} failed: {e}")
+                    continue
+            stage_timings_ms["process_segments_ms"] = (time.perf_counter() - t0) * 1000.0
+
             if self.progress_callback:
                 self.progress_callback("mfcc", total_segments, total_segments, "Completed")
 
-            # Aggregate results
-            if len(mfcc_features_all) == 0:
-                error_code = self._classify_error(RuntimeError("All segments produced empty features"), "validation_failed")
-                raise RuntimeError(f"mfcc | all segments produced empty features (error_code={error_code})")
+            t0 = time.perf_counter()
+            n_valid = int(np.sum(segment_mask))
+            if n_valid <= 0:
+                error_code = self._classify_error(RuntimeError("All segments failed"), "validation_failed")
+                raise RuntimeError(f"mfcc | all segments failed (error_code={error_code})")
 
-            # Build payload (feature-gated)
             features = self._build_payload_from_segments(
-                mfcc_features_all,
-                mfcc_stats_all,
-                additional_metrics_all,
-                segment_centers,
-                segment_durations,
+                segment_start_sec,
+                segment_end_sec,
+                segment_center_sec,
+                segment_mask,
+                mfcc_mean_by_segment,
+                mfcc_energy_by_segment,
+                delta_mean_by_segment,
+                valid_means,
+                valid_stds,
+                valid_mins,
+                valid_maxs,
+                valid_delta_means,
+                valid_delta_stds,
+                valid_delta_delta_means,
+                valid_delta_delta_stds,
+                valid_energies,
+                valid_centroids,
+                valid_bandwidths,
+                valid_stabilities,
+                mfcc_concat_for_debug,
                 total_segments,
             )
+            stage_timings_ms["aggregate_results_ms"] = (time.perf_counter() - t0) * 1000.0
 
-            # Сохраняем большие временные серии в .npy (per-run storage)
-            features = self._save_time_series_artifacts(features, input_uri, tmp_path)
+            t0 = time.perf_counter()
+            features = self._save_artifacts(features, None, input_uri, tmp_path)
+            stage_timings_ms["save_artifacts_ms"] = (time.perf_counter() - t0) * 1000.0
 
-            # Track enabled features for meta
             enabled_features = []
             if self.enable_basic_features:
                 enabled_features.append("basic_features")
@@ -591,25 +710,29 @@ class MFCCExtractor(BaseExtractor):
                 enabled_features.append("time_series")
             features["_features_enabled"] = enabled_features
 
-            # Валидация выходных данных
+            t0 = time.perf_counter()
             is_valid, error_msg = self._validate_output(features)
+            stage_timings_ms["validate_output_ms"] = (time.perf_counter() - t0) * 1000.0
             if not is_valid:
                 error_code = self._classify_error(ValueError(error_msg), "validation_failed")
                 raise ValueError(f"mfcc | {error_msg} (error_code={error_code})")
 
-            # Добавляем contract version
             features["mfcc_contract_version"] = MFCC_CONTRACT_VERSION
 
-            # Add stage timings to payload (for meta/stage_timings_ms)
-            processing_time = time.time() - start_time
-            features["stage_timings_ms"] = {
-                "load_segments_ms": 0.0,  # Segment loading is part of extraction
-                "process_segments_ms": float(processing_time * 1000.0),
-                "aggregate_results_ms": 0.0,  # Aggregation is part of processing
-                "validate_output_ms": 0.0,  # Validation is part of processing
-                "total_ms": float(processing_time * 1000.0),
-            }
+            stage_timings_ms["total_ms"] = (time.perf_counter() - t_total0) * 1000.0
+            features["stage_timings_ms"] = stage_timings_ms
 
+            if mfcc_resource_profile is not None:
+                try:
+                    mfcc_resource_profile = {
+                        **(mfcc_resource_profile or {}),
+                        **prefix_snapshot("at_end", snapshot_process_resources()),
+                    }
+                except Exception:
+                    pass
+            features["mfcc_resource_profile"] = mfcc_resource_profile
+
+            processing_time = time.time() - start_time
             self._log_extraction_success(input_uri, processing_time)
             return self._create_result(success=True, payload=features, processing_time=processing_time)
 
@@ -620,41 +743,44 @@ class MFCCExtractor(BaseExtractor):
             self._log_extraction_error(input_uri, error_msg, processing_time)
             return self._create_result(success=False, error=error_msg, processing_time=processing_time)
 
-    def _save_time_series_artifacts(
+    def _save_artifacts(
         self,
         features: Dict[str, Any],
+        mfcc_tensor: Optional[Any],
         input_uri: str,
         tmp_path: str,
     ) -> Dict[str, Any]:
         """
-        Сохранить большие временные серии в .npy файлы (per-run storage).
+        Сохранить полный MFCC в .npy (debug-only). Audit v3: NPZ не содержит mfcc_features.
 
         Args:
             features: Словарь с признаками
+            mfcc_tensor: MFCC tensor/array (для run()) или None (для run_segments, путь уже в features)
             input_uri: Путь к входному файлу
-            tmp_path: Временная директория (если artifacts_dir не задан, используется tmp_path)
+            tmp_path: Временная директория
 
         Returns:
-            Обновлённый словарь features с путями к .npy файлам
+            Обновлённый словарь features с mfcc_npy в meta.extra
         """
-        if not self.enable_time_series:
-            return features
-
         artifacts_dir = Path(self.artifacts_dir) if self.artifacts_dir else Path(tmp_path)
         artifacts_dir.mkdir(parents=True, exist_ok=True)
-
         stem = Path(input_uri).stem
 
-        # Save large time series if present
-        for series_key in ["mfcc_series", "delta_series", "delta_delta_series"]:
-            series = features.get(series_key)
-            if isinstance(series, np.ndarray) and series.size > 1000:  # Save if > 1000 elements
-                npy_path = artifacts_dir / f"{stem}_{series_key}.npy"
-                np.save(str(npy_path), series.astype(np.float32))
-                features[f"{series_key}_npy"] = str(npy_path)
-                # Убираем саму серию из JSON (если не включена time_series)
-                if not self.enable_time_series:
-                    features.pop(series_key, None)
+        if mfcc_tensor is not None:
+            mfcc_np = self.audio_utils.to_numpy(mfcc_tensor) if hasattr(mfcc_tensor, "cpu") else np.asarray(mfcc_tensor)
+            if mfcc_np.ndim == 3:
+                mfcc_np = mfcc_np[0]
+            if mfcc_np.size > 0:
+                npy_path = artifacts_dir / f"{stem}_mfcc.npy"
+                np.save(str(npy_path), mfcc_np.astype(np.float32))
+                features["mfcc_npy"] = str(npy_path)
+
+        if "mfcc_concat" in features:
+            mfcc_concat = features.pop("mfcc_concat", None)
+            if isinstance(mfcc_concat, np.ndarray) and mfcc_concat.size > 0:
+                npy_path = artifacts_dir / f"{stem}_mfcc.npy"
+                np.save(str(npy_path), mfcc_concat.astype(np.float32))
+                features["mfcc_npy"] = str(npy_path)
 
         return features
 
@@ -673,6 +799,10 @@ class MFCCExtractor(BaseExtractor):
             RuntimeError: Если извлечение не удалось (no-fallback)
         """
         try:
+            # Audit v3: explicit float32, no autocast
+            if isinstance(waveform, torch.Tensor) and waveform.dtype != torch.float32:
+                waveform = waveform.to(dtype=torch.float32)
+
             # Выбираем трансформ (GPU/CPU) и применяем
             if prefer_gpu and self.mfcc_transform_gpu is not None:
                 mfcc = self.mfcc_transform_gpu(waveform)
@@ -907,55 +1037,47 @@ class MFCCExtractor(BaseExtractor):
             "duration": duration_sec,
         }
 
-        # Basic features (feature-gated)
+        # Basic features (feature-gated). Audit v3: no mfcc_features in payload (debug .npy only)
         if self.enable_basic_features:
-            features["mfcc_features"] = self.audio_utils.to_numpy(mfcc_features)
             features["mfcc_statistics"] = mfcc_stats
-
-            # Additional metrics (always included if basic_features enabled)
             features.update(additional_metrics)
 
-        # Deltas (feature-gated, but stats already in mfcc_statistics if enable_deltas)
-        # No need to add separately, they're in mfcc_statistics
+        # Deltas: stats in mfcc_statistics when enable_deltas
 
-        # Time series (feature-gated)
-        if self.enable_time_series:
-            mfcc_np = self.audio_utils.to_numpy(mfcc_features)
-            features["mfcc_series"] = mfcc_np
-
-            # Compute deltas for time series if enabled
-            if self.enable_deltas:
-                mfcc_2d = mfcc_np[0] if mfcc_np.ndim == 3 else mfcc_np
-                mfcc_tensor = torch.from_numpy(mfcc_2d)
-                deltas = torchaudio.functional.compute_deltas(mfcc_tensor)
-                delta_deltas = torchaudio.functional.compute_deltas(deltas)
-                features["delta_series"] = deltas.detach().cpu().numpy()
-                features["delta_delta_series"] = delta_deltas.detach().cpu().numpy()
+        # run() has no segments; segment axis is empty
+        features["segment_start_sec"] = np.array([], dtype=np.float32)
+        features["segment_end_sec"] = np.array([], dtype=np.float32)
+        features["segment_center_sec"] = np.array([], dtype=np.float32)
+        features["segment_mask"] = np.array([], dtype=bool)
 
         return features
 
     def _build_payload_from_segments(
         self,
-        mfcc_features_all: List[np.ndarray],
-        mfcc_stats_all: List[Dict[str, Any]],
-        additional_metrics_all: List[Dict[str, Any]],
-        segment_centers: List[float],
-        segment_durations: List[float],
+        segment_start_sec: np.ndarray,
+        segment_end_sec: np.ndarray,
+        segment_center_sec: np.ndarray,
+        segment_mask: np.ndarray,
+        mfcc_mean_by_segment: np.ndarray,
+        mfcc_energy_by_segment: np.ndarray,
+        delta_mean_by_segment: Optional[np.ndarray],
+        valid_means: List[np.ndarray],
+        valid_stds: List[np.ndarray],
+        valid_mins: List[np.ndarray],
+        valid_maxs: List[np.ndarray],
+        valid_delta_means: List[np.ndarray],
+        valid_delta_stds: List[np.ndarray],
+        valid_delta_delta_means: List[np.ndarray],
+        valid_delta_delta_stds: List[np.ndarray],
+        valid_energies: List[float],
+        valid_centroids: List[float],
+        valid_bandwidths: List[float],
+        valid_stabilities: List[float],
+        mfcc_concat_for_debug: List[np.ndarray],
         total_segments: int,
     ) -> Dict[str, Any]:
         """
-        Построить payload из сегментов с агрегацией.
-
-        Args:
-            mfcc_features_all: Список MFCC признаков для каждого сегмента
-            mfcc_stats_all: Список статистик для каждого сегмента
-            additional_metrics_all: Список дополнительных метрик для каждого сегмента
-            segment_centers: Центры сегментов в секундах
-            segment_durations: Длительности сегментов в секундах
-            total_segments: Общее количество сегментов
-
-        Returns:
-            Словарь с payload (feature-gated, агрегированный)
+        Построить payload из сегментов (Audit v3: segment-aligned, canonical axis).
         """
         features: Dict[str, Any] = {
             "device_used": self.device,
@@ -967,90 +1089,43 @@ class MFCCExtractor(BaseExtractor):
             "fmin": self.fmin,
             "fmax": self.fmax,
             "segments_count": int(total_segments),
+            "duration": float(np.sum((segment_end_sec - segment_start_sec)[segment_mask])),
+            "segment_start_sec": segment_start_sec,
+            "segment_end_sec": segment_end_sec,
+            "segment_center_sec": segment_center_sec,
+            "segment_mask": segment_mask,
         }
 
-        # Aggregate basic features
-        if self.enable_basic_features and len(mfcc_stats_all) > 0:
-            # Aggregate statistics across segments
-            aggregated_stats: Dict[str, Any] = {}
+        if self.enable_basic_features and valid_means:
+            aggregated_mean = np.mean(valid_means, axis=0)
+            aggregated_std = np.mean(valid_stds, axis=0) if valid_stds else np.zeros(self.n_mfcc, dtype=np.float32)
+            all_min = np.min(valid_mins, axis=0) if valid_mins else aggregated_mean
+            all_max = np.max(valid_maxs, axis=0) if valid_maxs else aggregated_mean
+            features["mfcc_statistics"] = {
+                "mfcc_mean": aggregated_mean.tolist(),
+                "mfcc_std": aggregated_std.tolist(),
+                "mfcc_min": all_min.tolist(),
+                "mfcc_max": all_max.tolist(),
+            }
+            if self.enable_deltas and valid_delta_means:
+                features["mfcc_statistics"]["delta_mean"] = np.mean(valid_delta_means, axis=0).tolist()
+                features["mfcc_statistics"]["delta_std"] = np.mean(valid_delta_stds, axis=0).tolist() if valid_delta_stds else [0.0] * self.n_mfcc
+                if valid_delta_delta_means:
+                    features["mfcc_statistics"]["delta_delta_mean"] = np.mean(valid_delta_delta_means, axis=0).tolist()
+                    features["mfcc_statistics"]["delta_delta_std"] = np.mean(valid_delta_delta_stds, axis=0).tolist() if valid_delta_delta_stds else [0.0] * self.n_mfcc
 
-            # Aggregate basic statistics
-            mfcc_mean_all = [np.array(stats.get("mfcc_mean", [])) for stats in mfcc_stats_all if "mfcc_mean" in stats]
-            if mfcc_mean_all:
-                aggregated_stats["mfcc_mean"] = np.mean(mfcc_mean_all, axis=0).tolist()
-                aggregated_stats["mfcc_std"] = np.mean([np.array(stats.get("mfcc_std", [])) for stats in mfcc_stats_all if "mfcc_std" in stats], axis=0).tolist()
-                aggregated_stats["mfcc_min"] = np.min([np.array(stats.get("mfcc_min", [])) for stats in mfcc_stats_all if "mfcc_min" in stats], axis=0).tolist()
-                aggregated_stats["mfcc_max"] = np.max([np.array(stats.get("mfcc_max", [])) for stats in mfcc_stats_all if "mfcc_max" in stats], axis=0).tolist()
+        features["mfcc_energy"] = float(np.mean(valid_energies)) if valid_energies else 0.0
+        features["mfcc_centroid"] = float(np.mean(valid_centroids)) if valid_centroids else 0.0
+        features["mfcc_bandwidth"] = float(np.mean(valid_bandwidths)) if valid_bandwidths else 0.0
+        features["mfcc_stability"] = float(np.mean(valid_stabilities)) if valid_stabilities else 0.0
 
-            # Aggregate deltas if enabled
-            if self.enable_deltas:
-                delta_mean_all = [np.array(stats.get("delta_mean", [])) for stats in mfcc_stats_all if "delta_mean" in stats]
-                if delta_mean_all:
-                    aggregated_stats["delta_mean"] = np.mean(delta_mean_all, axis=0).tolist()
-                    aggregated_stats["delta_std"] = np.mean([np.array(stats.get("delta_std", [])) for stats in mfcc_stats_all if "delta_std" in stats], axis=0).tolist()
-                    aggregated_stats["delta_delta_mean"] = np.mean([np.array(stats.get("delta_delta_mean", [])) for stats in mfcc_stats_all if "delta_delta_mean" in stats], axis=0).tolist()
-                    aggregated_stats["delta_delta_std"] = np.mean([np.array(stats.get("delta_delta_std", [])) for stats in mfcc_stats_all if "delta_delta_std" in stats], axis=0).tolist()
-
-            features["mfcc_statistics"] = aggregated_stats
-
-            # Aggregate additional metrics
-            if additional_metrics_all:
-                aggregated_additional = {}
-                for key in additional_metrics_all[0].keys():
-                    values = [m.get(key, 0.0) for m in additional_metrics_all]
-                    aggregated_additional[key] = float(np.mean(values))
-                features.update(aggregated_additional)
-
-        # Time series (feature-gated)
         if self.enable_time_series:
-            # Concatenate all segments
-            if mfcc_features_all:
-                # Normalize shapes: ensure all arrays have shape (n_mfcc, frames)
-                normalized_features = []
-                for mfcc_feat in mfcc_features_all:
-                    mfcc_arr = np.asarray(mfcc_feat)
-                    # Remove batch dimension if present: (1, n_mfcc, frames) -> (n_mfcc, frames)
-                    if mfcc_arr.ndim == 3:
-                        mfcc_arr = mfcc_arr[0]  # Take first (and only) batch element
-                    # Ensure shape is (n_mfcc, frames)
-                    if mfcc_arr.ndim == 2:
-                        normalized_features.append(mfcc_arr)
-                    else:
-                        logger.warning(f"mfcc | Unexpected MFCC shape: {mfcc_arr.shape}, skipping")
-                
-                if normalized_features:
-                    # Verify all arrays have same n_mfcc dimension
-                    n_mfcc_expected = normalized_features[0].shape[0]
-                    for i, feat in enumerate(normalized_features):
-                        if feat.shape[0] != n_mfcc_expected:
-                            raise ValueError(
-                                f"mfcc | Inconsistent n_mfcc dimension: segment {i} has {feat.shape[0]}, "
-                                f"expected {n_mfcc_expected}"
-                            )
-                    
-                    # Concatenate along time axis (axis=1)
-                    mfcc_series_all = np.concatenate(normalized_features, axis=1)
-                    features["mfcc_series"] = mfcc_series_all
-
-                    # Compute deltas for time series if enabled
-                    if self.enable_deltas:
-                        # compute_deltas expects shape (n_mfcc, frames) or (batch, n_mfcc, frames)
-                        # Add batch dimension if needed
-                        if mfcc_series_all.ndim == 2:
-                            mfcc_tensor = torch.from_numpy(mfcc_series_all).unsqueeze(0)  # (1, n_mfcc, frames)
-                        else:
-                            mfcc_tensor = torch.from_numpy(mfcc_series_all)
-                        deltas = torchaudio.functional.compute_deltas(mfcc_tensor)
-                        delta_deltas = torchaudio.functional.compute_deltas(deltas)
-                        # Remove batch dimension if added
-                        if deltas.dim() == 3 and deltas.shape[0] == 1:
-                            deltas = deltas[0]
-                            delta_deltas = delta_deltas[0]
-                        features["delta_series"] = deltas.detach().cpu().numpy()
-                        features["delta_delta_series"] = delta_deltas.detach().cpu().numpy()
-
-            features["segment_centers_sec"] = segment_centers
-            features["segment_durations_sec"] = segment_durations
+            features["mfcc_mean_by_segment"] = mfcc_mean_by_segment
+            features["mfcc_energy_by_segment"] = mfcc_energy_by_segment
+            if self.enable_deltas and delta_mean_by_segment is not None:
+                features["delta_mean_by_segment"] = delta_mean_by_segment
+            if mfcc_concat_for_debug:
+                features["mfcc_concat"] = np.concatenate(mfcc_concat_for_debug, axis=1)
 
         return features
 

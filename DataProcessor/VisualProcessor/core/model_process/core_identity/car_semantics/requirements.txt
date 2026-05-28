@@ -1,0 +1,2 @@
+# Dependencies for car_semantics component
+# Add component-specific dependencies here

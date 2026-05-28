@@ -142,6 +142,8 @@ def _process_single_video_cut_detection(
             cmd.extend(["--hard-cuts-cascade-keep-top-p", str(config["hard_cuts_cascade_keep_top_p"])])
         if config.get("hard_cuts_cascade_hist_margin"):
             cmd.extend(["--hard-cuts-cascade-hist-margin", str(config["hard_cuts_cascade_hist_margin"])])
+        if config.get("max_sampling_gap_sec") is not None:
+            cmd.extend(["--max-sampling-gap-sec", str(config["max_sampling_gap_sec"])])
         if config.get("prefer_core_optical_flow"):
             cmd.append("--prefer-core-optical-flow")
         if config.get("require_core_optical_flow"):

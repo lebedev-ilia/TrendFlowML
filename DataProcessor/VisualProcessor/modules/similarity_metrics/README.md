@@ -12,8 +12,8 @@
 - ✅ Основной режим: **intra-video coherence** (схожесть кадров внутри видео)
 - ✅ Опциональный режим: **reference similarity** (если задан `reference_set_id` из `dp_models`)
 - ✅ Результаты сохраняются **только в NPZ формате** (без JSON артефактов)
-- ✅ Использует данные из `core_clip/embeddings.npz`
-- ✅ **Audio required**: отсутствие `clap_extractor` → `error` (политика)
+- ✅ Использует данные из `core_clip/embeddings.npz` как **единственный source-of-truth для time‑axis**
+- ✅ **Audio optional**: отсутствие `clap_extractor` допустимо, аудио‑модальность помечается как `NaN` и исключается из агрегатов
 
 ### Архитектура модуля
 
@@ -27,7 +27,15 @@
 ### Обязательные зависимости
 
 - **`core_clip`** — компонент, который вычисляет embeddings для ключевых кадров видео и сохраняет результаты в `result_store/.../core_clip/embeddings.npz`
-- **`clap_extractor`** — audio embeddings (AudioProcessor), required by policy
+
+### Опциональные зависимости (модальности)
+
+- `clap_extractor` — audio embeddings (AudioProcessor); если артефакт отсутствует или нет эмбеддинга, аудио‑схожесть маркируется как `NaN` (optional, отсутствие допустимо)
+- `shot_quality/shot_quality.npz` (quality/style)
+- `video_pacing/*.npz` (pacing features)
+- `text_processor/text_features.npz` (TextProcessor; использует `primary_embedding` если `primary_embedding_present=true`)
+- `micro_emotion/micro_emotion.npz` (emotion; если нет лиц — это допустимо)
+- OCR отсутствие допустимо (в baseline v1 similarity_metrics не требует OCR)
 
 ### Требования к входным данным
 
@@ -40,19 +48,10 @@
 - `frame_indices` — массив индексов кадров (int32)
 - `frame_embeddings` — массив embeddings кадров (float32, shape: [N, D])
 
-### Опциональные зависимости (модальности)
-
-- `shot_quality/shot_quality.npz` (quality/style)
-- `video_pacing/*.npz` (pacing features)
-- `text_processor/text_features.npz` (TextProcessor; использует `primary_embedding` если `primary_embedding_present=true`)
-- `micro_emotion/micro_emotion.npz` (emotion; если нет лиц — это допустимо)
-- OCR отсутствие допустимо (в baseline v1 similarity_metrics не требует OCR)
-
 ### Требования к согласованности данных
 
-- `frame_indices` модуля `similarity_metrics` должны быть **подмножеством** `core_clip.frame_indices`
 - Segmenter должен обеспечивать согласованную выборку кадров для зависимых компонентов
-- При несоответствии индексов модуль выбросит `RuntimeError`
+- **Audit v3 strict**: `similarity_metrics.frame_indices` должны **строго совпадать** с `core_clip.frame_indices` (иначе модуль делает `raise`)
 
 ## Использование
 
@@ -135,7 +134,9 @@ modules:
 <rs_path>/similarity_metrics/results.npz
 ```
 
-Schema: `similarity_metrics_npz_v1`
+**Version**: 2.0.2  
+**Schema**: `similarity_metrics_npz_v3`  
+**Artifact filename**: `results.npz`
 
 ### Структура выходных данных
 
@@ -146,7 +147,8 @@ Schema: `similarity_metrics_npz_v1`
     "centroid_sims": np.ndarray[float32],         # Схожесть каждого кадра к центроиду
     "temporal_sim_next": np.ndarray[float32],     # Схожесть соседних кадров
     "reference_present": np.ndarray[bool],        # Флаг наличия reference_set_id
-    "features": np.ndarray[object]                 # Агрегированные признаки
+    "feature_names": np.ndarray[object],          # Имена агрегатов (tabular)
+    "feature_values": np.ndarray[float32]         # Значения агрегатов (tabular)
 }
 ```
 
@@ -155,6 +157,8 @@ Schema: `similarity_metrics_npz_v1`
 `meta.ui_payload` (schema `similarity_metrics_ui_v1`) содержит:
 - графики coherence (через `centroid_sims`, `temporal_sim_next`, `times_s`)
 - `topk_refs[]`: top‑K reference videos + per-modality scores
+- `text_present`: флаг наличия текстовых фичей
+- `audio_required_present`: UI флаг (всегда `True`; audio является optional, если отсутствует → `NaN`)
 
 ### Описание полей
 
@@ -182,11 +186,12 @@ Schema: `similarity_metrics_npz_v1`
 - **Описание**: Флаг, указывающий, был ли включен reference set
 - **Значение**: `True` если `reference_set_id` был предоставлен, иначе `False`
 
-#### `features`
-- **Тип**: `np.ndarray[object]` (словарь)
-- **Описание**: Агрегированные статистические признаки схожести
+#### `feature_names` / `feature_values`
+- **Тип**: `object[F]` / `float32[F]`
+- **Описание**: Агрегированные статистические признаки схожести в tabular-формате.
+- **Порядок**: `feature_names` отсортирован лексикографически (stable).
 
-**Структура `features`:**
+**Содержимое агрегатов (примерно):**
 
 ```python
 {
@@ -222,7 +227,9 @@ frame_indices = data["frame_indices"]
 centroid_sims = data["centroid_sims"]
 temporal_sims = data["temporal_sim_next"]
 reference_present = data["reference_present"].item()
-features = data["features"].item()  # Преобразование object array в dict
+feat_names = data["feature_names"].astype(object).reshape(-1).tolist()
+feat_vals = data["feature_values"].astype(np.float32).reshape(-1).tolist()
+features = dict(zip(feat_names, feat_vals))
 
 print(f"Обработано кадров: {len(frame_indices)}")
 print(f"Средняя схожесть к центроиду: {features['centroid_sim_mean']:.4f}")
@@ -259,7 +266,7 @@ else:
 
 6. **Агрегация признаков**
    - Вычисляются статистические признаки: mean, std, p10, p90 для всех метрик
-   - Результаты упаковываются в словарь `features`
+   - Результаты упаковываются в tabular `feature_names/feature_values`
 
 7. **Сохранение результатов**
    - Результаты сохраняются в NPZ формате через `BaseModule.run()`

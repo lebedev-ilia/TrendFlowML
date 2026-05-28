@@ -77,4 +77,21 @@ class EmbeddingServiceConfig:
                 "logo": "clip_336",
                 "franchise": "clip_224",  # Franchise recognition uses CLIP 224
             }
+        # Локальная E2E / sync known_*: в triton/models_t_1 по умолчанию есть clip_image_224, но
+        # может ещё не быть clip_image_336 / clip_image_448. Тогда: export EMBEDDING_DEV_MAP_CAR_BRAND_LOGO_TO_CLIP224=1
+        if os.environ.get("EMBEDDING_DEV_MAP_CAR_BRAND_LOGO_TO_CLIP224", "").strip().lower() in (
+            "1",
+            "true",
+            "yes",
+        ):
+            for k in ("brand", "brand_semantic", "car", "car_semantic", "logo"):
+                self.category_model_mapping[k] = "clip_224"
+        # В E2E репо часто нет clip_image_448, зато есть clip_image_336: export EMBEDDING_DEV_MAP_PLACE_TO_CLIP336=1
+        if os.environ.get("EMBEDDING_DEV_MAP_PLACE_TO_CLIP336", "").strip().lower() in (
+            "1",
+            "true",
+            "yes",
+        ):
+            self.category_model_mapping["place"] = "clip_336"
+            self.category_model_mapping["place_semantic"] = "clip_336"
 

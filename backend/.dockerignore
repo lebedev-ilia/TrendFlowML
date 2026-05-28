@@ -1,0 +1,6 @@
+# Контекст сборки = этот каталог (backend/)
+.venv
+**/__pycache__
+**/.pytest_cache
+*.pyc
+.git

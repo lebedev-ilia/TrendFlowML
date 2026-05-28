@@ -1,5 +1,6 @@
 """
-QualityExtractor: извлечение метрик качества аудио (DC offset, clipping, crest factor, dynamic range, SNR).
+QualityExtractor: извлечение метрик качества аудио (DC offset, clipping, crest factor, dynamic range).
+Audit v3: snr_db removed (duplicate of dynamic_range_db), dc_offset_abs removed, enable_basic_metrics=True default.
 Интеграция с общим интерфейсом BaseExtractor и AudioUtils.
 
 Production-grade implementation with:
@@ -26,6 +27,12 @@ import numpy as np
 from src.core.base_extractor import BaseExtractor, ExtractorResult
 from src.core.audio_utils import AudioUtils
 
+from .utils.resource_profile import (
+    prefix_snapshot,
+    resource_profile_enabled,
+    snapshot_process_resources,
+)
+
 logger = logging.getLogger(__name__)
 
 # Contract version for downstream extractors compatibility validation
@@ -36,8 +43,8 @@ class QualityExtractor(BaseExtractor):
     """Извлекает базовые метрики качества аудио."""
 
     name = "quality"
-    version = "2.0.0"
-    description = "Метрики качества аудио: DC offset, clipping, crest factor, dynamic range, SNR"
+    version = "2.0.1"
+    description = "Метрики качества аудио: DC offset, clipping, crest factor, dynamic range"
     category = "quality"
     dependencies = ["numpy"]
     estimated_duration = 0.5
@@ -54,8 +61,8 @@ class QualityExtractor(BaseExtractor):
         frame_len_ms: float = 50.0,
         hop_ms: float = 25.0,
         clip_threshold: float = 0.999,
-        # Feature gating flags (per-feature control, default: all False)
-        enable_basic_metrics: bool = False,
+        # Feature gating flags (Audit v3: basic_metrics=True by default)
+        enable_basic_metrics: bool = True,
         enable_dynamic_metrics: bool = False,
         enable_frame_analysis: bool = False,
         enable_time_series: bool = False,
@@ -77,7 +84,7 @@ class QualityExtractor(BaseExtractor):
             hop_ms: Шаг между кадрами (мс)
             clip_threshold: Порог для определения клиппинга (0.0-1.0)
             enable_basic_metrics: Включить базовые метрики (dc_offset, clipping_ratio, crest_factor_db)
-            enable_dynamic_metrics: Включить динамические метрики (dynamic_range_db, snr_db)
+            enable_dynamic_metrics: Включить динамические метрики (dynamic_range_db)
             enable_frame_analysis: Включить анализ кадров (frame-level метрики)
             enable_time_series: Включить временные серии для всех метрик
             enable_normalization: Включить нормализацию аудио перед обработкой
@@ -147,7 +154,7 @@ class QualityExtractor(BaseExtractor):
         
         Args:
             error: Исключение
-            context: Контекст ошибки (audio_load_failed, dc_offset_failed, clipping_failed, crest_factor_failed, dynamic_range_failed, snr_failed, frame_analysis_failed, validation_failed, unknown)
+            context: Контекст ошибки (audio_load_failed, dc_offset_failed, clipping_failed, crest_factor_failed, dynamic_range_failed, frame_analysis_failed, validation_failed, unknown)
         
         Returns:
             error_code: один из:
@@ -156,7 +163,6 @@ class QualityExtractor(BaseExtractor):
                 - quality_clipping_failed
                 - quality_crest_factor_failed
                 - quality_dynamic_range_failed
-                - quality_snr_failed
                 - quality_frame_analysis_failed
                 - quality_validation_failed
                 - quality_unknown
@@ -173,8 +179,6 @@ class QualityExtractor(BaseExtractor):
             return "quality_crest_factor_failed"
         if "dynamic" in error_str or "range" in error_str or context == "dynamic_range_failed":
             return "quality_dynamic_range_failed"
-        if "snr" in error_str or "signal" in error_str or "noise" in error_str or context == "snr_failed":
-            return "quality_snr_failed"
         if "frame" in error_str or context == "frame_analysis_failed":
             return "quality_frame_analysis_failed"
         if "validation" in error_str or "invalid" in error_str or context == "validation_failed":
@@ -239,24 +243,6 @@ class QualityExtractor(BaseExtractor):
             except (ValueError, TypeError):
                 return False, f"quality | dynamic_range_db must be float, got {type(dynamic_range_db)}"
         
-        if "snr_db" in features:
-            snr_db = features.get("snr_db")
-            try:
-                snr_db = float(snr_db)
-                if np.isnan(snr_db) or np.isinf(snr_db):
-                    return False, "quality | snr_db is NaN or Inf"
-                if snr_db < 0.0:
-                    return False, f"quality | snr_db must be non-negative, got {snr_db}"
-            except (ValueError, TypeError):
-                return False, f"quality | snr_db must be float, got {type(snr_db)}"
-        
-        # Validate consistency: snr_db <= dynamic_range_db
-        if "snr_db" in features and "dynamic_range_db" in features:
-            snr_db = float(features.get("snr_db", 0.0))
-            dynamic_range_db = float(features.get("dynamic_range_db", 0.0))
-            if snr_db > dynamic_range_db:
-                return False, f"quality | consistency check failed: snr_db ({snr_db}) > dynamic_range_db ({dynamic_range_db})"
-        
         # Validate time series if present
         for series_key in ["frame_levels_db_series", "frame_rms_series", "clipping_segments_series"]:
             if series_key in features:
@@ -279,6 +265,9 @@ class QualityExtractor(BaseExtractor):
         Progress reporting: обновление прогресса для каждой метрики.
         """
         start_time = time.time()
+        t_total0 = time.perf_counter()
+        stage_timings_ms: Dict[str, float] = {}
+        quality_resource_profile: Optional[Dict[str, Any]] = None
         try:
             if not self._validate_input(input_uri):
                 error_code = self._classify_error(ValueError("Invalid input"), "audio_load_failed")
@@ -290,14 +279,28 @@ class QualityExtractor(BaseExtractor):
 
             self._log_extraction_start(input_uri)
 
+            if resource_profile_enabled():
+                try:
+                    quality_resource_profile = {
+                        **prefix_snapshot("at_start", snapshot_process_resources()),
+                    }
+                except Exception:
+                    quality_resource_profile = None
+
             # Загружаем аудио
             if self.progress_callback:
                 self.progress_callback("quality", 0, 6, "Loading audio")
+            t0 = time.perf_counter()
             wav_t, sr = self.audio_utils.load_audio(input_uri, target_sr=self.sample_rate)
+            stage_timings_ms["load_audio_ms"] = (time.perf_counter() - t0) * 1000.0
             
             # Опциональная нормализация
             if self.enable_normalization:
+                t0 = time.perf_counter()
                 wav_t = self.audio_utils.normalize_audio(wav_t)
+                stage_timings_ms["normalize_audio_ms"] = (time.perf_counter() - t0) * 1000.0
+            else:
+                stage_timings_ms["normalize_audio_ms"] = 0.0
             
             x = self.audio_utils.to_numpy(wav_t)
             if x.ndim == 2:
@@ -306,17 +309,33 @@ class QualityExtractor(BaseExtractor):
             x = x.astype(np.float32)
             
             # Извлекаем метрики
+            t0 = time.perf_counter()
             features = self._extract_quality_metrics(x, sr)
+            stage_timings_ms["extract_metrics_ms"] = (time.perf_counter() - t0) * 1000.0
             
-            # Сохраняем большие временные серии в .npy (per-run storage)
+            # Audit v3: params, canonical segment axis (empty for run())
+            features["frame_len_ms"] = self.frame_len_ms
+            features["hop_ms"] = self.hop_ms
+            features["clip_threshold"] = self.clip_threshold
+            features["average_channels"] = self.average_channels
+            features["segment_start_sec"] = np.array([], dtype=np.float32)
+            features["segment_end_sec"] = np.array([], dtype=np.float32)
+            features["segment_center_sec"] = np.array([], dtype=np.float32)
+            features["segment_mask"] = np.array([], dtype=bool)
+            
+            # Сохраняем временные серии в .npy (Audit v3: only in .npy, path in meta.extra)
             if self.progress_callback:
                 self.progress_callback("quality", 5, 6, "Saving artifacts")
+            t0 = time.perf_counter()
             features = self._save_time_series_artifacts(features, input_uri, tmp_path)
+            stage_timings_ms["save_artifacts_ms"] = (time.perf_counter() - t0) * 1000.0
             
             # Валидация выходных данных
             if self.progress_callback:
                 self.progress_callback("quality", 6, 6, "Validating output")
+            t0 = time.perf_counter()
             is_valid, error_msg = self._validate_output(features)
+            stage_timings_ms["validate_output_ms"] = (time.perf_counter() - t0) * 1000.0
             if not is_valid:
                 error_code = self._classify_error(ValueError(error_msg), "validation_failed")
                 raise ValueError(f"quality | {error_msg} (error_code={error_code})")
@@ -336,16 +355,20 @@ class QualityExtractor(BaseExtractor):
                 enabled_features.append("time_series")
             features["_features_enabled"] = enabled_features
 
-            # Add stage timings to payload (for meta/stage_timings_ms)
-            processing_time = time.time() - start_time
-            features["stage_timings_ms"] = {
-                "load_audio_ms": 0.0,  # Audio loading is part of extraction
-                "extract_metrics_ms": float(processing_time * 1000.0),
-                "save_artifacts_ms": 0.0,  # Artifact saving is part of extraction
-                "validate_output_ms": 0.0,  # Validation is part of extraction
-                "total_ms": float(processing_time * 1000.0),
-            }
+            stage_timings_ms["total_ms"] = (time.perf_counter() - t_total0) * 1000.0
+            features["stage_timings_ms"] = stage_timings_ms
 
+            if quality_resource_profile is not None:
+                try:
+                    quality_resource_profile = {
+                        **(quality_resource_profile or {}),
+                        **prefix_snapshot("at_end", snapshot_process_resources()),
+                    }
+                except Exception:
+                    pass
+            features["quality_resource_profile"] = quality_resource_profile
+
+            processing_time = time.time() - start_time
             self._log_extraction_success(input_uri, processing_time)
             return self._create_result(success=True, payload=features, processing_time=processing_time)
 
@@ -368,6 +391,9 @@ class QualityExtractor(BaseExtractor):
         Progress reporting: каждые 10% сегментов (если progress_callback установлен).
         """
         start_time = time.time()
+        t_total0 = time.perf_counter()
+        stage_timings_ms: Dict[str, float] = {"load_segments_ms": 0.0}
+        quality_resource_profile: Optional[Dict[str, Any]] = None
         try:
             if not self._validate_input(input_uri):
                 error_code = self._classify_error(ValueError("Invalid input"), "audio_load_failed")
@@ -380,130 +406,176 @@ class QualityExtractor(BaseExtractor):
                 raise ValueError("quality | segments is empty (no-fallback)")
 
             total_segments = len(segments)
+
+            if resource_profile_enabled():
+                try:
+                    quality_resource_profile = {
+                        **prefix_snapshot("at_start", snapshot_process_resources()),
+                    }
+                except Exception:
+                    quality_resource_profile = None
             
             # Progress reporting: каждые 10%
             progress_report_interval = max(1, total_segments // 10) if total_segments >= 10 else 1
             last_reported_pct = -1
 
-            # Process segments
+            # Process segments (Audit v3: canonical axis, empty semantics)
             dc_offset_all: List[float] = []
             clipping_ratio_all: List[float] = []
             crest_factor_db_all: List[float] = []
             dynamic_range_db_all: List[float] = []
-            snr_db_all: List[float] = []
             clipping_segments_all: List[int] = []
+            segment_starts: List[float] = []
+            segment_ends: List[float] = []
             segment_centers: List[float] = []
             segment_durations: List[float] = []
+            segment_mask: List[bool] = []
             
+            t0 = time.perf_counter()
             for seg_idx, seg in enumerate(segments):
-                # Progress reporting
                 if self.progress_callback and seg_idx % progress_report_interval == 0:
                     pct = int((seg_idx / total_segments) * 100)
                     if pct != last_reported_pct:
                         self.progress_callback("quality", seg_idx, total_segments, f"Processing segment {seg_idx+1}/{total_segments}")
                         last_reported_pct = pct
                 
-                # Load segment
                 start_sample = int(seg.get("start_sample", 0))
                 end_sample = int(seg.get("end_sample", 0))
                 center_sec = float(seg.get("center_sec", 0.0))
+                seg_start_sec = float(start_sample / self.sample_rate)
+                seg_end_sec = float(end_sample / self.sample_rate)
+                seg_dur = float((end_sample - start_sample) / self.sample_rate)
                 
-                wav_t, _sr = self.audio_utils.load_audio_segment(
-                    input_uri,
-                    start_sample=start_sample,
-                    end_sample=end_sample,
-                    target_sr=self.sample_rate,
-                )
+                segment_starts.append(seg_start_sec)
+                segment_ends.append(seg_end_sec)
+                segment_centers.append(center_sec)
+                segment_durations.append(seg_dur)
                 
-                # Опциональная нормализация
-                if self.enable_normalization:
-                    wav_t = self.audio_utils.normalize_audio(wav_t)
+                try:
+                    wav_t, _sr = self.audio_utils.load_audio_segment(
+                        input_uri,
+                        start_sample=start_sample,
+                        end_sample=end_sample,
+                        target_sr=self.sample_rate,
+                    )
+                    if self.enable_normalization:
+                        wav_t = self.audio_utils.normalize_audio(wav_t)
+                    wav = self.audio_utils.to_numpy(wav_t)
+                    wav = wav[0] if wav.ndim == 2 else wav.reshape(-1)
+                    wav = wav.astype(np.float32)
+                    seg_features = self._extract_quality_metrics(wav, self.sample_rate)
+                except Exception:
+                    segment_mask.append(False)
+                    continue
                 
-                wav = self.audio_utils.to_numpy(wav_t)
-                wav = wav[0] if wav.ndim == 2 else wav.reshape(-1)
-                wav = wav.astype(np.float32)
-                
-                # Extract quality metrics for segment
-                seg_features = self._extract_quality_metrics(wav, self.sample_rate)
-                
-                # Aggregate metrics from segment
                 if seg_features.get("dc_offset") is not None:
+                    segment_mask.append(True)
                     dc_offset_all.append(float(seg_features.get("dc_offset", 0.0)))
                     clipping_ratio_all.append(float(seg_features.get("clipping_ratio", 0.0)))
                     crest_factor_db_all.append(float(seg_features.get("crest_factor_db", 0.0)))
                     if seg_features.get("dynamic_range_db") is not None:
                         dynamic_range_db_all.append(float(seg_features.get("dynamic_range_db", 0.0)))
-                    if seg_features.get("snr_db") is not None:
-                        snr_db_all.append(float(seg_features.get("snr_db", 0.0)))
                     if seg_features.get("clipping_ratio", 0.0) > 0.0:
                         clipping_segments_all.append(seg_idx)
-                    segment_centers.append(center_sec)
-                    segment_durations.append(float((end_sample - start_sample) / self.sample_rate))
+                else:
+                    segment_mask.append(False)
             
-            # Final progress report
             if self.progress_callback:
                 self.progress_callback("quality", total_segments, total_segments, "Completed")
+
+            stage_timings_ms["process_segments_ms"] = (time.perf_counter() - t0) * 1000.0
             
-            # Aggregate results
+            # Audit v3: all segments empty -> status=empty, not error
             if len(dc_offset_all) == 0:
-                error_code = self._classify_error(RuntimeError("All segments produced empty features"), "validation_failed")
-                raise RuntimeError(f"quality | all segments produced empty features (error_code={error_code})")
+                total_duration = float(sum(segment_durations))
+                empty_features: Dict[str, Any] = {
+                    "status": "empty",
+                    "empty_reason": "quality_all_segments_empty",
+                    "device_used": self.device,
+                    "sample_rate": self.sample_rate,
+                    "segments_count": int(total_segments),
+                    "duration": total_duration,
+                    "frame_len_ms": self.frame_len_ms,
+                    "hop_ms": self.hop_ms,
+                    "clip_threshold": self.clip_threshold,
+                    "average_channels": self.average_channels,
+                    "quality_contract_version": QUALITY_CONTRACT_VERSION,
+                    "segment_start_sec": np.array(segment_starts, dtype=np.float32),
+                    "segment_end_sec": np.array(segment_ends, dtype=np.float32),
+                    "segment_center_sec": np.array(segment_centers, dtype=np.float32),
+                    "segment_mask": np.array(segment_mask, dtype=bool),
+                    "_features_enabled": [],
+                }
+                stage_timings_ms["total_ms"] = (time.perf_counter() - t_total0) * 1000.0
+                empty_features["stage_timings_ms"] = stage_timings_ms
+
+                if quality_resource_profile is not None:
+                    try:
+                        quality_resource_profile = {
+                            **(quality_resource_profile or {}),
+                            **prefix_snapshot("at_end", snapshot_process_resources()),
+                        }
+                    except Exception:
+                        pass
+                empty_features["quality_resource_profile"] = quality_resource_profile
+
+                processing_time = time.time() - start_time
+                self._log_extraction_success(input_uri, processing_time)
+                return self._create_result(success=True, payload=empty_features, processing_time=processing_time)
             
-            # Build payload (feature-gated)
+            t0 = time.perf_counter()
+            total_duration = float(sum(segment_durations))
             features: Dict[str, Any] = {
                 "device_used": self.device,
                 "sample_rate": self.sample_rate,
                 "segments_count": int(total_segments),
+                "duration": total_duration,
+                "frame_len_ms": self.frame_len_ms,
+                "hop_ms": self.hop_ms,
+                "clip_threshold": self.clip_threshold,
+                "average_channels": self.average_channels,
                 "quality_contract_version": QUALITY_CONTRACT_VERSION,
+                "segment_start_sec": np.array(segment_starts, dtype=np.float32),
+                "segment_end_sec": np.array(segment_ends, dtype=np.float32),
+                "segment_center_sec": np.array(segment_centers, dtype=np.float32),
+                "segment_mask": np.array(segment_mask, dtype=bool),
             }
             
-            # Aggregate stats from all segments
             if self.enable_basic_metrics:
                 dc_offset_arr = np.asarray(dc_offset_all, dtype=np.float32)
                 clipping_ratio_arr = np.asarray(clipping_ratio_all, dtype=np.float32)
                 crest_factor_db_arr = np.asarray(crest_factor_db_all, dtype=np.float32)
-                
                 features.update({
                     "dc_offset": float(np.mean(dc_offset_arr)),
                     "clipping_ratio": float(np.mean(clipping_ratio_arr)),
                     "crest_factor_db": float(np.mean(crest_factor_db_arr)),
                 })
-                
-                # Additional ML/analytics metrics
                 features.update(self._calc_additional_metrics(
                     dc_offset_arr,
                     clipping_ratio_arr,
                     crest_factor_db_arr,
                     np.asarray(dynamic_range_db_all, dtype=np.float32) if len(dynamic_range_db_all) > 0 else np.array([]),
-                    np.asarray(snr_db_all, dtype=np.float32) if len(snr_db_all) > 0 else np.array([]),
                 ))
-                
-                # Clipping segments count
                 features["clipping_segments_count"] = int(len(clipping_segments_all))
             
-            if self.enable_dynamic_metrics:
-                if len(dynamic_range_db_all) > 0:
-                    dynamic_range_db_arr = np.asarray(dynamic_range_db_all, dtype=np.float32)
-                    features["dynamic_range_db"] = float(np.mean(dynamic_range_db_arr))
-                    # Additional metrics
-                    features["dynamic_range_stability"] = float(1.0 / (1.0 + np.std(dynamic_range_db_arr)))
-                if len(snr_db_all) > 0:
-                    snr_db_arr = np.asarray(snr_db_all, dtype=np.float32)
-                    features["snr_db"] = float(np.mean(snr_db_arr))
-                    # Additional metrics
-                    features["snr_stability"] = float(1.0 / (1.0 + np.std(snr_db_arr)))
+            if self.enable_dynamic_metrics and len(dynamic_range_db_all) > 0:
+                dynamic_range_db_arr = np.asarray(dynamic_range_db_all, dtype=np.float32)
+                features["dynamic_range_db"] = float(np.mean(dynamic_range_db_arr))
+                features["dynamic_range_stability"] = float(1.0 / (1.0 + np.std(dynamic_range_db_arr)))
             
-            # Time series (feature-gated)
             if self.enable_time_series:
                 features["dc_offset_series"] = dc_offset_all
                 features["clipping_ratio_series"] = clipping_ratio_all
                 features["crest_factor_db_series"] = crest_factor_db_all
                 if len(dynamic_range_db_all) > 0:
                     features["dynamic_range_db_series"] = dynamic_range_db_all
-                if len(snr_db_all) > 0:
-                    features["snr_db_series"] = snr_db_all
                 features["segment_centers_sec"] = segment_centers
                 features["segment_durations_sec"] = segment_durations
+                t_save0 = time.perf_counter()
+                features = self._save_time_series_artifacts(features, input_uri, tmp_path)
+                stage_timings_ms["save_artifacts_ms"] = (time.perf_counter() - t_save0) * 1000.0
+            else:
+                stage_timings_ms["save_artifacts_ms"] = 0.0
             
             # Track enabled features for meta
             enabled_features = []
@@ -516,23 +588,31 @@ class QualityExtractor(BaseExtractor):
             if self.enable_time_series:
                 enabled_features.append("time_series")
             features["_features_enabled"] = enabled_features
+
+            stage_timings_ms["aggregate_results_ms"] = (time.perf_counter() - t0) * 1000.0
             
             # Валидация выходных данных
+            t0 = time.perf_counter()
             is_valid, error_msg = self._validate_output(features)
+            stage_timings_ms["validate_output_ms"] = (time.perf_counter() - t0) * 1000.0
             if not is_valid:
                 error_code = self._classify_error(ValueError(error_msg), "validation_failed")
                 raise ValueError(f"quality | {error_msg} (error_code={error_code})")
 
-            # Add stage timings to payload (for meta/stage_timings_ms)
-            processing_time = time.time() - start_time
-            features["stage_timings_ms"] = {
-                "load_segments_ms": 0.0,  # Segment loading is part of extraction
-                "process_segments_ms": float(processing_time * 1000.0),
-                "aggregate_results_ms": 0.0,  # Aggregation is part of processing
-                "validate_output_ms": 0.0,  # Validation is part of processing
-                "total_ms": float(processing_time * 1000.0),
-            }
+            stage_timings_ms["total_ms"] = (time.perf_counter() - t_total0) * 1000.0
+            features["stage_timings_ms"] = stage_timings_ms
 
+            if quality_resource_profile is not None:
+                try:
+                    quality_resource_profile = {
+                        **(quality_resource_profile or {}),
+                        **prefix_snapshot("at_end", snapshot_process_resources()),
+                    }
+                except Exception:
+                    pass
+            features["quality_resource_profile"] = quality_resource_profile
+
+            processing_time = time.time() - start_time
             self._log_extraction_success(input_uri, processing_time)
             return self._create_result(success=True, payload=features, processing_time=processing_time)
 
@@ -550,35 +630,22 @@ class QualityExtractor(BaseExtractor):
         tmp_path: str,
     ) -> Dict[str, Any]:
         """
-        Сохранить большие временные серии в .npy файлы (per-run storage).
-        
-        Args:
-            features: Словарь с признаками
-            input_uri: Путь к входному файлу
-            tmp_path: Временная директория (если artifacts_dir не задан, используется tmp_path)
-        
-        Returns:
-            Обновлённый словарь features с путями к .npy файлам
+        Сохранить временные серии в .npy (Audit v3: only in .npy, path in meta.extra).
         """
         if not self.enable_time_series:
             return features
-        
         artifacts_dir = Path(self.artifacts_dir) if self.artifacts_dir else Path(tmp_path)
         artifacts_dir.mkdir(parents=True, exist_ok=True)
-        
         stem = Path(input_uri).stem
-        
-        # Save large time series if present
-        for series_key in ["frame_levels_db_series", "frame_rms_series", "clipping_segments_series", "dc_offset_series", "clipping_ratio_series", "crest_factor_db_series", "dynamic_range_db_series", "snr_db_series"]:
+        for series_key in ["frame_levels_db_series", "frame_rms_series", "clipping_segments_series", "dc_offset_series", "clipping_ratio_series", "crest_factor_db_series", "dynamic_range_db_series"]:
             series = features.get(series_key)
-            if isinstance(series, list) and len(series) > 1000:  # Save if > 1000 elements
-                npy_path = artifacts_dir / f"{stem}_{series_key}.npy"
-                np.save(str(npy_path), np.asarray(series, dtype=np.float32))
-                features[f"{series_key}_npy"] = str(npy_path)
-                # Убираем саму серию из JSON (если не включена time_series)
-                if not self.enable_time_series:
-                    features.pop(series_key, None)
-        
+            if series is not None:
+                arr = np.asarray(series, dtype=np.float32) if isinstance(series, list) else series
+                if arr.size > 0:
+                    npy_path = artifacts_dir / f"{stem}_{series_key}.npy"
+                    np.save(str(npy_path), arr)
+                    features[f"{series_key}_npy"] = str(npy_path)
+                features.pop(series_key, None)
         return features
 
     def _extract_quality_metrics(self, audio: np.ndarray, sr: int) -> Dict[str, Any]:
@@ -613,8 +680,6 @@ class QualityExtractor(BaseExtractor):
                     error_code = self._classify_error(RuntimeError("dc_offset produced NaN/Inf"), "dc_offset_failed")
                     raise RuntimeError(f"quality | dc_offset produced NaN/Inf (error_code={error_code})")
                 features["dc_offset"] = dc_offset
-                # Additional metric
-                features["dc_offset_abs"] = float(np.abs(dc_offset))
             except Exception as e:
                 error_code = self._classify_error(e, "dc_offset_failed")
                 raise RuntimeError(f"quality | dc_offset failed (error_code={error_code}): {e}") from e
@@ -667,17 +732,7 @@ class QualityExtractor(BaseExtractor):
                 error_code = self._classify_error(e, "dynamic_range_failed")
                 raise RuntimeError(f"quality | dynamic_range failed (error_code={error_code}): {e}") from e
 
-            try:
-                noise_db = float(np.percentile(levels, 5))
-                signal_db = float(np.percentile(levels, 95))
-                snr_db = float(max(0.0, signal_db - noise_db))
-                if np.isnan(snr_db) or np.isinf(snr_db) or snr_db < 0.0:
-                    error_code = self._classify_error(RuntimeError("snr_db produced invalid output"), "snr_failed")
-                    raise RuntimeError(f"quality | snr_db produced invalid output (error_code={error_code})")
-                features["snr_db"] = snr_db
-            except Exception as e:
-                error_code = self._classify_error(e, "snr_failed")
-                raise RuntimeError(f"quality | snr failed (error_code={error_code}): {e}") from e
+            # snr_db removed (Audit v3): was duplicate of dynamic_range_db (p95-p5)
 
             # Additional ML/analytics metrics
             if self.enable_basic_metrics:
@@ -686,7 +741,6 @@ class QualityExtractor(BaseExtractor):
                     np.array([features.get("clipping_ratio", 0.0)]),
                     np.array([features.get("crest_factor_db", 0.0)]),
                     np.array([dynamic_range_db]),
-                    np.array([snr_db]),
                 ))
 
         # Frame analysis (feature-gated)
@@ -771,87 +825,35 @@ class QualityExtractor(BaseExtractor):
         clipping_ratio: np.ndarray,
         crest_factor_db: np.ndarray,
         dynamic_range_db: np.ndarray,
-        snr_db: np.ndarray,
     ) -> Dict[str, Any]:
         """
-        Вычислить дополнительные метрики для ML/аналитики.
-        
-        Args:
-            dc_offset: Массив значений DC offset
-            clipping_ratio: Массив значений clipping ratio
-            crest_factor_db: Массив значений crest factor
-            dynamic_range_db: Массив значений dynamic range
-            snr_db: Массив значений SNR
-        
-        Returns:
-            Словарь с дополнительными метриками
+        Вычислить дополнительные метрики для ML/аналитики (analytics tier).
+        Audit v3: dc_offset_abs removed (duplicate), snr_db/snr_stability removed.
         """
         metrics: Dict[str, Any] = {}
-        
         if dc_offset.size == 0:
             return {
-                "dc_offset_abs": 0.0,
                 "clipping_segments_count": 0,
                 "crest_factor_median": 0.0,
                 "dynamic_range_stability": 0.0,
-                "snr_stability": 0.0,
                 "quality_score": 0.0,
             }
-        
-        # DC offset absolute value
-        metrics["dc_offset_abs"] = float(np.mean(np.abs(dc_offset)))
-        
-        # Clipping segments count (for run_segments)
         if clipping_ratio.size > 0:
             metrics["clipping_segments_count"] = int(np.sum(clipping_ratio > 0.0))
-        
-        # Crest factor median
         if crest_factor_db.size > 0:
             metrics["crest_factor_median"] = float(np.median(crest_factor_db))
-        
-        # Dynamic range stability
         if dynamic_range_db.size > 0:
             metrics["dynamic_range_stability"] = float(1.0 / (1.0 + np.std(dynamic_range_db)))
-        
-        # SNR stability
-        if snr_db.size > 0:
-            metrics["snr_stability"] = float(1.0 / (1.0 + np.std(snr_db)))
-        
-        # Quality score (composite metric)
-        # Нормализуем метрики и вычисляем композитную оценку
         quality_components = []
-        
-        # DC offset: чем ближе к 0, тем лучше (1.0 - abs(dc_offset))
         if dc_offset.size > 0:
-            dc_score = max(0.0, 1.0 - min(1.0, np.abs(np.mean(dc_offset))))
-            quality_components.append(dc_score)
-        
-        # Clipping: чем меньше, тем лучше (1.0 - clipping_ratio)
+            quality_components.append(max(0.0, 1.0 - min(1.0, np.abs(np.mean(dc_offset)))))
         if clipping_ratio.size > 0:
-            clip_score = max(0.0, 1.0 - np.mean(clipping_ratio))
-            quality_components.append(clip_score)
-        
-        # Crest factor: нормализуем к [0, 1] (предполагаем диапазон 0-40 dB)
+            quality_components.append(max(0.0, 1.0 - np.mean(clipping_ratio)))
         if crest_factor_db.size > 0:
-            crest_norm = np.clip(np.mean(crest_factor_db) / 40.0, 0.0, 1.0)
-            quality_components.append(crest_norm)
-        
-        # Dynamic range: нормализуем к [0, 1] (предполагаем диапазон 0-100 dB)
+            quality_components.append(float(np.clip(np.mean(crest_factor_db) / 40.0, 0.0, 1.0)))
         if dynamic_range_db.size > 0:
-            dr_score = min(1.0, np.mean(dynamic_range_db) / 100.0)
-            quality_components.append(dr_score)
-        
-        # SNR: нормализуем к [0, 1] (предполагаем диапазон 0-60 dB)
-        if snr_db.size > 0:
-            snr_score = min(1.0, np.mean(snr_db) / 60.0)
-            quality_components.append(snr_score)
-        
-        # Среднее всех компонентов
-        if quality_components:
-            metrics["quality_score"] = float(np.mean(quality_components))
-        else:
-            metrics["quality_score"] = 0.0
-        
+            quality_components.append(min(1.0, np.mean(dynamic_range_db) / 100.0))
+        metrics["quality_score"] = float(np.mean(quality_components)) if quality_components else 0.0
         return metrics
 
     @property

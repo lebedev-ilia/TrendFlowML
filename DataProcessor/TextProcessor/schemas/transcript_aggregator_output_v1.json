@@ -1,0 +1,138 @@
+{
+  "schema_system_version": "vp_schema_v1",
+  "schema_version": "transcript_aggregator_output_v1",
+  "producer": "transcript_aggregator",
+  "artifact_kind": "extractor_features_flat",
+  "allow_extra_keys": false,
+  "description": "Logical contract for TranscriptAggregatorExtractor.features_flat. Reads chunk .npy from TranscriptChunkEmbedder; writes transcript_*_agg_*.npy.",
+  "meta": {
+    "required_keys": [],
+    "optional_keys": []
+  },
+  "fields": {
+    "tp_tragg_present": {
+      "required": true,
+      "tier": "model_facing",
+      "dtype": "float32",
+      "shape": []
+    },
+    "tp_tragg_present_whisper": {
+      "required": true,
+      "tier": "model_facing",
+      "dtype": "float32",
+      "shape": []
+    },
+    "tp_tragg_present_youtube": {
+      "required": true,
+      "tier": "model_facing",
+      "dtype": "float32",
+      "shape": [],
+      "description": "1.0 if source youtube_auto produced aggregates"
+    },
+    "tp_tragg_present_combined": {
+      "required": true,
+      "tier": "model_facing",
+      "dtype": "float32",
+      "shape": []
+    },
+    "tp_tragg_decay_rate": {
+      "required": true,
+      "tier": "analytics",
+      "dtype": "float32",
+      "shape": []
+    },
+    "tp_tragg_compute_std": {
+      "required": true,
+      "tier": "analytics",
+      "dtype": "float32",
+      "shape": []
+    },
+    "tp_tragg_compute_mean": {
+      "required": true,
+      "tier": "analytics",
+      "dtype": "float32",
+      "shape": []
+    },
+    "tp_tragg_compute_max": {
+      "required": true,
+      "tier": "analytics",
+      "dtype": "float32",
+      "shape": []
+    },
+    "tp_tragg_compute_combined": {
+      "required": true,
+      "tier": "analytics",
+      "dtype": "float32",
+      "shape": []
+    },
+    "tp_tragg_write_artifacts": {
+      "required": true,
+      "tier": "analytics",
+      "dtype": "float32",
+      "shape": []
+    },
+    "tp_tragg_whisper_n_chunks": {
+      "required": true,
+      "tier": "analytics",
+      "dtype": "float32",
+      "shape": [],
+      "description": "NaN when emit_extra_metrics=false; *_mean_std/_max_std also NaN when compute_std=false"
+    },
+    "tp_tragg_youtube_auto_n_chunks": {
+      "required": true,
+      "tier": "analytics",
+      "dtype": "float32",
+      "shape": [],
+      "description": "NaN when emit_extra_metrics=false; *_mean_std/_max_std also NaN when compute_std=false"
+    },
+    "tp_tragg_combined_n_chunks": {
+      "required": true,
+      "tier": "analytics",
+      "dtype": "float32",
+      "shape": [],
+      "description": "NaN when emit_extra_metrics=false; *_mean_std/_max_std also NaN when compute_std=false"
+    },
+    "tp_tragg_whisper_mean_std": {
+      "required": true,
+      "tier": "analytics",
+      "dtype": "float32",
+      "shape": [],
+      "description": "NaN when emit_extra_metrics=false; *_mean_std/_max_std also NaN when compute_std=false"
+    },
+    "tp_tragg_whisper_max_std": {
+      "required": true,
+      "tier": "analytics",
+      "dtype": "float32",
+      "shape": [],
+      "description": "NaN when emit_extra_metrics=false; *_mean_std/_max_std also NaN when compute_std=false"
+    },
+    "tp_tragg_youtube_auto_mean_std": {
+      "required": true,
+      "tier": "analytics",
+      "dtype": "float32",
+      "shape": [],
+      "description": "NaN when emit_extra_metrics=false; *_mean_std/_max_std also NaN when compute_std=false"
+    },
+    "tp_tragg_youtube_auto_max_std": {
+      "required": true,
+      "tier": "analytics",
+      "dtype": "float32",
+      "shape": [],
+      "description": "NaN when emit_extra_metrics=false; *_mean_std/_max_std also NaN when compute_std=false"
+    },
+    "tp_tragg_combined_mean_std": {
+      "required": true,
+      "tier": "analytics",
+      "dtype": "float32",
+      "shape": [],
+      "description": "NaN when emit_extra_metrics=false; *_mean_std/_max_std also NaN when compute_std=false"
+    },
+    "tp_tragg_combined_max_std": {
+      "required": true,
+      "tier": "analytics",
+      "dtype": "float32",
+      "shape": [],
+      "description": "NaN when emit_extra_metrics=false; *_mean_std/_max_std also NaN when compute_std=false"
+    }
+  }
+}

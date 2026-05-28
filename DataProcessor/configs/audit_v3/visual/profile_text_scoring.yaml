@@ -1,0 +1,3 @@
+visual:
+  cfg_path: "DataProcessor/configs/audit_v3/visual/visual_text_scoring_only.yaml"
+

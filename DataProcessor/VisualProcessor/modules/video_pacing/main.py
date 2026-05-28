@@ -7,9 +7,20 @@ import os
 import sys
 from typing import Optional, List, Dict, Any
 
-sys.path.append(os.path.dirname(os.path.dirname(os.path.dirname(__file__))))
+_vp_root = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+if _vp_root not in sys.path:
+    sys.path.insert(0, _vp_root)
+elif sys.path[0] != _vp_root:
+    try:
+        sys.path.remove(_vp_root)
+    except ValueError:
+        pass
+    sys.path.insert(0, _vp_root)
+_repo_root = os.path.dirname(_vp_root)
+if _repo_root not in sys.path:
+    sys.path.append(_repo_root)
 
-from modules.video_pacing.video_pacing import VideoPacingModule
+from modules.video_pacing.utils.video_pacing import VideoPacingModule
 from utils.logger import get_logger
 
 MODULE_NAME = "video_pacing"

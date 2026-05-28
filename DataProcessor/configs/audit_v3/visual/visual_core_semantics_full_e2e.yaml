@@ -1,0 +1,206 @@
+# Все semantic heads core_identity + базовые провайдеры по графу CORE_DEPS (main.py):
+#   core_object_detections, core_face_landmarks, core_clip
+#   ocr_extractor → после core_object_detections (нужен detections.npz)
+#   → brand_semantics, car_semantics, face_identity, place_semantics
+#   → content_domain, franchise_recognition (от core_clip; с OCR: use_ocr_filtering)
+#
+# Запуск (из каталога DataProcessor):
+#   source ../backend/scripts/e2e_env.sh   # POSTGRES, TRITON_HTTP_URL, EMBEDDING_SERVICE_URL
+#   export PYTHONPATH="${PWD}:${PYTHONPATH}"
+#   # Triton на 8010; Embedding Service HTTP на 8005 (клиенты semantic heads)
+#   .data_venv/bin/python VisualProcessor/main.py --cfg-path configs/audit_v3/visual/visual_core_semantics_full_e2e.yaml
+#
+# При необходимости поправьте global.frames_dir / rs_path под своё видео.
+# ArcFace на GPU (Embedding Service /search face): см. embedding_service/requirements-optional-embedding-cuda.txt
+#   и проверка: python -c "import onnxruntime as ort; print(ort.get_available_providers())"
+
+global:
+  triton_http_url: "http://127.0.0.1:8010"
+  frames_dir: "../storage/frames_dir/-Q6fnPIybEI/video"
+  rs_path: "../storage/result_store_core_semantics_full_e2e"
+  platform_id: "youtube"
+  run_id: "core_semantics_full_e2e_001"
+  sampling_policy_version: "v1"
+  dataprocessor_version: "unknown"
+
+# PR-6: жёсткий порядок — ocr до franchise, чтобы ocr_npz в rs_path был готов
+execution_order:
+  - core_object_detections
+  - ocr_extractor
+  - core_face_landmarks
+  - core_clip
+  - content_domain
+  - franchise_recognition
+  - brand_semantics
+  - car_semantics
+  - face_identity
+  - place_semantics
+
+core_providers:
+  core_clip: true
+  core_depth_midas: false
+  core_optical_flow: false
+  core_object_detections: true
+  ocr_extractor: true
+  core_face_landmarks: true
+  content_domain: true
+  franchise_recognition: true
+  brand_semantics: true
+  car_semantics: true
+  face_identity: true
+  place_semantics: true
+
+modules:
+  cut_detection: false
+  scene_classification: false
+  video_pacing: false
+  uniqueness: false
+  shot_quality: false
+  story_structure: false
+  detalize_face: false
+  emotion_face: false
+  behavioral: false
+  optical_flow: false
+  action_recognition: false
+  color_light: false
+  frames_composition: false
+  high_level_semantic: false
+  micro_emotion: false
+  similarity_metrics: false
+  text_scoring: false
+
+core_object_detections:
+  runtime: "ultralytics"
+  model: "visual/yolo/yolo11x_41_best.pt"
+  batch_size: 16
+  device: "cuda"
+  box_threshold: 0.6
+  iou_threshold: 0.3
+  triton_model_spec: ""
+  triton_http_url: ""
+  triton_model_name: ""
+  triton_model_version: ""
+  triton_input_name: "images"
+  triton_output_name: "output0"
+  triton_preprocess_preset: "yolo11x_640"
+  render:
+    enable_render: true
+    enable_html_render: true
+
+ocr_extractor:
+  engine: "ppocr_rec_onnx"
+  rec_model_spec: "ppocr_rec_onnx_v1_inprocess"
+  ppocr_img_h: 48
+  ppocr_img_w: 320
+  min_rec_score: 0.0
+  proposal_class: "text_region"
+  min_det_score: 0.5
+  max_boxes_per_frame: 5
+  max_total_boxes: 5000
+  crop_margin_frac: 0.02
+  tesseract_lang: "eng+rus"
+  tesseract_psm: 6
+  retain_raw_ocr_text: true
+  render:
+    enable_render: true
+    enable_html_render: true
+
+core_face_landmarks:
+  use_pose: false
+  use_hands: false
+  use_face_mesh: true
+  use_person_mask: true
+  person_window_radius: 0
+  enable_async: true
+  enable_parallel: false
+  enable_temporal_filter: true
+  temporal_filter_min_cutoff: 1.0
+  temporal_filter_beta: 0.0
+  render:
+    enable_render: true
+    enable_html_render: true
+
+core_clip:
+  runtime: "triton"
+  batch_size: 16
+  triton_preprocess_preset: "openai_clip_224"
+  model_name: "ViT-B/32"
+  triton_image_model_spec: "clip_image_224_triton"
+  triton_text_model_spec: "clip_text_triton"
+  disable_text_cache: false
+  render:
+    enable_render: true
+    enable_html_render: true
+
+content_domain:
+  domain_db_dir: "dp_models/bundled_models/semantics/content_domain/v1"
+  clip_text_model_spec: "clip_text_triton"
+  topk: 5
+  confidence_threshold_top1: 0.23
+  thresholds_json: ""
+  render:
+    enable_render: true
+    enable_html_render: true
+
+franchise_recognition:
+  franchise_db_dir: "dp_models/bundled_models/semantics/franchises/v1"
+  clip_text_model_spec: "clip_text_triton"
+  topk: 5
+  threshold_global: 0.23
+  max_full_labels: 500
+  ocr_min_confidence: 0.4
+  ocr_max_events: 5000
+  thresholds_json: ""
+  embedding_service_url: "http://127.0.0.1:8005"
+  similarity_threshold: 0.0
+  use_ocr_filtering: true
+  batch_size: 16
+  render:
+    enable_render: true
+    enable_html_render: true
+
+brand_semantics:
+  embedding_service_url: "http://127.0.0.1:8005"
+  topk: 5
+  similarity_threshold: 0
+  confidence_threshold_top1: 0.7
+  proposal_classes: "logo_region,text_region"
+  max_tracks: ""
+  max_dets_per_frame: ""
+  pad_ratio: 0.15
+  use_sharpness: false
+  render:
+    enable_render: true
+    enable_html_render: true
+
+car_semantics:
+  embedding_service_url: "http://127.0.0.1:8005"
+  topk: 5
+  similarity_threshold: 0
+  max_tracks: ""
+  max_dets_per_frame: ""
+  pad_ratio: 0.15
+  use_sharpness: false
+  render:
+    enable_render: true
+    enable_html_render: true
+
+face_identity:
+  embedding_service_url: "http://127.0.0.1:8005"
+  http_timeout: 120
+  topk: 5
+  similarity_threshold: 0
+  render:
+    enable_render: true
+    enable_html_render: true
+
+place_semantics:
+  embedding_service_url: "http://127.0.0.1:8005"
+  http_timeout: 120
+  topk: 5
+  similarity_threshold: 0
+  min_track_length: 3
+  max_gap_sec: 5.0
+  render:
+    enable_render: true
+    enable_html_render: true

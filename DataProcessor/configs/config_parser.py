@@ -228,18 +228,33 @@ class GlobalConfigParser:
                 args.extend(["--emotion-silence-peak-threshold", str(float(emo_cfg["silence_peak_threshold"]))])
             if emo_cfg.get("silence_rms_threshold") is not None:
                 args.extend(["--emotion-silence-rms-threshold", str(float(emo_cfg["silence_rms_threshold"]))])
-            if emo_cfg.get("process_full_audio") is True:
-                args.append("--emotion-process-full-audio")
-            
-            # Emotion feature flags
+            # Audit v3: --emotion-process-full-audio is rejected by emotion_diarization_extractor (Segmenter windows only).
+
+            # Emotion feature flags (must match AudioProcessor cli_args: defaults-on use --emotion-disable-*)
             flags = emo_cfg.get("feature_flags", {})
-            for flag_name, flag_value in flags.items():
-                if flag_value:
-                    args.append(f"--emotion-{flag_name.replace('_', '-')}")
+            if flags.get("enable_probs"):
+                args.append("--emotion-enable-probs")
+            if not flags.get("enable_ids", True):
+                args.append("--emotion-disable-ids")
+            if not flags.get("enable_confidence", True):
+                args.append("--emotion-disable-confidence")
+            if flags.get("enable_mean_probs"):
+                args.append("--emotion-enable-mean-probs")
+            if not flags.get("enable_entropy", True):
+                args.append("--emotion-disable-entropy")
+            if not flags.get("enable_dominant", True):
+                args.append("--emotion-disable-dominant")
+            if flags.get("enable_quality_metrics"):
+                args.append("--emotion-enable-quality-metrics")
+            if flags.get("disable_silence_detection"):
+                args.append("--emotion-disable-silence-detection")
         
         # Source separation settings
         if "source_separation" in extractors and extractors["source_separation"].get("enabled"):
             sep_cfg = extractors["source_separation"]
+            sep_dev = sep_cfg.get("device")
+            if sep_dev is not None and str(sep_dev).strip().lower() in ("cpu", "cuda"):
+                args.extend(["--source-separation-device", str(sep_dev).strip().lower()])
             if sep_cfg.get("model_size"):
                 args.extend(["--source-separation-model-size", str(sep_cfg["model_size"])])
             if sep_cfg.get("batch_size") is not None:
@@ -427,10 +442,13 @@ class GlobalConfigParser:
             if chroma_cfg.get("normalize"):
                 args.extend(["--chroma-normalize", str(chroma_cfg["normalize"])])
             
+            # Chroma: Audit v3 extractor rejects enable_basic_stats/enable_extended_stats/enable_stats_vector.
+            # Only forward flags that are allowed on the CLI and in chroma_extractor main.py.
             flags = chroma_cfg.get("feature_flags", {})
-            for flag_name, flag_value in flags.items():
-                if flag_value:
-                    args.append(f"--chroma-{flag_name.replace('_', '-')}")
+            if flags.get("enable_audio_normalization"):
+                args.append("--chroma-enable-audio-normalization")
+            if flags.get("enable_time_series"):
+                args.append("--chroma-enable-time-series")
         
         # Onset extractor settings
         if "onset" in extractors and extractors["onset"].get("enabled"):
@@ -454,10 +472,18 @@ class GlobalConfigParser:
             if quality_cfg.get("average_channels"):
                 args.append("--quality-average-channels")
             
+            # Quality feature flags (--quality-enable-basic-metrics does not exist; default on uses --quality-disable-basic-metrics)
             flags = quality_cfg.get("feature_flags", {})
-            for flag_name, flag_value in flags.items():
-                if flag_value:
-                    args.append(f"--quality-{flag_name.replace('_', '-')}")
+            if flags.get("enable_normalization"):
+                args.append("--quality-enable-normalization")
+            if not flags.get("enable_basic_metrics", True):
+                args.append("--quality-disable-basic-metrics")
+            if flags.get("enable_dynamic_metrics"):
+                args.append("--quality-enable-dynamic-metrics")
+            if flags.get("enable_frame_analysis"):
+                args.append("--quality-enable-frame-analysis")
+            if flags.get("enable_time_series"):
+                args.append("--quality-enable-time-series")
         
         # MFCC extractor settings
         if "mfcc" in extractors and extractors["mfcc"].get("enabled"):
@@ -873,9 +899,9 @@ class GlobalConfigParser:
             if not text_cfg.get("input_json"):
                 errors.append("Text processor enabled but 'input_json' not specified")
         
-        # Проверка visual processor
+        # Проверка visual processor (только если включён)
         visual_cfg = self.get_processor_config("visual")
-        if visual_cfg:
+        if visual_cfg and visual_cfg.get("enabled"):
             inline_config = self.get_visual_inline_config()
             if not inline_config:
                 # Если нет inline_config и нет cfg_path, это ошибка

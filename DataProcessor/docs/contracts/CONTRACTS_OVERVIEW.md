@@ -28,6 +28,15 @@
 9) **Targets**: multi-target (views+likes) + multi-horizon (14/21 обязательно, 7 с mask), считаем **дельты** и `log1p`.
 10) **Reproducibility**: в каждом NPZ фиксируем producer/schema версии, config_hash, sampling_policy_version, dataprocessor_version и model versions.
 
+11) **Schema system (Audit v3)**: каждый NPZ контракт должен быть формализован:
+   - `meta.schema_version` обязателен,
+   - для audited компонентов должна существовать **machine schema** (keys/dtype/shape + tiers + required/optional) и **human schema** (`SCHEMA.md` рядом с кодом),
+   - runtime/CI валидатор должен fail-fast при несовместимости (для известных схем).
+
+11) **Dep-lock / параллельность процессоров (Audit v3)**: зависимые компоненты не блокируют “весь процессор”.
+    Планирование делается на уровне **узлов DAG** (`docs/reference/component_graph.yaml`), а готовность зависимостей определяется
+    через single-writer state files и/или atomic existence артефактов (не через `manifest.json` как lock).
+
 Дополнения (Round 1, полуфинал):
 - **Платформа v1**: только YouTube (`platform_id="youtube"`).
 - **Запрет JSON артефактов**: в `result_store` разрешён только `manifest.json` (остальное — NPZ, JSON генерируется только на выдаче во фронт).

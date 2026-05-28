@@ -7,11 +7,25 @@ import os
 import numpy as np
 import torch
 from typing import Dict, Any, Optional, List, Callable, Tuple
-from collections import Counter
+from collections import Counter, defaultdict
 from contextlib import nullcontext
+
+_WHISPER_IMPORT_ERROR: Optional[BaseException] = None
+try:
+    import whisper as whisper_audio  # type: ignore
+except Exception as _e:  # pragma: no cover
+    whisper_audio = None  # type: ignore
+    _WHISPER_IMPORT_ERROR = _e
 
 from src.core.base_extractor import BaseExtractor, ExtractorResult
 from src.core.audio_utils import AudioUtils
+
+from .utils.resource_profile import (
+    resource_profile_enabled,
+    snapshot_process_resources,
+    prefix_snapshot,
+    lang_detect_once_enabled,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -42,7 +56,7 @@ class ASRExtractor(BaseExtractor):
     """
     
     name = "asr_extractor"
-    version = "2.2.0"
+    version = "2.3.2"
     description = "Whisper ASR via inprocess model (token IDs, no raw text)"
     category = "speech"
     dependencies = ["numpy", "torch", "whisper", "dp_models"]
@@ -124,6 +138,12 @@ class ASRExtractor(BaseExtractor):
             raise ValueError("ASR | best_of must be > 0")
 
         self.enable_fallback_decode = bool(enable_fallback_decode)
+        # Audit v3 policy: fallback decode is disabled in audited profiles.
+        # It can introduce stochasticity (temperature>0) and makes QA harder.
+        if self.enable_fallback_decode:
+            raise RuntimeError(
+                "ASR | fallback decode is disabled for Audit v3 (set --asr-enable-fallback-decode=false)."
+            )
         self.fallback_temperature = float(fallback_temperature)
         self.fallback_avg_logprob_threshold = float(fallback_avg_logprob_threshold)
         if self.fallback_temperature < 0:
@@ -226,28 +246,35 @@ class ASRExtractor(BaseExtractor):
         self.token_id_min = 0
         self.token_id_max = self.vocab_size - 1
 
-        # Load shared tokenizer instance (best-effort) for converting decoded text -> shared token IDs.
-        # This keeps artifacts privacy-safe (we do NOT store raw text), but ensures token ids match shared_tokenizer_v1.
-        self._shared_tokenizer = None
+        # Load shared tokenizer instance STRICTLY via tokenizers (no transformers).
+        # Contract: token_ids_by_segment MUST belong to shared_tokenizer_v1.
         try:
-            tok_path = self.tokenizer_artifact_path
-            if tok_path:
-                if os.path.isfile(tok_path):
-                    tok_path = os.path.dirname(tok_path)
-                if os.path.isdir(tok_path):
-                    from transformers import AutoTokenizer  # type: ignore
-                    self._shared_tokenizer = AutoTokenizer.from_pretrained(tok_path, local_files_only=True)
-                    # Prefer tokenizer's vocab size if available
-                    try:
-                        vs = int(getattr(self._shared_tokenizer, "vocab_size", 0) or 0)
-                        if vs > 0:
-                            self.vocab_size = vs
-                            self.token_id_min = 0
-                            self.token_id_max = self.vocab_size - 1
-                    except Exception:
-                        pass
+            from tokenizers import Tokenizer  # type: ignore
         except Exception as e:
-            self.logger.warning(f"ASR | failed to load shared tokenizer for encode(): {e}")
+            raise RuntimeError(f"ASR | python package 'tokenizers' is required for shared_tokenizer_v1: {e}") from e
+
+        tok_path = self.tokenizer_artifact_path
+        if not tok_path or not os.path.exists(tok_path):
+            raise RuntimeError(f"ASR | shared_tokenizer_v1 artifact path is missing: {tok_path}")
+        # dp_models may return a directory or a tokenizer.json file; Tokenizer.from_file expects a file path.
+        if os.path.isdir(tok_path):
+            candidate = os.path.join(tok_path, "tokenizer.json")
+            if os.path.exists(candidate):
+                tok_path = candidate
+            else:
+                raise RuntimeError(f"ASR | shared_tokenizer_v1 artifact dir has no tokenizer.json: {tok_path}")
+        if not os.path.isfile(tok_path):
+            raise RuntimeError(f"ASR | shared_tokenizer_v1 artifact is not a file: {tok_path}")
+
+        self._shared_tokenizer = Tokenizer.from_file(tok_path)
+        try:
+            vs = int(self._shared_tokenizer.get_vocab_size(with_added_tokens=True))
+            if vs > 0:
+                self.vocab_size = vs
+                self.token_id_min = 0
+                self.token_id_max = self.vocab_size - 1
+        except Exception:
+            pass
 
         # Whisper inprocess spec selection by size.
         whisper_spec_name = f"whisper_{self.model_size}_inprocess"
@@ -274,6 +301,9 @@ class ASRExtractor(BaseExtractor):
         except Exception as e:
             raise RuntimeError(f"ASR | failed to resolve/load whisper inprocess model via ModelManager: {e}") from e
 
+        # Cached once: Whisper log-mel frame cap (pad/trim target); avoids recomputing per segment.
+        self._mel_expected_frames: Optional[int] = None
+
     def _prepare_audio_mel(self, audio_1d: np.ndarray) -> torch.Tensor:
         """
         Prepare audio for Whisper: convert to mel spectrogram and pad/trim
@@ -285,16 +315,15 @@ class ASRExtractor(BaseExtractor):
         Returns:
             Mel spectrogram tensor [80, n_frames] (moved to device if CUDA available)
         """
-        try:
-            import whisper  # type: ignore
-        except Exception as e:
-            raise RuntimeError(f"openai-whisper is not installed: {e}") from e
+        if whisper_audio is None:
+            raise RuntimeError(
+                f"openai-whisper is not installed: {_WHISPER_IMPORT_ERROR}"
+            ) from _WHISPER_IMPORT_ERROR
 
-        # Convert numpy to torch tensor (1D)
-        audio_tensor = torch.from_numpy(audio_1d.astype(np.float32))
+        wav = np.ascontiguousarray(audio_1d, dtype=np.float32)
+        audio_tensor = torch.from_numpy(wav)
 
-        # Compute mel spectrogram (shape: [n_mels, n_frames])
-        mel = whisper.audio.log_mel_spectrogram(audio_tensor, n_mels=80)
+        mel = whisper_audio.audio.log_mel_spectrogram(audio_tensor, n_mels=80)
 
         # Defensive: ensure mel is 2D [n_mels, n_frames]
         if mel.ndim != 2:
@@ -302,19 +331,21 @@ class ASRExtractor(BaseExtractor):
 
         # Whisper expects mel frames padded/trimmed to a fixed length (typically 3000),
         # so that after the stride-2 conv the time axis matches encoder positional embeddings.
-        expected_frames = None
-        try:
-            expected_frames = int(getattr(whisper.audio, "N_FRAMES", None) or 0)  # type: ignore[attr-defined]
-        except Exception:
-            expected_frames = None
-
-        if not expected_frames:
-            # Fallback: derive from model dims if present (mel frames ~= 2 * n_audio_ctx due to stride=2)
+        if self._mel_expected_frames is None:
+            exp: Optional[int] = None
             try:
-                n_audio_ctx = int(getattr(getattr(self.whisper_model, "dims", None), "n_audio_ctx", 0) or 0)
-                expected_frames = 2 * n_audio_ctx if n_audio_ctx > 0 else None
+                exp = int(getattr(whisper_audio.audio, "N_FRAMES", None) or 0)  # type: ignore[attr-defined]
             except Exception:
-                expected_frames = None
+                exp = None
+            if not exp:
+                try:
+                    n_audio_ctx = int(getattr(getattr(self.whisper_model, "dims", None), "n_audio_ctx", 0) or 0)
+                    exp = 2 * n_audio_ctx if n_audio_ctx > 0 else None
+                except Exception:
+                    exp = None
+            self._mel_expected_frames = exp
+
+        expected_frames = self._mel_expected_frames
 
         if expected_frames is not None:
             n_mels, n_frames = mel.shape
@@ -341,7 +372,12 @@ class ASRExtractor(BaseExtractor):
 
         return mel
 
-    def _infer_token_ids_from_mel(self, mel: torch.Tensor) -> Tuple[np.ndarray, int, str, Dict[str, Any]]:
+    def _infer_token_ids_from_mel(
+        self,
+        mel: torch.Tensor,
+        *,
+        reuse_auto_language: Optional[Tuple[int, str, float]] = None,
+    ) -> Tuple[np.ndarray, int, str, Dict[str, Any]]:
         """
         Run Whisper inference on mel spectrogram to get token IDs and language ID.
         
@@ -351,8 +387,11 @@ class ASRExtractor(BaseExtractor):
         Returns:
             (token_ids, lang_id) where lang_id is a language index (>= -1), not a token ID
         """
-        import whisper  # type: ignore
-        
+        if whisper_audio is None:
+            raise RuntimeError(
+                f"openai-whisper is not installed: {_WHISPER_IMPORT_ERROR}"
+            ) from _WHISPER_IMPORT_ERROR
+
         # --- compute torch.device robustly ---
         try:
             # If whisper_device is like 'cuda:0' this will create a proper torch.device
@@ -366,8 +405,10 @@ class ASRExtractor(BaseExtractor):
         device_type = "cuda" if torch_device.type == "cuda" else "cpu"
 
         with torch.inference_mode():
-            # Prepare input: add batch dimension [1, 80, n_frames]
-            mel_input = mel.unsqueeze(0).to(torch_device)
+            # Prepare input: add batch dimension [1, 80, n_frames] (avoid redundant H2D if mel already there)
+            if mel.device != torch_device:
+                mel = mel.to(torch_device)
+            mel_input = mel.unsqueeze(0)
             
             # Debug logging: log shapes for troubleshooting
             pos_emb_shape = None
@@ -379,36 +420,70 @@ class ASRExtractor(BaseExtractor):
 
             # Detect language and decode inside autocast (only if cuda)
             with torch.amp.autocast(device_type=device_type, enabled=(device_type == "cuda")):
-                # language detection
-                lang_id = -1  # default unknown
-                try:
-                    detect_out = self.whisper_model.detect_language(mel_input)
-                    # whisper version compatibility:
-                    # - often returns (lang_token_ids: Tensor[B], probs: List[Dict[str,float]] or Tensor)
-                    if isinstance(detect_out, tuple) and len(detect_out) >= 2:
-                        lang_tok, probs = detect_out[0], detect_out[1]
-                        # Prefer explicit language token id if provided
-                        try:
-                            if hasattr(lang_tok, "numel") and int(lang_tok.numel()) > 0:
-                                lang_id = int(lang_tok.reshape(-1)[0].item())
-                        except Exception:
-                            pass
-                        # Fallback: if probs is tensor-like
-                        if lang_id == -1 and hasattr(probs, "argmax"):
-                            try:
-                                lang_id = int(probs.argmax(dim=-1).reshape(-1)[0].item())
-                            except Exception:
-                                lang_id = -1
-                        # Fallback: if probs is list-of-dicts, keep -1 (we can store code separately later)
-                    else:
-                        probs = detect_out
-                        if hasattr(probs, "argmax"):
-                            lang_id = int(probs.argmax(dim=-1).reshape(-1)[0].item()) if getattr(probs, "numel", lambda: 0)() > 0 else -1
-                except Exception as e:
-                    self.logger.warning(f"ASR | language detection failed: {e}")
-                    lang_id = -1
+                if self.language != "auto":
+                    reuse_auto_language = None
 
                 forced_language = None if self.language == "auto" else self.language
+                # language detection (analytics) — skip when language is fixed; skip when reuse_auto_language (AP_ASR_LANG_DETECT_ONCE)
+                lang_id = -1  # legacy numeric id (best-effort; may not be stable)
+                lang_code = ""
+                lang_conf = float("nan")
+                if (
+                    forced_language is None
+                    and reuse_auto_language is not None
+                    and str(reuse_auto_language[1] or "").strip()
+                ):
+                    lang_id = int(reuse_auto_language[0])
+                    lang_code = str(reuse_auto_language[1] or "").strip().lower()
+                    try:
+                        lang_conf = float(reuse_auto_language[2])
+                    except (TypeError, ValueError):
+                        lang_conf = float("nan")
+                    forced_language = lang_code
+                elif forced_language is None:
+                    try:
+                        detect_out = self.whisper_model.detect_language(mel_input)
+                        # whisper version compatibility:
+                        if isinstance(detect_out, tuple) and len(detect_out) >= 2:
+                            lang_tok, probs = detect_out[0], detect_out[1]
+                            try:
+                                if hasattr(lang_tok, "numel") and int(lang_tok.numel()) > 0:
+                                    lang_id = int(lang_tok.reshape(-1)[0].item())
+                            except Exception:
+                                pass
+                            if lang_id == -1 and hasattr(probs, "argmax"):
+                                try:
+                                    lang_id = int(probs.argmax(dim=-1).reshape(-1)[0].item())
+                                except Exception:
+                                    lang_id = -1
+                            # Preferred: probs dict[lang_code -> prob]
+                            try:
+                                probs_dict = None
+                                if isinstance(probs, dict):
+                                    probs_dict = probs
+                                elif isinstance(probs, list) and probs and isinstance(probs[0], dict):
+                                    probs_dict = probs[0]
+                                if isinstance(probs_dict, dict) and probs_dict:
+                                    k, v = max(probs_dict.items(), key=lambda kv: float(kv[1]))
+                                    lang_code = str(k or "").strip().lower()
+                                    try:
+                                        lang_conf = float(v)
+                                    except Exception:
+                                        lang_conf = float("nan")
+                            except Exception:
+                                pass
+                        else:
+                            probs = detect_out
+                            if hasattr(probs, "argmax"):
+                                lang_id = int(probs.argmax(dim=-1).reshape(-1)[0].item()) if getattr(probs, "numel", lambda: 0)() > 0 else -1
+                    except Exception as e:
+                        self.logger.warning(f"ASR | language detection failed: {e}")
+                        lang_id = -1
+                        lang_code = ""
+                        lang_conf = float("nan")
+                else:
+                    lang_code = str(forced_language).strip().lower()
+                    lang_conf = 1.0
 
                 def _decode_once(temp: float):
                     # Notes:
@@ -424,7 +499,7 @@ class ASRExtractor(BaseExtractor):
                     best_of = int(self.best_of) if (not use_beam) else None
                     return self.whisper_model.decode(
                         mel_input,
-                        whisper.DecodingOptions(
+                        whisper_audio.DecodingOptions(
                             language=forced_language,
                             task="transcribe",
                             fp16=(device_type == "cuda"),
@@ -462,6 +537,10 @@ class ASRExtractor(BaseExtractor):
                                     quality[k] = float(v)
                             except Exception:
                                 pass
+                    # Add language info (privacy-safe) into quality dict.
+                    # (It will also be surfaced as separate arrays in payload.)
+                    quality["lang_code"] = str(lang_code or "")
+                    quality["lang_conf"] = float(lang_conf) if isinstance(lang_conf, (int, float)) else float("nan")
 
                     # Optional fallback decode for difficult audio (explicit logging)
                     try:
@@ -492,40 +571,21 @@ class ASRExtractor(BaseExtractor):
                     except Exception as e:
                         self.logger.warning(f"ASR | fallback decode failed: {e}")
 
-                    # Preferred path: convert decoded text -> shared tokenizer ids (privacy-safe: do not persist text)
-                    try:
-                        if (
-                            result_obj is not None
-                            and self._shared_tokenizer is not None
-                            and hasattr(result_obj, "text")
-                            and isinstance(getattr(result_obj, "text"), str)
-                        ):
-                            txt = str(getattr(result_obj, "text") or "")
-                            if txt.strip():
-                                ids = self._shared_tokenizer.encode(txt, add_special_tokens=False)
-                                token_ids = np.asarray([int(i) for i in ids], dtype=np.int32).reshape(-1)
-                    except Exception as e:
-                        self.logger.debug(f"ASR | shared-tokenizer encode() failed, fallback to whisper tokens: {e}")
-
-                    if result_obj is not None and hasattr(result_obj, "tokens"):
-                        tokens = result_obj.tokens
-                        if isinstance(tokens, (list, tuple, np.ndarray)):
-                            if token_ids.size == 0:
-                                token_ids = np.asarray([int(t) for t in tokens], dtype=np.int32)
-                        else:
-                            # tensor-like
-                            if token_ids.size == 0:
-                                token_ids = np.asarray(tokens.cpu().numpy(), dtype=np.int32).reshape(-1)
-                    elif result_obj is not None and hasattr(result_obj, "segments") and result_obj.segments:
-                        # Some versions provide segments with text; try to extract token ids per segment if available
-                        # Fallback: empty token list
-                        token_ids = np.array([], dtype=np.int32)
+                    # STRICT contract: convert decoded text -> shared_tokenizer_v1 token ids.
+                    # No fallback to Whisper tokens is allowed (would break downstream contract).
+                    txt = decoded_text
+                    if isinstance(txt, str) and txt.strip():
+                        try:
+                            enc = self._shared_tokenizer.encode(txt)
+                            ids = list(getattr(enc, "ids", []) or [])
+                            token_ids = np.asarray([int(i) for i in ids], dtype=np.int32).reshape(-1)
+                        except Exception as e:
+                            raise RuntimeError(f"ASR | shared_tokenizer_v1 encode() failed: {e}") from e
                     else:
                         token_ids = np.array([], dtype=np.int32)
                 except Exception as e:
-                    self.logger.warning(f"ASR | token extraction failed: {e}")
-                    token_ids = np.array([], dtype=np.int32)
-                    # Don't reset lang_id here - it was already detected
+                    # Encode failure is a hard error by contract (Audit v3).
+                    raise
         
         return token_ids, lang_id, decoded_text, quality
 
@@ -563,7 +623,68 @@ class ASRExtractor(BaseExtractor):
         
         return True, None
 
-    def _infer_segment_token_ids(self, audio_1d: np.ndarray) -> tuple[np.ndarray, int, str, Dict[str, Any]]:
+    def _merge_asr_profiler_meta(
+        self,
+        payload: Dict[str, Any],
+        *,
+        stage_timings_ms: Dict[str, Any],
+        resource_profile: Optional[Dict[str, Any]] = None,
+    ) -> None:
+        payload["asr_stage_timings_ms"] = dict(stage_timings_ms)
+        if resource_profile:
+            payload["asr_resource_profile"] = dict(resource_profile)
+
+    def _log_asr_profiling(
+        self,
+        scope: str,
+        timings: Dict[str, Any],
+        resource_profile: Optional[Dict[str, Any]],
+    ) -> None:
+        def _f(k: str) -> float:
+            try:
+                return float(timings.get(k, 0.0) or 0.0)
+            except (TypeError, ValueError):
+                return 0.0
+
+        if scope == "extract_batch_segments":
+            parts = [
+                f"gather={_f('gather_ms'):.1f}ms",
+                f"load_preprocess={_f('load_preprocess_ms'):.1f}ms",
+                f"infer={_f('infer_ms'):.1f}ms",
+            ]
+        else:
+            parts = [
+                f"load_audio={_f('load_audio_ms'):.1f}ms",
+                f"infer={_f('infer_ms'):.1f}ms",
+            ]
+        if timings.get("infer_mel_ms") is not None:
+            parts.append(f"mel={_f('infer_mel_ms'):.1f}ms")
+        if timings.get("infer_decode_ms") is not None:
+            parts.append(f"decode={_f('infer_decode_ms'):.1f}ms")
+        parts.append(f"aggregates={_f('aggregates_ms'):.1f}ms")
+        parts.append(f"total={_f('total_ms'):.1f}ms")
+        msg = f"ASR | profiling [{scope}]: " + ", ".join(parts)
+        if resource_profile:
+            try:
+                rs = resource_profile.get("rss_mb_at_end")
+                if rs is not None:
+                    msg += f" | rss_end_mb={float(rs):.1f}"
+            except (TypeError, ValueError):
+                pass
+            try:
+                ga = resource_profile.get("gpu_allocated_mb_at_end")
+                if ga is not None:
+                    msg += f" | gpu_alloc_end_mb={float(ga):.1f}"
+            except (TypeError, ValueError):
+                pass
+        self.logger.info(msg)
+
+    def _infer_segment_token_ids(
+        self,
+        audio_1d: np.ndarray,
+        phase_acc: Optional[Dict[str, float]] = None,
+        reuse_auto_language: Optional[Tuple[int, str, float]] = None,
+    ) -> tuple[np.ndarray, int, str, Dict[str, Any]]:
         """
         Выполнить inference для одного сегмента через inprocess Whisper model.
         
@@ -574,14 +695,25 @@ class ASRExtractor(BaseExtractor):
             RuntimeError при ошибках inference
         """
         try:
+            if audio_1d.size == 0:
+                return (np.array([], dtype=np.int32), -1, "", {})
+
             # Debug logging: log original audio length
             self.logger.debug(f"ASR | audio_samples={audio_1d.shape[0]}")
             
             # Prepare mel spectrogram
+            t_m0 = time.perf_counter()
             mel = self._prepare_audio_mel(audio_1d)
+            if phase_acc is not None:
+                phase_acc["mel_ms"] = phase_acc.get("mel_ms", 0.0) + (time.perf_counter() - t_m0) * 1000.0
             
             # Run inference
-            token_ids, lang_id, decoded_text, quality = self._infer_token_ids_from_mel(mel)
+            t_d0 = time.perf_counter()
+            token_ids, lang_id, decoded_text, quality = self._infer_token_ids_from_mel(
+                mel, reuse_auto_language=reuse_auto_language
+            )
+            if phase_acc is not None:
+                phase_acc["decode_ms"] = phase_acc.get("decode_ms", 0.0) + (time.perf_counter() - t_d0) * 1000.0
             
             # Validate token IDs
             is_valid, error_msg = self._validate_token_ids(token_ids, lang_id)
@@ -592,21 +724,60 @@ class ASRExtractor(BaseExtractor):
         except Exception as e:
             raise RuntimeError(f"ASR | inference failed: {e}") from e
 
-    def _infer_batch_token_ids(self, audio_batch: List[np.ndarray]) -> List[tuple[np.ndarray, int, str, Dict[str, Any]]]:
+    def _infer_batch_token_ids(
+        self,
+        audio_batch: List[np.ndarray],
+        phase_acc: Optional[Dict[str, float]] = None,
+        batch_file_ids: Optional[List[str]] = None,
+        auto_lang_cache: Optional[Dict[str, Tuple[int, str, float]]] = None,
+    ) -> List[tuple[np.ndarray, int, str, Dict[str, Any]]]:
         """
         Выполнить batch inference для нескольких сегментов через inprocess Whisper model.
         Note: Whisper doesn't natively support batching, so we process sequentially.
         
         Args:
             audio_batch: список аудио массивов (каждый shape [samples])
+            batch_file_ids: file_id на каждый сегмент (для AP_ASR_LANG_DETECT_ONCE в batch)
+            auto_lang_cache: кеш (file_id -> (lang_id, lang_code, lang_conf)) при language=auto + env
         
         Returns:
             список (token_ids, lang_id) для каждого сегмента
         """
         results = []
-        for audio_1d in audio_batch:
+        for i, audio_1d in enumerate(audio_batch):
+            fid: Optional[str] = None
+            if batch_file_ids is not None and i < len(batch_file_ids):
+                fid = str(batch_file_ids[i])
+
+            reuse: Optional[Tuple[int, str, float]] = None
+            if (
+                self.language == "auto"
+                and lang_detect_once_enabled()
+                and auto_lang_cache is not None
+                and fid is not None
+                and fid in auto_lang_cache
+            ):
+                reuse = auto_lang_cache[fid]
+
             try:
-                tok, lang_id, txt, q = self._infer_segment_token_ids(audio_1d)
+                tok, lang_id, txt, q = self._infer_segment_token_ids(
+                    audio_1d, phase_acc=phase_acc, reuse_auto_language=reuse
+                )
+                if (
+                    self.language == "auto"
+                    and lang_detect_once_enabled()
+                    and auto_lang_cache is not None
+                    and fid is not None
+                    and fid not in auto_lang_cache
+                ):
+                    qd = q if isinstance(q, dict) else {}
+                    lc = str(qd.get("lang_code") or "").strip().lower()
+                    if lc:
+                        try:
+                            lcf = float(qd.get("lang_conf"))
+                        except (TypeError, ValueError):
+                            lcf = float("nan")
+                        auto_lang_cache[fid] = (int(lang_id), lc, lcf)
                 results.append((tok, lang_id, txt, q))
             except Exception as e:
                 # On error, add empty result
@@ -641,8 +812,15 @@ class ASRExtractor(BaseExtractor):
                 raise ValueError("segments is empty (no-fallback)")
 
             total_segments = len(segments)
+            run_t0 = time.perf_counter()
+            res_prof: Optional[Dict[str, Any]] = {} if resource_profile_enabled() else None
+            if res_prof is not None:
+                res_prof.update(prefix_snapshot("at_start", snapshot_process_resources()))
+
             token_ids_by_segment: list[np.ndarray] = []
             lang_id_by_segment: list[int] = []
+            lang_code_by_segment: list[str] = []
+            lang_conf_by_segment: list[float] = []
             segment_texts_by_segment: list[str] = []
             segment_quality_by_segment: list[Dict[str, Any]] = []
             seg_st: list[float] = []
@@ -654,38 +832,84 @@ class ASRExtractor(BaseExtractor):
             progress_report_interval = max(1, total_segments // 10) if total_segments >= 10 else 1
             last_reported_pct = -1
 
-            # Load all audio segments first
-            audio_segments: List[np.ndarray] = []
-            for seg_idx, seg in enumerate(segments):
-                ss = int(seg.get("start_sample"))
-                es = int(seg.get("end_sample"))
+            # Метаданные окон + потоковая загрузка PCM (пик RAM ≈ одно окно, а не все сразу)
+            for seg in segments:
                 st = float(seg.get("start_sec"))
                 en = float(seg.get("end_sec"))
                 c = float(seg.get("center_sec"))
+                seg_st.append(float(st))
+                seg_en.append(float(en))
+                seg_center.append(float(c))
+                segment_durations.append(float(en - st))
 
-                wav_t, sr = self.audio_utils.load_audio_segment(input_uri, start_sample=ss, end_sample=es, target_sr=self.sample_rate)
+            phase_acc: Dict[str, float] = {}
+            load_ms_acc = 0.0
+            infer_ms_acc = 0.0
+            cached_auto: Optional[Tuple[int, str, float]] = None
+            after_load_marked = False
+            for seg_idx, seg in enumerate(segments):
+                ss = int(seg.get("start_sample"))
+                es = int(seg.get("end_sample"))
+                tl0 = time.perf_counter()
+                wav_t, sr = self.audio_utils.load_audio_segment(
+                    input_uri, start_sample=ss, end_sample=es, target_sr=self.sample_rate
+                )
                 wav_np = self.audio_utils.to_numpy(wav_t)
                 if wav_np.ndim == 2:
                     wav_np = wav_np[0]
                 wav_np = np.asarray(wav_np, dtype=np.float32).reshape(-1)
                 if int(sr) != int(self.sample_rate):
                     raise RuntimeError(f"ASR | segment SR mismatch: got {sr} expected {self.sample_rate}")
-                
-                audio_segments.append(wav_np)
-                seg_st.append(float(st))
-                seg_en.append(float(en))
-                seg_center.append(float(c))
-                segment_durations.append(float(en - st))
+                load_ms_acc += float((time.perf_counter() - tl0) * 1000.0)
 
-            # Process segments sequentially (Whisper doesn't support native batching)
-            for seg_idx, audio_1d in enumerate(audio_segments):
-                tok, lang_id, txt, q = self._infer_segment_token_ids(audio_1d)
+                if res_prof is not None and not after_load_marked:
+                    res_prof.update(prefix_snapshot("after_load", snapshot_process_resources()))
+                    after_load_marked = True
+
+                reuse: Optional[Tuple[int, str, float]] = None
+                if self.language == "auto" and lang_detect_once_enabled() and cached_auto is not None:
+                    reuse = cached_auto
+
+                ti0 = time.perf_counter()
+                tok, lang_id, txt, q = self._infer_segment_token_ids(
+                    wav_np, phase_acc=phase_acc, reuse_auto_language=reuse
+                )
+                infer_ms_acc += float((time.perf_counter() - ti0) * 1000.0)
+
+                if self.language == "auto" and lang_detect_once_enabled() and cached_auto is None:
+                    qd = q if isinstance(q, dict) else {}
+                    lc = str(qd.get("lang_code") or "").strip().lower()
+                    if lc:
+                        try:
+                            lcf = float(qd.get("lang_conf"))
+                        except (TypeError, ValueError):
+                            lcf = float("nan")
+                        cached_auto = (int(lang_id), lc, lcf)
                 token_ids_by_segment.append(tok.astype(np.int32))
                 lang_id_by_segment.append(int(lang_id))
+                # Preferred language contract: code + confidence (privacy-safe).
+                qd = q if isinstance(q, dict) else {}
+                lc = str(qd.get("lang_code") or "").strip().lower()
+                lang_code_by_segment.append(lc)
+                try:
+                    lconf = float(qd.get("lang_conf"))
+                except Exception:
+                    lconf = float("nan")
+                lang_conf_by_segment.append(lconf)
                 if self.save_segment_text:
                     segment_texts_by_segment.append(str(txt or ""))
-                    # Keep quality metrics privacy-safe (numbers only)
-                    segment_quality_by_segment.append(q if isinstance(q, dict) else {})
+                # Keep quality metrics privacy-safe (numbers only).
+                # Always emit as analytics: TextProcessor can use it without raw text retention.
+                q2 = q if isinstance(q, dict) else {}
+                # Ensure stable key set (missing -> None).
+                segment_quality_by_segment.append(
+                    {
+                        "avg_logprob": (float(q2.get("avg_logprob")) if q2.get("avg_logprob") is not None else None),
+                        "compression_ratio": (float(q2.get("compression_ratio")) if q2.get("compression_ratio") is not None else None),
+                        "no_speech_prob": (float(q2.get("no_speech_prob")) if q2.get("no_speech_prob") is not None else None),
+                        "temperature": (float(q2.get("temperature")) if q2.get("temperature") is not None else None),
+                    }
+                )
                 
                 # Progress reporting
                 if self.progress_callback and seg_idx % progress_report_interval == 0:
@@ -694,7 +918,24 @@ class ASRExtractor(BaseExtractor):
                         self.progress_callback(seg_idx + 1, total_segments, f"Processed {seg_idx + 1}/{total_segments} segments ({pct}%)")
                         last_reported_pct = pct
 
+            t_agg0 = time.perf_counter()
+            infer_ms_wall = infer_ms_acc
+            load_audio_ms = load_ms_acc
+
+            if res_prof is not None:
+                res_prof.update(prefix_snapshot("after_infer", snapshot_process_resources()))
+
             # Calculate aggregates and statistics
+            # Segmenter-owned context (best-effort): audio_duration_sec + ASR sampling params.
+            seg_meta = getattr(self, "asr_segments_meta", None)
+            if not isinstance(seg_meta, dict):
+                seg_meta = {}
+            audio_duration_sec = seg_meta.get("audio_duration_sec")
+            asr_sampling_profile = seg_meta.get("asr_sampling_profile")
+            asr_window_sec = seg_meta.get("asr_window_sec")
+            asr_stride_sec = seg_meta.get("asr_stride_sec")
+            asr_max_windows = seg_meta.get("asr_max_windows")
+
             payload: Dict[str, Any] = {
                 "segments_count": int(len(token_ids_by_segment)),
                 "sample_rate": int(self.sample_rate),
@@ -708,11 +949,18 @@ class ASRExtractor(BaseExtractor):
                 "decode_beam_size": int(self.beam_size),
                 "decode_best_of": int(self.best_of),
                 "decode_enable_fallback": bool(self.enable_fallback_decode),
+                # schema v2: make TextProcessor less dependent on manifest/frames_dir
+                "audio_duration_sec": (float(audio_duration_sec) if isinstance(audio_duration_sec, (int, float)) else float("nan")),
+                "asr_sampling_profile": (str(asr_sampling_profile or "") if asr_sampling_profile is not None else ""),
+                "asr_window_sec": (float(asr_window_sec) if isinstance(asr_window_sec, (int, float)) else float("nan")),
+                "asr_stride_sec": (float(asr_stride_sec) if isinstance(asr_stride_sec, (int, float)) else float("nan")),
+                "asr_max_windows": (int(asr_max_windows) if isinstance(asr_max_windows, (int, float)) else -1),
             }
 
+            # Quality metrics are privacy-safe numeric signals: always include.
+            payload["segment_quality_by_segment"] = segment_quality_by_segment
             if self.save_segment_text:
                 payload["segment_texts_by_segment"] = segment_texts_by_segment
-                payload["segment_quality_by_segment"] = segment_quality_by_segment
             
             # Feature gating: token sequences
             if self.enable_token_sequences:
@@ -723,6 +971,8 @@ class ASRExtractor(BaseExtractor):
             payload["segment_end_sec"] = seg_en
             payload["segment_center_sec"] = seg_center
             payload["lang_id_by_segment"] = lang_id_by_segment
+            payload["lang_code_by_segment"] = lang_code_by_segment
+            payload["lang_conf_by_segment"] = lang_conf_by_segment
             
             # Calculate token counts (if enabled)
             token_counts: List[int] = []
@@ -757,7 +1007,7 @@ class ASRExtractor(BaseExtractor):
             
             # Language distribution
             if self.enable_lang_distribution:
-                lang_counter = Counter(lang_id_by_segment)
+                lang_counter = Counter([c for c in lang_code_by_segment if isinstance(c, str) and c.strip()])
                 payload["lang_distribution"] = {str(k): int(v) for k, v in lang_counter.items()}
             
             # Segments with speech (non-empty token sequences)
@@ -794,6 +1044,22 @@ class ASRExtractor(BaseExtractor):
                 enabled_features.append("token_variance")
             
             payload["_features_enabled"] = enabled_features
+
+            total_ms = float((time.perf_counter() - run_t0) * 1000.0)
+            aggregates_ms = float((time.perf_counter() - t_agg0) * 1000.0)
+            stage_ms: Dict[str, Any] = {
+                "load_audio_ms": load_audio_ms,
+                "infer_ms": infer_ms_wall,
+                "infer_mel_ms": float(phase_acc.get("mel_ms", 0.0)),
+                "infer_decode_ms": float(phase_acc.get("decode_ms", 0.0)),
+                "aggregates_ms": aggregates_ms,
+                "total_ms": total_ms,
+                "segments_count": int(total_segments),
+            }
+            if res_prof is not None:
+                res_prof.update(prefix_snapshot("at_end", snapshot_process_resources()))
+            self._merge_asr_profiler_meta(payload, stage_timings_ms=stage_ms, resource_profile=res_prof)
+            self._log_asr_profiling("run_segments", stage_ms, res_prof)
             
             return self._create_result(True, payload=payload, processing_time=time.time() - start_time)
         except Exception as e:
@@ -840,9 +1106,14 @@ class ASRExtractor(BaseExtractor):
             return []
         
         try:
+            run_t0 = time.perf_counter()
+            res_prof: Optional[Dict[str, Any]] = {} if resource_profile_enabled() else None
+            if res_prof is not None:
+                res_prof.update(prefix_snapshot("at_start", snapshot_process_resources()))
+
+            gather_t0 = time.perf_counter()
             # Этап 1: Сбор всех сегментов с привязкой к файлам
             all_segments_with_metadata: List[Dict[str, Any]] = []
-            file_segment_ranges: Dict[str, Tuple[int, int]] = {}  # file_id -> (start_idx, end_idx)
             
             for file_info in audio_files_with_segments:
                 file_id = file_info.get("file_id", "unknown")
@@ -853,7 +1124,6 @@ class ASRExtractor(BaseExtractor):
                 if not input_uri or not tmp_path or not segments:
                     continue
                 
-                start_idx = len(all_segments_with_metadata)
                 for seg in segments:
                     all_segments_with_metadata.append({
                         "segment": seg,
@@ -861,9 +1131,9 @@ class ASRExtractor(BaseExtractor):
                         "input_uri": input_uri,
                         "tmp_path": tmp_path,
                     })
-                end_idx = len(all_segments_with_metadata)
-                file_segment_ranges[file_id] = (start_idx, end_idx)
             
+            gather_ms = float((time.perf_counter() - gather_t0) * 1000.0)
+
             if not all_segments_with_metadata:
                 # Нет сегментов для обработки
                 return [
@@ -875,8 +1145,9 @@ class ASRExtractor(BaseExtractor):
                     for _ in audio_files_with_segments
                 ]
             
-            # Этап 2: Загрузка и предобработка всех сегментов
-            audio_segments: List[Dict[str, Any]] = []
+            # Этап 2: только валидные метаданные (PCM подгружается порциями — пик RAM ≈ батч)
+            load_t0 = time.perf_counter()
+            ready: List[Dict[str, Any]] = []
             seg_st: List[float] = []
             seg_en: List[float] = []
             seg_center: List[float] = []
@@ -884,40 +1155,31 @@ class ASRExtractor(BaseExtractor):
             
             for seg_meta in all_segments_with_metadata:
                 seg = seg_meta["segment"]
-                input_uri = seg_meta["input_uri"]
-                
                 try:
-                    ss = int(seg.get("start_sample"))
-                    es = int(seg.get("end_sample"))
+                    _ss = int(seg.get("start_sample"))
+                    _es = int(seg.get("end_sample"))
                     st = float(seg.get("start_sec", 0.0))
                     en = float(seg.get("end_sec", 0.0))
                     c = float(seg.get("center_sec", 0.0))
-                    
-                    wav_t, sr = self.audio_utils.load_audio_segment(
-                        input_uri, start_sample=ss, end_sample=es, target_sr=self.sample_rate
-                    )
-                    wav_np = self.audio_utils.to_numpy(wav_t)
-                    if wav_np.ndim == 2:
-                        wav_np = wav_np[0]
-                    wav_np = np.asarray(wav_np, dtype=np.float32).reshape(-1)
-                    
-                    if int(sr) != int(self.sample_rate):
-                        raise RuntimeError(f"ASR | segment SR mismatch: got {sr} expected {self.sample_rate}")
-                    
-                    audio_segments.append({
-                        "audio": wav_np,
-                        "file_id": seg_meta["file_id"],
-                    })
-                    seg_st.append(float(st))
-                    seg_en.append(float(en))
-                    seg_center.append(float(c))
-                    segment_durations.append(float(en - st))
                 except Exception as e:
-                    self.logger.error(f"Error preprocessing segment for file_id={seg_meta['file_id']}: {e}")
-                    # Продолжаем обработку остальных сегментов
+                    self.logger.error(f"Error parsing segment meta for file_id={seg_meta['file_id']}: {e}")
                     continue
-            
-            if not audio_segments:
+                
+                ready.append(
+                    {
+                        "file_id": seg_meta["file_id"],
+                        "input_uri": seg_meta["input_uri"],
+                        "segment": seg,
+                    }
+                )
+                seg_st.append(float(st))
+                seg_en.append(float(en))
+                seg_center.append(float(c))
+                segment_durations.append(float(en - st))
+
+            load_preprocess_ms = float((time.perf_counter() - load_t0) * 1000.0)
+
+            if not ready:
                 return [
                     self._create_result(
                         success=False,
@@ -926,6 +1188,10 @@ class ASRExtractor(BaseExtractor):
                     )
                     for _ in audio_files_with_segments
                 ]
+
+            indices_by_file: Dict[str, List[int]] = defaultdict(list)
+            for idx, item in enumerate(ready):
+                indices_by_file[str(item["file_id"])].append(idx)
             
             # Этап 3: Определение размера батча
             # Используем max_segments_per_batch если задан, иначе 1 (последовательная обработка)
@@ -934,50 +1200,115 @@ class ASRExtractor(BaseExtractor):
             # Этап 4: Обработка батчей через inprocess модель
             all_token_ids: List[np.ndarray] = []
             all_lang_ids: List[int] = []
+            all_lang_codes: List[str] = []
+            all_lang_confs: List[float] = []
+            all_quality: List[Dict[str, Any]] = []
             
-            total_segments = len(audio_segments)
+            phase_acc: Dict[str, float] = {}
+            infer_t0 = time.perf_counter()
+            auto_lang_cache: Optional[Dict[str, Tuple[int, str, float]]] = None
+            if self.language == "auto" and lang_detect_once_enabled():
+                auto_lang_cache = {}
+
+            total_segments = len(ready)
+            lazy_load_ms = 0.0
             for batch_start in range(0, total_segments, effective_batch_size):
                 batch_end = min(batch_start + effective_batch_size, total_segments)
-                batch_audio = [item["audio"] for item in audio_segments[batch_start:batch_end]]
+                batch_audio: List[np.ndarray] = []
+                batch_file_ids: List[str] = []
+                for j in range(batch_start, batch_end):
+                    row = ready[j]
+                    seg = row["segment"]
+                    tlz = time.perf_counter()
+                    try:
+                        ss = int(seg.get("start_sample"))
+                        es = int(seg.get("end_sample"))
+                        wav_t, sr = self.audio_utils.load_audio_segment(
+                            row["input_uri"], start_sample=ss, end_sample=es, target_sr=self.sample_rate
+                        )
+                        wav_np = self.audio_utils.to_numpy(wav_t)
+                        if wav_np.ndim == 2:
+                            wav_np = wav_np[0]
+                        wav_np = np.asarray(wav_np, dtype=np.float32).reshape(-1)
+                        if int(sr) != int(self.sample_rate):
+                            raise RuntimeError(f"ASR | segment SR mismatch: got {sr} expected {self.sample_rate}")
+                    except Exception as e:
+                        self.logger.error(f"Error loading segment for file_id={row['file_id']}: {e}")
+                        wav_np = np.array([], dtype=np.float32)
+                    lazy_load_ms += float((time.perf_counter() - tlz) * 1000.0)
+                    batch_audio.append(wav_np)
+                    batch_file_ids.append(str(row["file_id"]))
                 
                 try:
-                    batch_results = self._infer_batch_token_ids(batch_audio)
-                    for tok, lang_id in batch_results:
+                    batch_results = self._infer_batch_token_ids(
+                        batch_audio,
+                        phase_acc=phase_acc,
+                        batch_file_ids=batch_file_ids,
+                        auto_lang_cache=auto_lang_cache,
+                    )
+                    for tok, lang_id, _txt, q in batch_results:
                         all_token_ids.append(tok.astype(np.int32))
                         all_lang_ids.append(int(lang_id))
+                        qd = q if isinstance(q, dict) else {}
+                        lc = str(qd.get("lang_code") or "").strip().lower()
+                        all_lang_codes.append(lc)
+                        try:
+                            lconf = float(qd.get("lang_conf"))
+                        except Exception:
+                            lconf = float("nan")
+                        all_lang_confs.append(lconf)
+                        # Keep numeric-only quality dict (stable keys)
+                        all_quality.append(
+                            {
+                                "avg_logprob": (float(qd.get("avg_logprob")) if qd.get("avg_logprob") is not None else None),
+                                "compression_ratio": (float(qd.get("compression_ratio")) if qd.get("compression_ratio") is not None else None),
+                                "no_speech_prob": (float(qd.get("no_speech_prob")) if qd.get("no_speech_prob") is not None else None),
+                                "temperature": (float(qd.get("temperature")) if qd.get("temperature") is not None else None),
+                            }
+                        )
                 except Exception as e:
                     self.logger.error(f"Error processing batch {batch_start // effective_batch_size}: {e}")
                     # Добавляем пустые результаты для неудачных сегментов
                     for _ in range(batch_end - batch_start):
                         all_token_ids.append(np.array([], dtype=np.int32))
                         all_lang_ids.append(-1)
+                        all_lang_codes.append("")
+                        all_lang_confs.append(float("nan"))
+                        all_quality.append({"avg_logprob": None, "compression_ratio": None, "no_speech_prob": None, "temperature": None})
             
+            infer_ms = float((time.perf_counter() - infer_t0) * 1000.0)
+            if res_prof is not None:
+                res_prof.update(prefix_snapshot("after_infer", snapshot_process_resources()))
+
             # Этап 5: Распределение результатов обратно по файлам
+            redist_t0 = time.perf_counter()
             results: List[ExtractorResult] = []
             
             for file_info in audio_files_with_segments:
                 file_id = file_info.get("file_id", "unknown")
-                file_start, file_end = file_segment_ranges.get(file_id, (0, 0))
                 
                 # Извлекаем результаты для этого файла
                 file_token_ids: List[np.ndarray] = []
                 file_lang_ids: List[int] = []
+                file_lang_codes: List[str] = []
+                file_lang_confs: List[float] = []
+                file_quality: List[Dict[str, Any]] = []
                 file_seg_st: List[float] = []
                 file_seg_en: List[float] = []
                 file_seg_center: List[float] = []
                 file_seg_durations: List[float] = []
                 
-                for idx in range(len(audio_segments)):
-                    if audio_segments[idx]["file_id"] == file_id:
-                        file_token_ids.append(all_token_ids[idx])
-                        file_lang_ids.append(all_lang_ids[idx])
-                        # Находим соответствующие временные метки
-                        seg_idx_in_all = idx
-                        if seg_idx_in_all < len(seg_st):
-                            file_seg_st.append(seg_st[seg_idx_in_all])
-                            file_seg_en.append(seg_en[seg_idx_in_all])
-                            file_seg_center.append(seg_center[seg_idx_in_all])
-                            file_seg_durations.append(segment_durations[seg_idx_in_all])
+                for idx in indices_by_file.get(str(file_id), []):
+                    file_token_ids.append(all_token_ids[idx])
+                    file_lang_ids.append(all_lang_ids[idx])
+                    file_lang_codes.append(all_lang_codes[idx] if idx < len(all_lang_codes) else "")
+                    file_lang_confs.append(all_lang_confs[idx] if idx < len(all_lang_confs) else float("nan"))
+                    file_quality.append(all_quality[idx] if idx < len(all_quality) else {"avg_logprob": None, "compression_ratio": None, "no_speech_prob": None, "temperature": None})
+                    if idx < len(seg_st):
+                        file_seg_st.append(seg_st[idx])
+                        file_seg_en.append(seg_en[idx])
+                        file_seg_center.append(seg_center[idx])
+                        file_seg_durations.append(segment_durations[idx])
                 
                 if not file_token_ids:
                     # Нет результатов для этого файла
@@ -1008,6 +1339,9 @@ class ASRExtractor(BaseExtractor):
                 payload["segment_end_sec"] = file_seg_en
                 payload["segment_center_sec"] = file_seg_center
                 payload["lang_id_by_segment"] = file_lang_ids
+                payload["lang_code_by_segment"] = file_lang_codes
+                payload["lang_conf_by_segment"] = file_lang_confs
+                payload["segment_quality_by_segment"] = file_quality
                 
                 # Calculate token counts (if enabled)
                 token_counts: List[int] = []
@@ -1039,7 +1373,7 @@ class ASRExtractor(BaseExtractor):
                 # Language distribution
                 if self.enable_lang_distribution:
                     from collections import Counter
-                    lang_counter = Counter(file_lang_ids)
+                    lang_counter = Counter([c for c in file_lang_codes if isinstance(c, str) and c.strip()])
                     payload["lang_distribution"] = {str(k): int(v) for k, v in lang_counter.items()}
                 
                 # Segments with speech
@@ -1083,6 +1417,28 @@ class ASRExtractor(BaseExtractor):
                     processing_time=time.time() - start_time,
                 ))
             
+            redistribute_ms = float((time.perf_counter() - redist_t0) * 1000.0)
+            total_ms = float((time.perf_counter() - run_t0) * 1000.0)
+            stage_ms: Dict[str, Any] = {
+                "gather_ms": gather_ms,
+                "load_preprocess_ms": float(load_preprocess_ms + lazy_load_ms),
+                "load_meta_only_ms": float(load_preprocess_ms),
+                "load_audio_lazy_ms": float(lazy_load_ms),
+                "infer_ms": infer_ms,
+                "infer_mel_ms": float(phase_acc.get("mel_ms", 0.0)),
+                "infer_decode_ms": float(phase_acc.get("decode_ms", 0.0)),
+                "aggregates_ms": redistribute_ms,
+                "total_ms": total_ms,
+                "n_input_files": int(len(audio_files_with_segments)),
+                "n_segments_total": int(len(ready)),
+            }
+            if res_prof is not None:
+                res_prof.update(prefix_snapshot("at_end", snapshot_process_resources()))
+            for r in results:
+                if r.success and isinstance(r.payload, dict):
+                    self._merge_asr_profiler_meta(r.payload, stage_timings_ms=stage_ms, resource_profile=res_prof)
+            self._log_asr_profiling("extract_batch_segments", stage_ms, res_prof)
+
             return results
             
         except Exception as e:

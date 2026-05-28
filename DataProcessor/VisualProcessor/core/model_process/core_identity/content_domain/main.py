@@ -15,6 +15,7 @@ from __future__ import annotations
 
 import argparse
 import json
+import hashlib
 import os
 import sys
 import time
@@ -27,18 +28,56 @@ import numpy as np
 _vp_root = os.path.dirname(
     os.path.dirname(os.path.dirname(os.path.dirname(os.path.dirname(__file__))))
 )
+# Must be first: local subdirectory "utils/" would shadow VisualProcessor/utils (e.g. utils.logger).
 if _vp_root not in sys.path:
-    sys.path.append(_vp_root)
+    sys.path.insert(0, _vp_root)
+elif sys.path[0] != _vp_root:
+    try:
+        sys.path.remove(_vp_root)
+    except ValueError:
+        pass
+    sys.path.insert(0, _vp_root)
 
 from utils.logger import get_logger  # type: ignore  # noqa: E402
 from utils.utilites import load_metadata  # type: ignore  # noqa: E402
 from utils.meta_builder import apply_models_meta  # type: ignore  # noqa: E402
 
 NAME = "content_domain"
-VERSION = "0.1"
-SCHEMA_VERSION = "content_domain_npz_v1"
+VERSION = "0.2"
+SCHEMA_VERSION = "content_domain_npz_v2"
 ARTIFACT_FILENAME = "content_domain.npz"
 LOGGER = get_logger(NAME)
+
+
+def _sha256_hex(s: str) -> str:
+    return hashlib.sha256(s.encode("utf-8")).hexdigest()
+
+
+def _atomic_save_npz(out_path: str, **kwargs: Any) -> None:
+    out_dir = os.path.dirname(os.path.abspath(out_path)) or "."
+    os.makedirs(out_dir, exist_ok=True)
+    tmp_path = out_path + ".tmp.npz"
+    np.savez_compressed(tmp_path, **kwargs)
+    os.replace(tmp_path, out_path)
+
+
+def _is_triton_or_embedding_failure(exc: BaseException) -> bool:
+    msg = str(exc).lower()
+    ec = str(getattr(exc, "error_code", "") or "").lower()
+    cls = type(exc).__name__.lower()
+    return (
+        "triton" in cls
+        or "tritonerror" in cls
+        or "triton" in msg
+        or "triton_unavailable" in ec
+        or "modelmanager" in cls
+        or "connection" in msg
+        or "refused" in msg
+        or "timed out" in msg
+        or "timeout" in msg
+        or "errno 111" in msg
+        or "http" in msg and ("502" in msg or "503" in msg or "504" in msg)
+    )
 
 
 def _load_npz(path: str) -> Dict[str, Any]:
@@ -336,6 +375,19 @@ def _load_domain_db(*, db_dir: str, threshold_global: float, thresholds_json: Op
             except Exception:
                 pass
     db_meta["threshold_global"] = float(threshold_global)
+
+    # Ensure db_digest is always present (reproducibility)
+    if not str(db_meta.get("db_digest") or "").strip():
+        canon = {
+            "db_name": db_meta.get("db_name"),
+            "db_version": db_meta.get("db_version"),
+            "domains": [{"id": int(i), "name": str(n), "prompts": list(p)} for i, n, p in zip(label_ids, label_names, prompts_per_label)],
+            "threshold_global": float(threshold_global),
+            "threshold_per_label": {str(int(k)): float(v) for k, v in sorted(threshold_per_label.items(), key=lambda kv: int(kv[0]))},
+        }
+        db_meta["db_digest"] = _sha256_hex(
+            json.dumps(canon, ensure_ascii=False, sort_keys=True, separators=(",", ":"))
+        )
     return label_ids, label_names, prompts_per_label, db_meta, threshold_per_label
 
 
@@ -423,9 +475,37 @@ def main() -> int:
     ap.add_argument("--clip-text-model-spec", default="clip_text_triton")
     ap.add_argument("--triton-http-url", default=None, help="Triton HTTP URL (can also be set via TRITON_HTTP_URL env var)")
     ap.add_argument("--topk", type=int, default=5, help="Must be 5 (contract).")
-    ap.add_argument("--threshold-global", type=float, default=0.23, help="Used only for is_confident (top-5 output is never gated).")
+    ap.add_argument(
+        "--threshold-global",
+        type=float,
+        default=0.23,
+        help=(
+            "DEPRECATED name (kept for backward compatibility). "
+            "Used ONLY as fallback for --confidence-threshold-top1."
+        ),
+    )
+    ap.add_argument(
+        "--confidence-threshold-top1",
+        type=float,
+        default=None,
+        help="Confidence threshold for *_is_confident_top1 flags (does NOT gate top-K).",
+    )
     ap.add_argument("--thresholds-json", default=None)
     args = ap.parse_args()
+
+    # Contract: fixed K=5
+    if int(args.topk) != 5:
+        raise RuntimeError(f"{NAME} | topk must be 5 (contract), got {args.topk}")
+
+    confidence_threshold_top1 = (
+        float(args.confidence_threshold_top1)
+        if args.confidence_threshold_top1 is not None
+        else float(args.threshold_global)
+    )
+    if not (0.0 <= confidence_threshold_top1 <= 1.0):
+        raise RuntimeError(
+            f"{NAME} | confidence_threshold_top1 out of range [0,1]: {confidence_threshold_top1}"
+        )
 
     # Initialize timing dictionary
     timings: Dict[str, float] = {}
@@ -522,94 +602,35 @@ def main() -> int:
     
     t_process_start = time.perf_counter()
 
-    # Load domain db + compute text embeddings (A,512)
-    # If db not found, return valid empty
-    try:
-        label_ids, label_names, prompts_per_label, db_meta, threshold_per_label = _load_domain_db(
-            db_dir=domain_db_dir,
-            threshold_global=float(args.threshold_global),
-            thresholds_json=str(args.thresholds_json) if args.thresholds_json else None,
-        )
-    except RuntimeError as e:
-        if "not found" in str(e) or "missing" in str(e):
-            # Valid empty: database not available
-            LOGGER.warning(f"{NAME} | Domain database not found, writing empty artifact: {e}")
-            required_run_keys = ["platform_id", "video_id", "run_id", "sampling_policy_version", "config_hash"]
-            missing = [k for k in required_run_keys if not meta.get(k)]
-            if missing:
-                raise RuntimeError(f"{NAME} | frames metadata missing required run identity keys: {missing}")
-            
-            meta_out: Dict[str, Any] = {
-                "producer": NAME,
-                "producer_version": VERSION,
-                "schema_version": SCHEMA_VERSION,
-                "created_at": datetime.utcnow().isoformat() + "Z",
-                "status": "empty",
-                "empty_reason": "dependency_missing",
-            }
-            for k in required_run_keys:
-                meta_out[k] = meta.get(k)
-            meta_out["dataprocessor_version"] = str(meta.get("dataprocessor_version") or "unknown")
-            meta_out = apply_models_meta(meta_out, models_used=[])
-            
-            out_dir = os.path.join(str(args.rs_path), NAME)
-            os.makedirs(out_dir, exist_ok=True)
-            out_path = os.path.join(out_dir, ARTIFACT_FILENAME)
-            
-            # Baseline contract: stage_timings_ms for empty case
-            timings["process_frames"] = time.perf_counter() - t_process_start
-            timings["saving"] = 0.0
-            timings["total"] = time.perf_counter() - t0
-            stage_timings_ms: Dict[str, float] = {}
-            for key, value in timings.items():
-                stage_timings_ms[key] = float(value) * 1000.0
-            meta_out["stage_timings_ms"] = stage_timings_ms
-            
-            # Baseline contract: emit save and done stages
-            _emit_stage(
-                rs_path=args.rs_path,
-                platform_id=platform_id,
-                video_id=video_id,
-                run_id=run_id,
-                stage="save",
-            )
-            
-            K = int(args.topk)
-            
-            np.savez_compressed(
-                out_path,
-                frame_indices=fi_np,
-                times_s=times_s,
-                label_ids=np.array([], dtype=np.int32),
-                label_names=np.array([], dtype="U"),
-                frame_topk_ids=np.full((len(frame_indices), K), -1, dtype=np.int32),
-                frame_topk_scores=np.full((len(frame_indices), K), 0.0, dtype=np.float32),
-                frame_is_confident_top1=np.zeros((len(frame_indices),), dtype=np.bool_),
-                meta=np.asarray(meta_out, dtype=object),
-            )
-            
-            _emit_stage(
-                rs_path=args.rs_path,
-                platform_id=platform_id,
-                video_id=video_id,
-                run_id=run_id,
-                stage="done",
-            )
-            
-            LOGGER.info(f"{NAME} | Wrote empty artifact: {out_path}")
-            return 0
-        raise
-    K = int(args.topk)
-    if K != 5:
-        raise RuntimeError(f"{NAME} | topk must be 5 (contract), got {K}")
+    # Load domain db + compute text embeddings (A,512) — fail-fast if missing/invalid
+    label_ids, label_names, prompts_per_label, db_meta, threshold_per_label = _load_domain_db(
+        db_dir=domain_db_dir,
+        threshold_global=float(confidence_threshold_top1),
+        thresholds_json=str(args.thresholds_json) if args.thresholds_json else None,
+    )
+    K = 5
 
     # Get triton_http_url from args or environment
     triton_http_url = args.triton_http_url
     if not triton_http_url:
         triton_http_url = os.environ.get("TRITON_HTTP_URL")
     
-    txt_mm = _load_triton_spec_via_model_manager(str(args.clip_text_model_spec), triton_http_url=triton_http_url)
-    label_emb = _compute_text_label_embeddings_triton(prompts_per_label=prompts_per_label, txt_mm=txt_mm)  # (A,512)
+    try:
+        txt_mm = _load_triton_spec_via_model_manager(
+            str(args.clip_text_model_spec), triton_http_url=triton_http_url
+        )
+        label_emb = _compute_text_label_embeddings_triton(
+            prompts_per_label=prompts_per_label, txt_mm=txt_mm
+        )  # (A,512)
+    except Exception as e:
+        if _is_triton_or_embedding_failure(e):
+            url_hint = triton_http_url or os.environ.get("TRITON_HTTP_URL") or "(TRITON_HTTP_URL not set)"
+            raise RuntimeError(
+                f"{NAME} | CLIP text embeddings require a reachable Triton instance (spec="
+                f"{args.clip_text_model_spec!r}, url={url_hint!r}). "
+                f"Same class of failure as Embedding Service / inference offline. Detail: {e}"
+            ) from e
+        raise
     if label_emb.ndim != 2 or label_emb.shape[0] != len(label_ids) or label_emb.shape[1] != frame_emb.shape[1]:
         raise RuntimeError(f"{NAME} | label embeddings shape mismatch: {label_emb.shape} vs D={frame_emb.shape[1]}")
 
@@ -628,13 +649,19 @@ def main() -> int:
     # cosine sims: (N,A)
     sims = np.matmul(frame_emb, label_emb.T).astype(np.float32)
     A = int(label_emb.shape[0])
-    order = np.argsort(-sims, axis=1)[:, :K]  # (N,K) indices into A
-    frame_topk_scores = np.take_along_axis(sims, order, axis=1).astype(np.float32)
+    if A <= 0:
+        raise RuntimeError(f"{NAME} | domain db has 0 labels (fail-fast)")
+
     label_ids_np = np.asarray(label_ids, dtype=np.int32)
-    frame_topk_ids = label_ids_np[order].astype(np.int32)
+    k_eff = int(min(K, A))
+    order = np.argsort(-sims, axis=1)[:, :k_eff]  # (N,k_eff) indices into A
+    frame_topk_ids = np.full((sims.shape[0], K), -1, dtype=np.int32)
+    frame_topk_scores = np.full((sims.shape[0], K), np.nan, dtype=np.float32)
+    frame_topk_scores[:, :k_eff] = np.take_along_axis(sims, order, axis=1).astype(np.float32)
+    frame_topk_ids[:, :k_eff] = label_ids_np[order].astype(np.int32)
 
     # thresholds array aligned to semantic_label_names
-    threshold_global = float(db_meta.get("threshold_global") or float(args.threshold_global))
+    threshold_global = float(db_meta.get("threshold_global") or float(confidence_threshold_top1))
     threshold_per_label_arr = np.full((A,), np.nan, dtype=np.float32)
     for i, lid in enumerate(label_ids):
         if int(lid) in threshold_per_label:
@@ -645,18 +672,23 @@ def main() -> int:
         lid = int(frame_topk_ids[i, 0])
         sc = float(frame_topk_scores[i, 0])
         thr = float(threshold_per_label.get(lid, threshold_global))
-        frame_is_confident_top1[i] = bool(np.isfinite(sc) and sc >= thr)
+        frame_is_confident_top1[i] = bool((lid >= 0) and np.isfinite(sc) and sc >= thr)
 
     # video aggregate (track=1): max over time
     track_ids = np.asarray([0], dtype=np.int32)
     track_present_mask = np.asarray([True], dtype=np.bool_)
     max_scores = np.max(sims, axis=0)  # (A,)
-    top_vid = np.argsort(-max_scores)[:K]
-    track_topk_scores = np.asarray(max_scores[top_vid], dtype=np.float32).reshape(1, K)
-    track_topk_ids = np.asarray(label_ids_np[top_vid], dtype=np.int32).reshape(1, K)
+    top_vid = np.argsort(-max_scores)[:k_eff]
+    track_topk_scores = np.full((1, K), np.nan, dtype=np.float32)
+    track_topk_ids = np.full((1, K), -1, dtype=np.int32)
+    track_topk_scores[0, :k_eff] = np.asarray(max_scores[top_vid], dtype=np.float32).reshape(1, k_eff)
+    track_topk_ids[0, :k_eff] = np.asarray(label_ids_np[top_vid], dtype=np.int32).reshape(1, k_eff)
     top1_lid = int(track_topk_ids[0, 0])
     top1_sc = float(track_topk_scores[0, 0])
-    track_is_confident_top1 = np.asarray([bool(np.isfinite(top1_sc) and top1_sc >= float(threshold_per_label.get(top1_lid, threshold_global)))], dtype=np.bool_)
+    track_is_confident_top1 = np.asarray(
+        [bool((top1_lid >= 0) and np.isfinite(top1_sc) and top1_sc >= float(threshold_per_label.get(top1_lid, threshold_global)))],
+        dtype=np.bool_,
+    )
 
     semantic_label_names = np.asarray([f"{int(i)}:{str(n)}" for i, n in zip(label_ids, label_names)], dtype="U")
 
@@ -725,36 +757,56 @@ def main() -> int:
         stage="save",
     )
     
-    t_save_start = time.perf_counter()
-
     out_dir = os.path.join(str(args.rs_path), NAME)
     os.makedirs(out_dir, exist_ok=True)
     out_path = os.path.join(out_dir, ARTIFACT_FILENAME)
-    np.savez_compressed(
-        out_path,
-        frame_indices=np.asarray(frame_indices, dtype=np.int32),
-        times_s=times_s,
-        semantic_label_names=semantic_label_names,
-        threshold_per_label_arr=threshold_per_label_arr.astype(np.float32),
-        track_ids=track_ids,
-        track_present_mask=track_present_mask,
-        track_topk_ids=track_topk_ids,
-        track_topk_scores=track_topk_scores,
-        track_is_confident_top1=track_is_confident_top1,
-        frame_topk_ids=frame_topk_ids,
-        frame_topk_scores=frame_topk_scores,
-        frame_is_confident_top1=frame_is_confident_top1,
-        meta=np.asarray(meta_out, dtype=object),
-    )
-    
+
+    # Enrich meta with config highlights
+    meta_out["top_k"] = int(K)
+    meta_out["confidence_threshold_top1"] = float(confidence_threshold_top1)
+    meta_out["clip_text_model_spec"] = str(args.clip_text_model_spec)
+    meta_out["domain_db_dir"] = str(domain_db_dir)
+
+    def _build_npz_payload(meta_dict: Dict[str, Any]) -> Dict[str, Any]:
+        return {
+            "frame_indices": np.asarray(frame_indices, dtype=np.int32),
+            "times_s": times_s,
+            "semantic_label_names": semantic_label_names,
+            "threshold_per_label_arr": threshold_per_label_arr.astype(np.float32),
+            "track_ids": track_ids,
+            "track_present_mask": track_present_mask,
+            "track_topk_ids": track_topk_ids,
+            "track_topk_scores": track_topk_scores,
+            "track_is_confident_top1": track_is_confident_top1,
+            "frame_topk_ids": frame_topk_ids,
+            "frame_topk_scores": frame_topk_scores,
+            "frame_is_confident_top1": frame_is_confident_top1,
+            "meta": np.asarray(meta_dict, dtype=object),
+            "meta_json": np.asarray(
+                json.dumps(meta_dict, ensure_ascii=False, sort_keys=True),
+                dtype="U",
+            ),
+        }
+
+    # Two-pass write: measure saving time and persist final meta.stage_timings_ms
+    t_save_start = time.perf_counter()
+    _atomic_save_npz(out_path, **_build_npz_payload(meta_out))
     timings["saving"] = time.perf_counter() - t_save_start
     timings["total"] = time.perf_counter() - t0
-    
-    # Update stage_timings_ms with final timings
-    stage_timings_ms = {}
-    for key, value in timings.items():
-        stage_timings_ms[key] = float(value) * 1000.0
-    meta_out["stage_timings_ms"] = stage_timings_ms
+    meta_out["stage_timings_ms"] = {k: float(v) * 1000.0 for k, v in timings.items()}
+    _atomic_save_npz(out_path, **_build_npz_payload(meta_out))
+
+    # Validate artifact (meta + schema if known)
+    from utils.artifact_validator import validate_npz  # type: ignore
+
+    ok, issues, _ = validate_npz(out_path)
+    if not ok:
+        try:
+            os.remove(out_path)
+        except Exception:
+            pass
+        msgs = "; ".join([f"{i.level}:{i.message}" for i in issues if getattr(i, "level", "") == "error"])
+        raise RuntimeError(f"{NAME} | saved artifact failed validation: {msgs}")
 
     # Baseline contract: emit done stage
     _emit_stage(

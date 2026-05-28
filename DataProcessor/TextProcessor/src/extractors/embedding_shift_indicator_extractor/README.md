@@ -1,23 +1,26 @@
 ## `embedding_shift_indicator_extractor` (Semantic Shift Detection)
 
+**Версия**: 1.3.0 · **Контракт Audit v3**: [SCHEMA.md](./SCHEMA.md) · machine: [`schemas/embedding_shift_indicator_extractor_output_v1.json`](../../schemas/embedding_shift_indicator_extractor_output_v1.json)  
+**Диапазоны и валидатор среза** (`text_features.npz`): [`docs/FEATURE_DESCRIPTION.md`](docs/FEATURE_DESCRIPTION.md) · [`utils/validate_embedding_shift_indicator_extractor_text_npz.py`](utils/validate_embedding_shift_indicator_extractor_text_npz.py)  
+**Audit v4:** [`../../../../docs/audit_v4/components/text_processor/embedding_shift_indicator_extractor_audit_v4.md`](../../../../docs/audit_v4/components/text_processor/embedding_shift_indicator_extractor_audit_v4.md) · L2 stats: `scripts/audit_v4_npz_stats.py` → `storage/audit_v4/embedding_shift_indicator_extractor_l2/`
+
 ### Назначение
 
 Обнаруживает **семантический сдвиг** в транскрипте видео путём сравнения эмбеддингов начала и конца транскрипта. Вычисляет косинусное сходство между усреднёнными эмбеддингами начальных и конечных чанков и устанавливает флаг сдвига, если сходство ниже порога.
 
-**Версия**: 1.2.0  
 **Категория**: semantic analysis  
 **GPU**: не требуется
 
 ### Входы
 
 Экстрактор читает матрицу эмбеддингов чанков транскрипта **детерминированно** через `doc.tp_artifacts` (без `glob+mtime`):
-- **Canonical**: `doc.tp_artifacts["transcripts"][source]["chunk_embeddings_relpath"]`
+- **Canonical**: `doc.tp_artifacts["transcripts"][source]["chunk_embeddings_relpath"]` (достаточно словаря **`transcripts`**; **`transcript_chunks`** не обязателен)
 - **Legacy fallback**: `doc.tp_artifacts["transcript_chunks"][source]["embeddings_relpath"]` / `["embeddings_path"]` (ставится `tp_embshift_used_legacy_key_flag=1`)
 - приоритет источников задаётся параметром `transcript_source_priority` (default: `whisper → youtube_auto`)
 
 ### Выходы
 
-Экстрактор возвращает только `result.features_flat` (privacy-safe, NPZ-friendly), со **стабильной схемой `tp_embshift_*`** (ключи всегда присутствуют; при empty → NaN + flags):
+Экстрактор возвращает только `result.features_flat` (privacy-safe, NPZ-friendly), **27** фиксированных ключей **`tp_embshift_*`** (полный список — [SCHEMA.md](./SCHEMA.md)):
 - `tp_embshift_present`
 - `tp_embshift_disabled_by_policy`, `tp_embshift_enabled`
 - `tp_embshift_require_transcript_chunks_enabled`, `tp_embshift_require_min_chunks`
@@ -27,19 +30,20 @@
 - `tp_embshift_cosine_threshold`
 - `tp_embshift_margin` (= cosine_begin_end - cosine_threshold, NaN если cosine invalid)
 - (gated) `tp_embshift_cosine_first_last`, `tp_embshift_mean_cosine_last_to_start_window`
+- feature flags: `tp_embshift_emit_extra_metrics_enabled`, `tp_embshift_compute_shift_flag_enabled`, `tp_embshift_compute_extra_cosines_enabled`
 - источники: `tp_embshift_source_used_whisper`, `tp_embshift_source_used_youtube_auto`, `tp_embshift_used_legacy_key_flag`
-- safety flags: `tp_embshift_unsafe_relpath_flag`, `tp_embshift_dim_mismatch_flag`, `tp_embshift_zero_norm_flag`, `tp_embshift_nan_inf_flag`
-- timings: `tp_embshift_load_ms`, `tp_embshift_compute_ms`
+- safety flags: `tp_embshift_unsafe_relpath_flag`, `tp_embshift_chunk_embed_missing_flag`, `tp_embshift_dim_mismatch_flag`, `tp_embshift_zero_norm_flag`, `tp_embshift_nan_inf_flag`
+- timings: `tp_embshift_load_ms`, `tp_embshift_compute_ms` — **NaN**, если **`emit_extra_metrics=False`**
 
 #### Метаданные
 
 - `device`: устройство обработки (`"cpu"`)
 - `version`: версия экстрактора
+- `model_name` / `model_version` / `weights_digest`: **`null`**
 
 #### Системные метрики
 
-- `system.pre_init`: снимок системы до инициализации
-- `system.post_init`: снимок системы после инициализации
+- `system.pre_init` / `post_init`: снимки после **`__init__`** экстрактора
 - `system.post_process`: снимок системы после обработки
 - `system.peaks.ram_peak_mb`: пиковое использование RAM (MB)
 - `system.peaks.gpu_peak_mb`: пиковое использование GPU памяти (MB, всегда 0)

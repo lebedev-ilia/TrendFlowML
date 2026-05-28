@@ -1,0 +1,80 @@
+{
+  "schema_system_version": "vp_schema_v1",
+  "schema_version": "car_semantics_npz_v2",
+  "producer": "car_semantics",
+  "artifact_kind": "npz",
+  "allow_extra_keys": false,
+  "meta": {
+    "required_keys": [
+      "producer",
+      "producer_version",
+      "schema_version",
+      "created_at",
+      "platform_id",
+      "video_id",
+      "run_id",
+      "config_hash",
+      "sampling_policy_version",
+      "dataprocessor_version",
+      "status",
+      "empty_reason",
+      "models_used",
+      "model_signature",
+      "stage_timings_ms",
+      "db_name",
+      "db_version",
+      "db_digest"
+    ],
+    "optional_keys": [
+      "db_path",
+      "embedding_service_url",
+      "category",
+      "top_k",
+      "confidence_threshold_top1",
+      "proposal_classes",
+      "proposal_class_ids",
+      "max_tracks",
+      "max_dets_per_frame",
+      "labels_count",
+      "tracks_total",
+      "tracks_present",
+      "dets_present"
+    ]
+  },
+  "fields": {
+    "frame_indices": { "required": true, "tier": "model_facing", "dtype": "int32", "shape": ["N"] },
+    "times_s": { "required": true, "tier": "model_facing", "dtype": "float32", "shape": ["N"] },
+
+    "semantic_label_names": { "required": true, "tier": "model_facing", "dtype": "str", "shape": ["A"], "description": "canonical label space: 'int:name' (int is stable within db_digest)" },
+    "semantic_object_ids": { "required": true, "tier": "debug", "dtype": "str", "shape": ["A"], "description": "original object UUIDs from Embedding Service, aligned with semantic_label_names" },
+    "threshold_per_label_arr": { "required": true, "tier": "debug", "dtype": "float32", "shape": ["A"], "description": "per-label thresholds (NaN if not set)" },
+    "semantic_label_make": { "required": true, "tier": "analytics", "dtype": "str", "shape": ["A"], "description": "best-effort make parsed from label name (dev-only taxonomy)" },
+    "semantic_label_model": { "required": true, "tier": "analytics", "dtype": "str", "shape": ["A"], "description": "best-effort model parsed from label name (dev-only taxonomy)" },
+
+    "track_ids": { "required": true, "tier": "model_facing", "dtype": "int32", "shape": ["T"] },
+    "track_present_mask": { "required": true, "tier": "model_facing", "dtype": "bool", "shape": ["T"] },
+    "track_topk_ids": { "required": true, "tier": "model_facing", "dtype": "int32", "shape": ["T", "K"] },
+    "track_topk_scores": { "required": true, "tier": "model_facing", "dtype": "float32", "shape": ["T", "K"] },
+    "track_is_confident_top1": { "required": true, "tier": "analytics", "dtype": "bool", "shape": ["T"] },
+
+    "frame_topk_ids": { "required": true, "tier": "analytics", "dtype": "int32", "shape": ["N", "K"] },
+    "frame_topk_scores": { "required": true, "tier": "analytics", "dtype": "float32", "shape": ["N", "K"] },
+    "frame_is_confident_top1": { "required": true, "tier": "analytics", "dtype": "bool", "shape": ["N"] },
+
+    "det_present_mask": { "required": true, "tier": "analytics", "dtype": "bool", "shape": ["N", "M_det"] },
+    "det_topk_ids": { "required": true, "tier": "analytics", "dtype": "int32", "shape": ["N", "M_det", "K"] },
+    "det_topk_scores": { "required": true, "tier": "analytics", "dtype": "float32", "shape": ["N", "M_det", "K"] },
+    "det_is_confident_top1": { "required": true, "tier": "analytics", "dtype": "bool", "shape": ["N", "M_det"] },
+
+    "track_best_frame_pos": { "required": true, "tier": "debug", "dtype": "int32", "shape": ["T"] },
+    "track_best_det_idx": { "required": true, "tier": "debug", "dtype": "int32", "shape": ["T"] },
+    "track_best_bbox_xyxy": { "required": true, "tier": "debug", "dtype": "float32", "shape": ["T", 4] },
+    "track_best_det_score": { "required": true, "tier": "debug", "dtype": "float32", "shape": ["T"] },
+    "track_best_class_id": { "required": true, "tier": "debug", "dtype": "int32", "shape": ["T"] },
+
+    "meta": { "required": true, "tier": "debug", "dtype": "object", "shape": [] },
+    "meta_json": { "required": true, "tier": "debug", "dtype": "str", "shape": [], "description": "meta as JSON string (cross-venv safe)" }
+  }
+}
+
+

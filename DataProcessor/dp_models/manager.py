@@ -4,7 +4,7 @@ import os
 from collections import OrderedDict
 from dataclasses import dataclass
 from threading import RLock
-from typing import Any, Dict, Optional, Tuple
+from typing import Any, Dict, List, Optional, Tuple
 
 from .catalog import ModelCatalog
 from .digests import sha256_dir, sha256_file
@@ -17,7 +17,8 @@ from .providers import (
     TorchScriptProvider, 
     TorchStateDictProvider, 
     PyannoteProvider, 
-    TritonHttpProvider
+    TritonHttpProvider,
+    OnnxRuntimeOnnxProvider,
 )
 from .providers.base import ResolvedModel
 from .signatures import model_used
@@ -196,6 +197,7 @@ class ModelManager:
         self.providers.register(TorchStateDictProvider())
         self.providers.register(PyannoteProvider())
         self.providers.register(SpeechBrainProvider())
+        self.providers.register(OnnxRuntimeOnnxProvider())
         # Triton-backed models (HTTP client handle only; actual inference remains component-specific for now).
         self.providers.register(TritonHttpProvider())
 
@@ -294,6 +296,43 @@ class ModelManager:
                 self._cache.popitem(last=False)
 
         return resolved
+
+    def evict_cached_models(self, *, device_prefix: Optional[str] = None) -> int:
+        """
+        Drop loaded handles from the in-process LRU. Optionally keep entries whose ResolvedModel.device
+        does not start with device_prefix (e.g. device_prefix=\"cuda\" evicts cuda and cuda:0).
+
+        Returns the number of cache entries removed. Intended for long runs / multi-processor pipelines
+        where the global singleton would otherwise retain VRAM/RAM across TextProcessor steps.
+        """
+        keys_del: List[Tuple[str, str, str, str, str, str, str]] = []
+        with self._lock:
+            for key, rm in list(self._cache.items()):
+                if device_prefix is None:
+                    keys_del.append(key)
+                    continue
+                try:
+                    dev = str(rm.device)
+                except Exception:
+                    dev = ""
+                if dev.startswith(device_prefix):
+                    keys_del.append(key)
+            removed = 0
+            for key in keys_del:
+                rm = self._cache.pop(key, None)
+                if rm is None:
+                    continue
+                removed += 1
+                try:
+                    h = rm.handle
+                    del h
+                except Exception:
+                    pass
+                try:
+                    del rm
+                except Exception:
+                    pass
+        return removed
 
     def resolved_mapping_for_manifest(self) -> Dict[str, Any]:
         """

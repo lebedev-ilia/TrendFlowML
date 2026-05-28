@@ -1,0 +1,57 @@
+# Prometheus configuration для DataProcessor API
+#
+# Этот файл настраивает Prometheus для сбора метрик из DataProcessor API.
+#
+# Использование:
+#   docker run -p 9090:9090 -v $(pwd)/monitoring/prometheus:/etc/prometheus prom/prometheus
+
+global:
+  scrape_interval: 15s
+  evaluation_interval: 15s
+  external_labels:
+    cluster: 'dataprocessor'
+    environment: 'production'
+
+# Alertmanager configuration
+alerting:
+  alertmanagers:
+    - static_configs:
+        - targets:
+            - alertmanager:9093
+
+# Load rules once and periodically evaluate them
+rule_files:
+  - "/etc/prometheus/alerts.yml"
+
+# Scrape configurations
+scrape_configs:
+  # DataProcessor API: очередь, active_runs (см. health), часть health-path метрик
+  - job_name: 'dataprocessor-api'
+    scrape_interval: 10s
+    metrics_path: '/api/v1/metrics'
+    static_configs:
+      - targets:
+          - 'dataprocessor-api:8000'
+    relabel_configs:
+      - source_labels: [__address__]
+        target_label: instance
+        replacement: 'dataprocessor-api'
+
+  # Worker: dataprocessor_processing_seconds, dataprocessor_failures_total (процесс main.py) —
+  # пишутся в worker, не в API. Требуется DP_WORKER_METRICS_PORT=8001 (см. docker-compose, api/worker.py).
+  - job_name: 'dataprocessor-worker'
+    scrape_interval: 10s
+    metrics_path: '/metrics'
+    static_configs:
+      - targets:
+          - 'dataprocessor-worker:8001'
+    relabel_configs:
+      - source_labels: [__address__]
+        target_label: instance
+        replacement: 'dataprocessor-worker'
+
+  # Prometheus self-monitoring
+  - job_name: 'prometheus'
+    static_configs:
+      - targets: ['localhost:9090']
+

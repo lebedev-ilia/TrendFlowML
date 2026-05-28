@@ -13,8 +13,9 @@ import os
 import json
 import logging
 import importlib
-from typing import Dict, Any, Optional
+from typing import Dict, Any, Optional, List
 from pathlib import Path
+import inspect
 
 import numpy as np
 
@@ -28,6 +29,27 @@ def safe_log_warning(logger_instance, message, *args, **kwargs):
         pass
 
 
+def _convert_numpy_to_python(obj: Any) -> Any:
+    """Рекурсивно конвертирует numpy массивы и типы в Python типы."""
+    if isinstance(obj, np.ndarray):
+        if obj.dtype == object:
+            # Object arrays - рекурсивно обрабатываем каждый элемент
+            if obj.size == 1:
+                return _convert_numpy_to_python(obj.item())
+            else:
+                return [_convert_numpy_to_python(item) for item in obj]
+        else:
+            return obj.tolist() if obj.size > 0 else []
+    elif isinstance(obj, (np.integer, np.floating)):
+        return obj.item()
+    elif isinstance(obj, dict):
+        return {k: _convert_numpy_to_python(v) for k, v in obj.items()}
+    elif isinstance(obj, (list, tuple)):
+        return [_convert_numpy_to_python(item) for item in obj]
+    else:
+        return obj
+
+
 def load_npz(npz_path: str) -> Dict[str, Any]:
     """Загрузить NPZ файл и вернуть словарь."""
     try:
@@ -36,18 +58,66 @@ def load_npz(npz_path: str) -> Dict[str, Any]:
         for key in data.files:
             arr = data[key]
             # Convert numpy arrays to lists for JSON serialization
-            if isinstance(arr, np.ndarray):
-                if arr.dtype == object:
-                    # Object arrays (like meta dict) - keep as is, will be handled separately
-                    result[key] = arr.item() if arr.size == 1 else arr.tolist()
-                else:
-                    result[key] = arr.tolist() if arr.size > 0 else []
-            else:
-                result[key] = arr
+            result[key] = _convert_numpy_to_python(arr)
         return result
     except Exception as e:
         logger.error(f"Failed to load NPZ {npz_path}: {e}")
         raise
+
+
+def _path_is_nonempty_file(p: Path) -> bool:
+    """
+    True только для существующего обычного файла.
+    Не бросает при гонках / сетевом FS (ENOENT, ESTALE и т.д.) — в этом случае False.
+    """
+    try:
+        return p.is_file()
+    except OSError:
+        return False
+
+
+def find_component_npz(
+    component_dir: Path,
+    component_name: str,
+    component_type: str = "core",
+) -> Optional[Path]:
+    """
+    Найти основной NPZ в каталоге компонента.
+
+    Сначала проверяются канонические имена (embeddings.npz / features.npz), затем любой *.npz
+    с детерминированным приоритетом — чтобы не терять артефакты вроде face_identity.npz.
+    """
+    try:
+        if not component_dir.is_dir():
+            return None
+    except OSError:
+        return None
+
+    preferred: List[str]
+    if component_type == "core":
+        preferred = ["embeddings.npz", f"{component_name}.npz"]
+    else:
+        preferred = ["features.npz", f"{component_name}_features.npz", f"{component_name}.npz"]
+
+    for name in preferred:
+        p = component_dir / name
+        if _path_is_nonempty_file(p):
+            return p
+
+    try:
+        all_npz = sorted(component_dir.glob("*.npz"))
+    except OSError:
+        return None
+    if not all_npz:
+        return None
+    all_npz = [p for p in all_npz if _path_is_nonempty_file(p)]
+    if not all_npz:
+        return None
+    # Prefer names that mention the component; else first lexicographically
+    mention = [p for p in all_npz if component_name.replace("core_", "") in p.name]
+    if mention:
+        return mention[0]
+    return all_npz[0]
 
 
 def extract_meta(npz_data: Dict[str, Any]) -> Dict[str, Any]:
@@ -169,6 +239,7 @@ def render_component(
     component_name: str,
     component_type: str = "core",
     output_dir: Optional[str] = None,
+    frames_dir: Optional[str] = None,
     enable_render: bool = True,
     enable_html_render: bool = True,
 ) -> Dict[str, Any]:
@@ -206,8 +277,37 @@ def render_component(
             "distributions": {},
         }
     
-    # Generate render-context
-    render = renderer(npz_data, meta)
+    # Prepare render environment (paths available to renderers)
+    render_dir = None
+    assets_dir = None
+    if output_dir is not None:
+        render_dir = os.path.join(output_dir, "_render")
+        assets_dir = os.path.join(render_dir, "assets")
+        try:
+            os.makedirs(assets_dir, exist_ok=True)
+        except Exception:
+            assets_dir = None
+
+    render_env = {
+        "npz_path": npz_path,
+        "component_name": component_name,
+        "component_type": component_type,
+        "output_dir": output_dir,
+        "render_dir": render_dir,
+        "assets_dir": assets_dir,
+        "frames_dir": frames_dir,
+    }
+
+    # Generate render-context (support both legacy signature and new signature with env)
+    try:
+        sig = inspect.signature(renderer)
+        if len(sig.parameters) >= 3:
+            render = renderer(npz_data, meta, render_env)
+        else:
+            render = renderer(npz_data, meta)
+    except Exception:
+        # Fallback to legacy signature
+        render = renderer(npz_data, meta)
     
     # Add meta information
     render["meta"] = {
@@ -226,7 +326,7 @@ def render_component(
         # Atomic write
         tmp_path = render_path + ".tmp"
         with open(tmp_path, "w", encoding="utf-8") as f:
-            json.dump(render, f, ensure_ascii=False, indent=2)
+            json.dump(_convert_numpy_to_python(render), f, ensure_ascii=False, indent=2)
         os.replace(tmp_path, render_path)
         
         logger.info(f"Render-context saved to {render_path}")
@@ -276,7 +376,20 @@ def render_component(
                         if html_renderer is not None and callable(html_renderer):
                             html_path = os.path.join(render_dir, "render.html")
                             logger.info(f"Generating HTML render for {component_name} -> {html_path}")
-                            html_renderer(npz_path, html_path)
+                            # Optional kwargs for richer HTML renders (frames + assets)
+                            try:
+                                html_sig = inspect.signature(html_renderer)
+                                kwargs = {}
+                                if "frames_dir" in html_sig.parameters:
+                                    kwargs["frames_dir"] = frames_dir
+                                if "assets_dir" in html_sig.parameters:
+                                    kwargs["assets_dir"] = os.path.join(render_dir, "assets")
+                                if kwargs:
+                                    os.makedirs(kwargs.get("assets_dir", os.path.join(render_dir, "assets")), exist_ok=True)
+                                html_renderer(npz_path, html_path, **kwargs)
+                            except TypeError:
+                                # Legacy signature
+                                html_renderer(npz_path, html_path)
                             logger.info(f"HTML render saved to {html_path}")
                         else:
                             logger.debug(f"HTML renderer function {html_renderer_name} not found or not callable")
@@ -313,27 +426,16 @@ def render_all_components(run_rs_path: str) -> Dict[str, Dict[str, Any]]:
         component_name = component_dir.name
         if component_name.startswith("_") or component_name == "manifest.json":
             continue
-        
+        # Служебные каталоги run (не NPZ-компоненты), см. batch_runs_feature_report._SKIP_RUN_SUBDIRS
+        if component_name == "state":
+            continue
+
         # Determine component type (core providers vs modules)
         # Core providers are typically: core_clip, core_depth_midas, etc.
         # Modules are: cut_detection, scene_classification, etc.
         component_type = "core" if component_name.startswith("core_") else "module"
         
-        # Look for NPZ file (VisualProcessor uses "embeddings.npz" for core, "features.npz" for modules)
-        # Try multiple possible names
-        possible_names = []
-        if component_type == "core":
-            possible_names = ["embeddings.npz", f"{component_name}.npz"]
-        else:
-            possible_names = ["features.npz", f"{component_name}_features.npz", f"{component_name}.npz"]
-        
-        npz_file = None
-        for name in possible_names:
-            candidate = component_dir / name
-            if candidate.exists():
-                npz_file = candidate
-                break
-        
+        npz_file = find_component_npz(component_dir, component_name, component_type)
         if npz_file is None:
             continue
         

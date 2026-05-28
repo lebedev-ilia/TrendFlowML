@@ -1,0 +1,2 @@
+# Dependencies for face_identity component
+# Add component-specific dependencies here

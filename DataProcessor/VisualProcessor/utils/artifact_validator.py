@@ -6,6 +6,16 @@ from typing import Any, Dict, List, Optional, Tuple
 
 import numpy as np
 
+try:
+    # Optional: schema-based validation (Audit v3 schema system).
+    # Note: VisualProcessor is not a Python package in this repo; runtime adds VisualProcessor/ to sys.path.
+    # Therefore schemas are imported as a top-level package: `schemas.*`.
+    from schemas.registry import get_schema_registry_cached  # type: ignore
+    from schemas.npz_validator import validate_npz_against_schema  # type: ignore
+except Exception:  # pragma: no cover
+    get_schema_registry_cached = None  # type: ignore
+    validate_npz_against_schema = None  # type: ignore
+
 
 @dataclass
 class ValidationIssue:
@@ -53,7 +63,13 @@ def validate_frame_indices(arr: np.ndarray) -> List[ValidationIssue]:
     return issues
 
 
-def validate_npz(path: str, required_meta_keys: Optional[List[str]] = None) -> Tuple[bool, List[ValidationIssue], Dict[str, Any]]:
+def validate_npz(
+    path: str,
+    required_meta_keys: Optional[List[str]] = None,
+    *,
+    validate_schema: bool = True,
+    require_known_schema: bool = False,
+) -> Tuple[bool, List[ValidationIssue], Dict[str, Any]]:
     """
     Returns: (ok, issues, extracted_meta)
     """
@@ -96,6 +112,55 @@ def validate_npz(path: str, required_meta_keys: Optional[List[str]] = None) -> T
             for k in keys:
                 if k not in meta:
                     issues.append(ValidationIssue("error", f"meta missing required key: {k}"))
+
+        # Schema-based validation (keys/dtype/shape), best-effort:
+        # - If schema_version is known in VisualProcessor/schemas/*.json -> strict errors.
+        # - If unknown and require_known_schema=False -> warning (non-breaking during rollout).
+        if validate_schema and meta and get_schema_registry_cached and validate_npz_against_schema:
+            try:
+                schema_version = str(meta.get("schema_version") or "").strip()
+                if schema_version:
+                    # Multi-registry rollout:
+                    # - VisualProcessor schemas live in VisualProcessor/schemas
+                    # - AudioProcessor schemas live in AudioProcessor/schemas
+                    # - TextProcessor schemas live in TextProcessor/schemas
+                    base_dir = os.path.normpath(os.path.join(os.path.dirname(__file__), ".."))  # VisualProcessor/
+                    dp_root = os.path.normpath(os.path.join(base_dir, ".."))  # DataProcessor/
+
+                    candidate_dirs = [
+                        os.path.normpath(os.path.join(base_dir, "schemas")),  # VisualProcessor/schemas
+                        os.path.normpath(os.path.join(dp_root, "AudioProcessor", "schemas")),
+                        os.path.normpath(os.path.join(dp_root, "TextProcessor", "schemas")),
+                    ]
+                    found = None
+                    found_dir = None
+                    for schemas_dir in candidate_dirs:
+                        if not os.path.isdir(schemas_dir):
+                            continue
+                        reg = get_schema_registry_cached(schemas_dir)
+                        sd = reg.get(schema_version)
+                        if sd is not None:
+                            found = sd
+                            found_dir = schemas_dir
+                            break
+                    if found is None:
+                        msg = (
+                            f"no schema doc found for schema_version={schema_version} "
+                            f"(searched={','.join(d for d in candidate_dirs if os.path.isdir(d))})"
+                        )
+                        if require_known_schema:
+                            issues.append(ValidationIssue("error", msg))
+                        else:
+                            issues.append(ValidationIssue("warning", msg))
+                    else:
+                        sch_issues = validate_npz_against_schema(npz, schema_doc=found.doc)
+                        for si in sch_issues:
+                            issues.append(
+                                ValidationIssue(str(si.level), f"schema[{schema_version}] {si.message} (dir={found_dir})")
+                            )
+            except Exception as e:
+                # Never crash validator on schema subsystem errors; surface as warning.
+                issues.append(ValidationIssue("warning", f"schema validation internal error: {e}"))
 
         # Optional frame_indices key validation (if present)
         if "frame_indices" in npz.files:

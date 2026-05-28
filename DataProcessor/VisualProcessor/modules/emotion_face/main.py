@@ -10,9 +10,18 @@ from __future__ import annotations
 import os
 import sys
 import argparse
+from pathlib import Path
 from typing import Optional, List
 
-sys.path.append(os.path.dirname(os.path.dirname(os.path.dirname(__file__))))
+_vp = str(Path(__file__).resolve().parents[2])  # VisualProcessor
+if _vp not in sys.path:
+    sys.path.insert(0, _vp)
+elif sys.path[0] != _vp:
+    try:
+        sys.path.remove(_vp)
+    except ValueError:
+        pass
+    sys.path.insert(0, _vp)
 
 from modules.emotion_face.core.video_processor import EmotionFaceModule
 from utils.logger import get_logger
@@ -297,6 +306,10 @@ def main(argv: Optional[List[str]] = None) -> int:
     except ValueError as e:
         logger.error("Некорректные данные: %s", e)
         return 3
+    except RuntimeError as e:
+        # Expected failures (missing model, bad artifacts): one line, no traceback noise.
+        logger.error("%s", e)
+        return 4
     except Exception as e:
         logger.exception("Fatal error в %s: %s", MODULE_NAME, e)
         return 4

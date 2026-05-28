@@ -1,0 +1,86 @@
+{
+  "schema_system_version": "vp_schema_v1",
+  "schema_version": "behavioral_npz_v1",
+  "producer": "behavioral",
+  "artifact_kind": "npz",
+  "allow_extra_keys": false,
+  "meta": {
+    "required_keys": [
+      "producer",
+      "producer_version",
+      "schema_version",
+      "created_at",
+      "platform_id",
+      "video_id",
+      "run_id",
+      "config_hash",
+      "sampling_policy_version",
+      "dataprocessor_version",
+      "status",
+      "empty_reason",
+      "models_used",
+      "model_signature",
+      "stage_timings_ms"
+    ],
+    "optional_keys": [
+      "total_frames",
+      "processed_frames",
+      "frames_dir",
+      "analysis_fps",
+      "analysis_width",
+      "analysis_height",
+      "ui_payload"
+    ]
+  },
+  "fields": {
+    "frame_indices": { "required": true, "tier": "model_facing", "dtype": "int32", "shape": ["N"] },
+    "times_s": { "required": true, "tier": "model_facing", "dtype": "float32", "shape": ["N"] },
+    "landmarks_present": { "required": true, "tier": "model_facing", "dtype": "bool", "shape": ["N"] },
+
+    "hand_gestures": { "required": true, "tier": "analytics", "dtype": "object", "shape": ["N"] },
+    "frame_results": { "required": true, "tier": "debug", "dtype": "object", "shape": ["N"] },
+    "aggregated": { "required": true, "tier": "model_facing", "dtype": "object", "shape": [] },
+
+    "seq_num_hands": { "required": true, "tier": "model_facing", "dtype": "float32", "shape": ["N"] },
+    "seq_hands_visibility": { "required": true, "tier": "model_facing", "dtype": "float32", "shape": ["N"] },
+    "seq_hand_motion_energy": { "required": true, "tier": "model_facing", "dtype": "float32", "shape": ["N"] },
+    "seq_arm_openness": { "required": true, "tier": "model_facing", "dtype": "float32", "shape": ["N"] },
+    "seq_pose_expansion": { "required": true, "tier": "model_facing", "dtype": "float32", "shape": ["N"] },
+    "seq_body_lean_angle": { "required": true, "tier": "model_facing", "dtype": "float32", "shape": ["N"] },
+    "seq_balance_offset": { "required": true, "tier": "model_facing", "dtype": "float32", "shape": ["N"] },
+    "seq_shoulder_angle": { "required": true, "tier": "model_facing", "dtype": "float32", "shape": ["N"] },
+    "seq_shoulder_angle_velocity": { "required": true, "tier": "model_facing", "dtype": "float32", "shape": ["N"] },
+    "seq_head_position_x_norm": { "required": true, "tier": "model_facing", "dtype": "float32", "shape": ["N"] },
+    "seq_head_position_y_norm": { "required": true, "tier": "model_facing", "dtype": "float32", "shape": ["N"] },
+    "seq_head_motion_energy": { "required": true, "tier": "model_facing", "dtype": "float32", "shape": ["N"] },
+    "seq_head_stability": { "required": true, "tier": "model_facing", "dtype": "float32", "shape": ["N"] },
+    "seq_mouth_width_norm": { "required": true, "tier": "model_facing", "dtype": "float32", "shape": ["N"] },
+    "seq_mouth_height_norm": { "required": true, "tier": "model_facing", "dtype": "float32", "shape": ["N"] },
+    "seq_mouth_area_norm": { "required": true, "tier": "model_facing", "dtype": "float32", "shape": ["N"] },
+    "seq_mouth_velocity": { "required": true, "tier": "model_facing", "dtype": "float32", "shape": ["N"] },
+    "seq_mouth_open_ratio": { "required": true, "tier": "model_facing", "dtype": "float32", "shape": ["N"] },
+    "seq_speech_activity_proxy": { "required": true, "tier": "model_facing", "dtype": "float32", "shape": ["N"] },
+    "seq_blink_flag": { "required": true, "tier": "model_facing", "dtype": "float32", "shape": ["N"] },
+    "seq_blink_rate_short": { "required": true, "tier": "model_facing", "dtype": "float32", "shape": ["N"] },
+    "seq_self_touch_flag": { "required": true, "tier": "model_facing", "dtype": "float32", "shape": ["N"] },
+    "seq_fidgeting_energy": { "required": true, "tier": "model_facing", "dtype": "float32", "shape": ["N"] },
+    "seq_timestamp_norm": { "required": true, "tier": "model_facing", "dtype": "float32", "shape": ["N"] },
+
+    "seq_gesture_prob_pointing": { "required": true, "tier": "model_facing", "dtype": "float32", "shape": ["N"] },
+    "seq_gesture_prob_open_palm": { "required": true, "tier": "model_facing", "dtype": "float32", "shape": ["N"] },
+    "seq_gesture_prob_hands_on_hips": { "required": true, "tier": "model_facing", "dtype": "float32", "shape": ["N"] },
+    "seq_gesture_prob_self_touch": { "required": true, "tier": "model_facing", "dtype": "float32", "shape": ["N"] },
+    "seq_gesture_prob_fist": { "required": true, "tier": "model_facing", "dtype": "float32", "shape": ["N"] },
+    "seq_gesture_prob_thumbs_up": { "required": true, "tier": "model_facing", "dtype": "float32", "shape": ["N"] },
+    "seq_gesture_prob_thumbs_down": { "required": true, "tier": "model_facing", "dtype": "float32", "shape": ["N"] },
+    "seq_gesture_prob_victory": { "required": true, "tier": "model_facing", "dtype": "float32", "shape": ["N"] },
+    "seq_gesture_prob_ok": { "required": true, "tier": "model_facing", "dtype": "float32", "shape": ["N"] },
+    "seq_gesture_prob_rock": { "required": true, "tier": "model_facing", "dtype": "float32", "shape": ["N"] },
+    "seq_gesture_prob_call_me": { "required": true, "tier": "model_facing", "dtype": "float32", "shape": ["N"] },
+    "seq_gesture_prob_love": { "required": true, "tier": "model_facing", "dtype": "float32", "shape": ["N"] },
+
+    "meta": { "required": true, "tier": "debug", "dtype": "object", "shape": [] }
+  }
+}
+
+

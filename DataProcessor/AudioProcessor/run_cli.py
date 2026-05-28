@@ -2,11 +2,12 @@
 from __future__ import annotations
 
 import json
+import logging
 import os
 import sys
 import time
+import traceback
 import uuid
-import logging
 from pathlib import Path
 from typing import Any, Dict, List, Optional, Set, Tuple
 
@@ -16,22 +17,36 @@ logger = logging.getLogger(__name__)
 def safe_log_warning(logger_instance, message, *args, **kwargs):
     """Safely log a warning message, catching I/O errors from closed handlers."""
     try:
-        # Try to log directly - catch all exceptions to prevent crashes
-        logger_instance.warning(message, *args, **kwargs)
+        # Temporarily disable logging error reporting to prevent traceback output
+        old_raise_exceptions = logging.raiseExceptions
+        logging.raiseExceptions = False
+        try:
+            logger_instance.warning(message, *args, **kwargs)
+        finally:
+            # Restore original setting
+            logging.raiseExceptions = old_raise_exceptions
     except Exception:
         # Catch ALL exceptions silently - handlers may be closed, streams may be closed,
         # or logging infrastructure may be in an invalid state during shutdown
+        # This is expected behavior during cleanup/shutdown phases
         pass
 
 
 def safe_log_error(logger_instance, message, *args, **kwargs):
     """Safely log an error message, catching I/O errors from closed handlers."""
     try:
-        # Try to log directly - catch all exceptions to prevent crashes
-        logger_instance.error(message, *args, **kwargs)
+        # Temporarily disable logging error reporting to prevent traceback output
+        old_raise_exceptions = logging.raiseExceptions
+        logging.raiseExceptions = False
+        try:
+            logger_instance.error(message, *args, **kwargs)
+        finally:
+            # Restore original setting
+            logging.raiseExceptions = old_raise_exceptions
     except Exception:
         # Catch ALL exceptions silently - handlers may be closed, streams may be closed,
         # or logging infrastructure may be in an invalid state during shutdown
+        # This is expected behavior during cleanup/shutdown phases
         pass
 
 
@@ -76,6 +91,7 @@ def main() -> int:
     from src.utils.cli_utils import utc_iso_now, atomic_write_json  # type: ignore
     from src.utils.progress import emit_progress as _emit_progress, close_progress_bar  # type: ignore
     from src.core.resource_monitor import ResourceMonitor  # type: ignore
+    from src.core.orchestrator_telemetry import OrchestratorTelemetryCollector  # type: ignore
     from src.core.extractor_runner import run_extractors  # type: ignore
     from src.core.batch_processor import collect_frames_dirs, create_audio_file_contexts, process_batch_results  # type: ignore
     from src.core.npz_saver import save_component_npz as _save_component_npz  # type: ignore
@@ -87,6 +103,15 @@ def main() -> int:
 
     parser = create_argument_parser()
     args = parser.parse_args()
+    # Optional wall-time anchor when spawned from DataProcessor (subprocess wrapper); otherwise None.
+    subproc_wall_t0: float | None = None
+
+    # Audit v3 (AudioProcessor): enforce offline mode for HF/Transformers (no-network policy).
+    # This is fail-fast: if artifacts are missing from dp_models bundle/cache, extraction should error.
+    os.environ["HF_HUB_OFFLINE"] = "1"
+    os.environ["TRANSFORMERS_OFFLINE"] = "1"
+    # Marker env var used by some extractors to disable network fallbacks explicitly.
+    os.environ["AUDIT_V3_OFFLINE_ONLY"] = "1"
 
     # Stage 5: Check if batch mode is enabled
     batch_mode = bool(args.audio_input_dir or args.audio_input_list)
@@ -351,12 +376,13 @@ def main() -> int:
 
     # Resolve model metadata via ModelManager (if available) for reproducibility.
     model_metadata = resolve_model_metadata(args)
-    clap_model_used = model_metadata["clap_model_used"]
-    asr_model_used = model_metadata["asr_model_used"]
-    tokenizer_model_used = model_metadata["tokenizer_model_used"]
-    diar_model_used = model_metadata["diar_model_used"]
-    emo_model_used = model_metadata["emo_model_used"]
-    sep_model_used = model_metadata["sep_model_used"]
+    clap_model_used = model_metadata.get("clap_model_used")
+    asr_model_used = model_metadata.get("asr_model_used")
+    tokenizer_model_used = model_metadata.get("tokenizer_model_used")
+    diar_model_used = model_metadata.get("diar_model_used")
+    diar_whisper_model_used = model_metadata.get("diar_whisper_model_used")
+    emo_model_used = model_metadata.get("emo_model_used")
+    sep_model_used = model_metadata.get("sep_model_used")
 
     # Keep all AudioProcessor internal temp outputs inside the run folder (debuggable, but not source-of-truth).
     tmp_dir = os.path.join(run_rs_path, "_tmp_audio")
@@ -398,10 +424,12 @@ def main() -> int:
     
     if use_colors:
         time_str = f"{Colors.GREEN}{init_elapsed:.2f}s{Colors.RESET}"
-        extractors_str = f"{Colors.YELLOW}{len(processor.extractors)} extractors{Colors.RESET}"
+        n_factories = len(getattr(processor, "extractor_factories", {}) or {})
+        extractors_str = f"{Colors.YELLOW}{n_factories} extractors{Colors.RESET}"
         print(f"{audio_processor_prefix} MainProcessor initialized {Colors.GRAY}({Colors.RESET}{time_str}{Colors.GRAY}, {Colors.RESET}{extractors_str}{Colors.GRAY}){Colors.RESET}", file=sys.stderr, flush=True)
     else:
-        print(f"AudioProcessor | MainProcessor initialized ({init_elapsed:.2f}s, {len(processor.extractors)} extractors)", file=sys.stderr, flush=True)
+        n_factories = len(getattr(processor, "extractor_factories", {}) or {})
+        print(f"AudioProcessor | MainProcessor initialized ({init_elapsed:.2f}s, {n_factories} extractors)", file=sys.stderr, flush=True)
 
     # Resolve Segmenter-produced audio + segments (new contract).
     frames_dir = os.path.abspath(args.frames_dir) if args.frames_dir else None
@@ -410,10 +438,19 @@ def main() -> int:
 
     started_at = utc_iso_now()
     t0 = time.time()
-    
+    if subproc_wall_t0 is not None:
+        stage_timings_preview: Dict[str, float] = {}
+        stage_timings_preview["wall_subprocess_before_internal_t0_ms"] = float((t0 - subproc_wall_t0) * 1000.0)
+    else:
+        stage_timings_preview = {}
+
     # Stage timings tracking
     stage_timings: Dict[str, float] = {}
+    stage_timings.update(stage_timings_preview)
+    stage_timings["main_processor_init_ms"] = float(init_elapsed * 1000.0)
     timings_by_extractor: Dict[str, Dict[str, float]] = {}
+    # Per audio component ISO start times (for manifest + финальный upsert)
+    extractor_component_started_iso: Dict[str, str] = {}
     
     # Progress reporting: load_input stage
     t_load_input_start = time.time()
@@ -448,6 +485,9 @@ def main() -> int:
     resource_monitor = ResourceMonitor()
     resource_monitor.start()
     logger.info("AudioProcessor | Resource monitor started")
+
+    # Per-extractor resource snapshots (opt-in via AP_ORCHESTRATOR_TELEMETRY); см. docs/ORCHESTRATOR_TELEMETRY.md
+    orchestrator_telemetry = OrchestratorTelemetryCollector()
 
     # Complete load_input stage
     t_load_input_end = time.time()
@@ -521,6 +561,7 @@ def main() -> int:
                 enable_video_parallel=enable_video_parallel,
                 enable_gpu_batching=enable_gpu_batching,
                 enable_cpu_parallel=enable_cpu_parallel,
+                telemetry=orchestrator_telemetry,
             )
             
             # Обрабатываем результаты batch (используем новый модуль)
@@ -533,37 +574,88 @@ def main() -> int:
         
         # Single-file mode (existing logic)
         if frames_dir:
-            # New mode: run extractors directly on Segmenter audio, using Segmenter segments.
-            strict_extractors = not bool(getattr(args, "no_strict_extractors", False))
-            logger.info(f"AudioProcessor | Starting extraction of {len(extractor_keys)} extractors...")
-            
-            # Запускаем extractors используя новый модуль
-            extractor_results, per_extractor_report, timings_by_extractor = run_extractors(
-                processor=processor,
-                extractor_keys=extractor_keys,
-                audio_path=audio_path,
-                tmp_dir=tmp_dir,
-                segments_payload=segments_payload,
-                run_rs_path=run_rs_path,
-                platform_id=args.platform_id,
-                video_id=video_id,
-                run_id=run_id,
-                segment_parallelism=segment_parallelism,
-                max_inflight=max_inflight,
-                clap_batch_size=clap_batch_size,
-                extractor_parallelism_config=extractor_parallelism,
-                strict_extractors=strict_extractors,
-                t_start=t0,  # Передаем t0 для правильного подсчета total_elapsed_sec
-            )
-            
-            results = {
-                "extractor_results": extractor_results,
-                "extracted_audio_path": audio_path,
-            }
-            logger.info(f"AudioProcessor | Extraction completed: {len([r for r in extractor_results.values() if r.get('success')])}/{len(extractor_keys)} extractors succeeded")
+            # Valid empty case: no audio stream. Segmenter writes segments.json with audio_present=false.
+            # For Audit v3 this is NOT an error; we skip extraction and save empty artifacts.
+            if segments_payload and segments_payload.get("audio_present") is False:
+                logger.info("AudioProcessor | No audio stream (segments_payload.audio_present=false) -> skipping extractors and emitting empty artifacts.")
+                results = {
+                    "extractor_results": {},
+                    "extracted_audio_path": None,
+                }
+            else:
+                # New mode: run extractors directly on Segmenter audio, using Segmenter segments.
+                strict_extractors = not bool(getattr(args, "no_strict_extractors", False))
+                logger.info(f"AudioProcessor | Starting extraction of {len(extractor_keys)} extractors...")
+                # Same names as финальный upsert (component_names) — иначе в manifest дублируются ключи и «короткие» висят в running.
+                _key_to_component = dict(zip(extractor_keys, component_names))
+                def _on_extractor_start(extractor_key: str) -> None:
+                    comp_name = _key_to_component.get(extractor_key) or f"{extractor_key}_extractor"
+                    now = utc_iso_now()
+                    extractor_component_started_iso[comp_name] = now
+                    manifest.upsert_component(
+                        ManifestComponent(
+                            name=comp_name,
+                            kind="audio",
+                            status="running",
+                            started_at=now,
+                        )
+                    )
+
+                def _on_extractor_done(extractor_key: str, wall_ms: float, result: Dict[str, Any]) -> None:
+                    comp_name = _key_to_component.get(extractor_key) or f"{extractor_key}_extractor"
+                    started = extractor_component_started_iso.get(comp_name)
+                    finished = utc_iso_now()
+                    ok = bool(result.get("success"))
+                    manifest.upsert_component(
+                        ManifestComponent(
+                            name=comp_name,
+                            kind="audio",
+                            status="ok" if ok else "error",
+                            started_at=started,
+                            finished_at=finished,
+                            duration_ms=max(0, int(wall_ms)),
+                            error=(str(result.get("error")) if result.get("error") else None) if not ok else None,
+                        )
+                    )
+                
+                # Запускаем extractors используя новый модуль
+                extractor_results, per_extractor_report, timings_by_extractor = run_extractors(
+                    processor=processor,
+                    extractor_keys=extractor_keys,
+                    audio_path=audio_path,
+                    tmp_dir=tmp_dir,
+                    segments_payload=segments_payload,
+                    run_rs_path=run_rs_path,
+                    platform_id=args.platform_id,
+                    video_id=video_id,
+                    run_id=run_id,
+                    segment_parallelism=segment_parallelism,
+                    max_inflight=max_inflight,
+                    clap_batch_size=clap_batch_size,
+                    extractor_parallelism_config=extractor_parallelism,
+                    strict_extractors=strict_extractors,
+                    t_start=t0,  # Передаем t0 для правильного подсчета total_elapsed_sec
+                    on_extractor_start=_on_extractor_start,
+                    on_extractor_done=_on_extractor_done,
+                    telemetry=orchestrator_telemetry,
+                )
+                
+                results = {
+                    "extractor_results": extractor_results,
+                    "extracted_audio_path": audio_path,
+                }
+                logger.info(
+                    f"AudioProcessor | Extraction completed: {len([r for r in extractor_results.values() if r.get('success')])}/{len(extractor_keys)} extractors succeeded"
+                )
+                stage_timings["run_extractors_wall_ms"] = float((time.time() - t_run_extractors_start) * 1000.0)
         # NOTE: legacy mode (audio extraction from video) is removed. Segmenter contract is mandatory.
         finished_at = utc_iso_now()
         duration_ms = int((time.time() - t0) * 1000)
+    except Exception as e:
+        logger.exception("AudioProcessor | Extraction pipeline failed: %s", e)
+        print(f"AudioProcessor | FATAL: {e}", file=sys.stderr, flush=True)
+        traceback.print_exc(file=sys.stderr)
+        return 1
     finally:
         # Останавливаем мониторинг ресурсов
         resource_monitor.stop()
@@ -598,6 +690,11 @@ def main() -> int:
                     }
                 },
             }
+            if (
+                orchestrator_telemetry.enabled
+                and orchestrator_telemetry.events
+            ):
+                report["orchestrator_telemetry"] = orchestrator_telemetry.to_report_section()
             report_path = os.path.join(run_rs_path, "_reports", "scheduler_runtime_report.json")
             os.makedirs(os.path.dirname(report_path), exist_ok=True)
             atomic_write_json(report_path, report)
@@ -607,7 +704,13 @@ def main() -> int:
     extractor_results = (results or {}).get("extractor_results") or {}
     extracted_audio_path = (results or {}).get("extracted_audio_path")
     audio_present = bool(isinstance(extracted_audio_path, str) and extracted_audio_path and os.path.exists(extracted_audio_path))
-    audio_empty_reason = None if audio_present else "audio_missing_or_extract_failed"
+    seg_empty_reason = None
+    try:
+        if isinstance(segments_payload, dict) and segments_payload.get("audio_present") is False:
+            seg_empty_reason = str(segments_payload.get("empty_reason") or "audio_missing_or_extract_failed")
+    except Exception:
+        seg_empty_reason = None
+    audio_empty_reason = None if audio_present else (seg_empty_reason or "audio_missing_or_extract_failed")
     # Map internal keys -> payloads for saving.
     # Progress reporting: save_npz stage
     t_save_npz_start = time.time()
@@ -628,6 +731,7 @@ def main() -> int:
     overall_ok = True
 
     for key, component_name in key_to_component.items():
+        t_comp_pipeline0 = time.time()
         r = extractor_results.get(key) or {}
         success = bool(r.get("success"))
         payload = r.get("payload") if isinstance(r.get("payload"), dict) else None
@@ -642,6 +746,8 @@ def main() -> int:
             # Missing audio is a normal empty case (e.g., silent videos).
             status = "empty"
             empty_reason = audio_empty_reason
+            # For empty artifacts, do not attach synthetic per-extractor errors like "missing result".
+            err = None
         else:
             # Allow extractors to declare valid empty outputs explicitly.
             if success and isinstance(payload, dict) and str(payload.get("status") or "") == "empty":
@@ -666,7 +772,7 @@ def main() -> int:
         )
         
         # Save NPZ artifact regardless (ok or error) so downstream can see status in meta.
-        producer_version = getattr(processor.extractors.get(key), "version", None) or "unknown"
+        producer_version = (r.get("producer_version") or "unknown") if isinstance(r, dict) else "unknown"
         
         # Add stage_timings_ms and timings_by_extractor to extra_meta
         component_stage_timings = stage_timings.copy()
@@ -674,6 +780,50 @@ def main() -> int:
             component_stage_timings["extractor_wall_ms"] = timings_by_extractor[key].get("wall_ms", 0.0)
             component_stage_timings["extractor_reported_ms"] = timings_by_extractor[key].get("reported_ms", 0.0)
         
+        # Build models_used for reproducibility (ModelManager-only; no-network).
+        # NOTE: apply_models_meta() (common/meta_builder.py) will compute model_signature deterministically.
+        models_used = []
+        if component_name == "clap_extractor" and isinstance(clap_model_used, dict):
+            models_used.append(clap_model_used)
+        if component_name == "asr_extractor":
+            if isinstance(asr_model_used, dict):
+                models_used.append(asr_model_used)
+            if isinstance(tokenizer_model_used, dict):
+                models_used.append(tokenizer_model_used)
+        if component_name == "speaker_diarization_extractor":
+            if isinstance(diar_model_used, dict):
+                models_used.append(diar_model_used)
+        if component_name == "emotion_diarization_extractor" and isinstance(emo_model_used, dict):
+            models_used.append(emo_model_used)
+        if component_name == "source_separation_extractor" and isinstance(sep_model_used, dict):
+            models_used.append(sep_model_used)
+
+        # Per-component schema versions (Audit v3 rollout).
+        # Legacy fallback remains "audio_npz_v1" for components not yet migrated.
+        schema_version = {
+            "loudness_extractor": "loudness_extractor_npz_v2",
+            "clap_extractor": "clap_extractor_npz_v1",
+            "asr_extractor": "asr_extractor_npz_v2",
+            "band_energy_extractor": "band_energy_extractor_npz_v1",
+            "chroma_extractor": "chroma_extractor_npz_v1",
+            "emotion_diarization_extractor": "emotion_diarization_extractor_npz_v1",
+            "hpss_extractor": "hpss_extractor_npz_v1",
+            "key_extractor": "key_extractor_npz_v1",
+            "mel_extractor": "mel_extractor_npz_v2",
+            "mfcc_extractor": "mfcc_extractor_npz_v2",
+            "onset_extractor": "onset_extractor_npz_v2",
+            "pitch_extractor": "pitch_extractor_npz_v2",
+            "quality_extractor": "quality_extractor_npz_v2",
+            "rhythmic_extractor": "rhythmic_extractor_npz_v2",
+            "speaker_diarization_extractor": "speaker_diarization_extractor_npz_v2",
+            "spectral_entropy_extractor": "spectral_entropy_extractor_npz_v2",
+            "spectral_extractor": "spectral_extractor_npz_v2",
+            "source_separation_extractor": "source_separation_extractor_npz_v2",
+            "speech_analysis_extractor": "speech_analysis_extractor_npz_v1",
+            "tempo_extractor": "tempo_extractor_npz_v1",
+            "voice_quality_extractor": "voice_quality_extractor_npz_v1",
+        }.get(component_name, "audio_npz_v1")
+
         artifact_path = _save_component_npz(
             run_rs_path=run_rs_path,
             component_name=component_name,
@@ -682,7 +832,7 @@ def main() -> int:
             error=str(err) if err else None,
             empty_reason=empty_reason,
             producer_version=str(producer_version),
-            schema_version="audio_npz_v1",
+            schema_version=schema_version,
             extra_meta={
                 # Required run identity fields (baseline contract)
                 "platform_id": args.platform_id,
@@ -692,6 +842,8 @@ def main() -> int:
                 "sampling_policy_version": args.sampling_policy_version,
                 "dataprocessor_version": str(args.dataprocessor_version),
                 "device_used": r.get("device_used", args.device),
+                # Model system (reproducibility)
+                "models_used": models_used,
                 # scheduler knobs (applied)
                 "scheduler_knobs": {
                     "segment_parallelism": int(segment_parallelism),
@@ -742,7 +894,12 @@ def main() -> int:
         if not v_ok:
             status = "error"
             notes = "artifact validation failed: " + "; ".join(i.message for i in issues[:5]) if issues else "validation failed"
-            safe_log_warning(logger, f"AudioProcessor | Validation failed for {component_name}: {notes}")
+            logger.warning(f"AudioProcessor | Validation failed for {component_name}: {notes}")
+            logger.warning(f"AudioProcessor | Validation issues: {[i.message for i in issues]}")
+            # Print to stderr so validation errors are always visible
+            print(f"AudioProcessor | ERROR: Validation failed for {component_name}: {notes}", file=sys.stderr)
+            if issues:
+                print(f"AudioProcessor | Validation issues: {[i.message for i in issues]}", file=sys.stderr)
             overall_ok = False
         
         # Progress reporting: render stage (per component, optional)
@@ -802,14 +959,20 @@ def main() -> int:
         if render_path and os.path.exists(render_path):
             artifacts.append({"path": render_path, "type": "render"})
         
+        _comp_started = extractor_component_started_iso.get(component_name) or started_at
+        _comp_finished = utc_iso_now()
+        # Wall time экстракции + validate/NPZ/render (раньше сюда попадала только хвостовая часть — секунды вместо минут).
+        _wall_extract_ms = float(timings_by_extractor.get(key, {}).get("wall_ms") or 0.0)
+        _post_pipeline_ms = float(max(0.0, (time.time() - t_comp_pipeline0) * 1000.0))
+        _comp_duration_ms = int(max(0.0, _wall_extract_ms + _post_pipeline_ms))
         manifest.upsert_component(
             ManifestComponent(
                 name=component_name,
                 kind="audio",
                 status=status,
-                started_at=started_at,
-                finished_at=finished_at,
-                duration_ms=duration_ms,
+                started_at=_comp_started,
+                finished_at=_comp_finished,
+                duration_ms=_comp_duration_ms,
                 artifacts=artifacts,
                 error=str(err) if err else None,
                 error_code=error_code,
@@ -846,6 +1009,9 @@ def main() -> int:
             error_msg = str(err) if err else "unknown error"
             safe_log_warning(logger, f"AudioProcessor | Status is 'error' for {component_name}, setting overall_ok=False")
             safe_log_error(logger, f"AudioProcessor | {component_name} error details: {error_msg}")
+            # Print to stderr so errors are always visible
+            print(f"AudioProcessor | ERROR: Status is 'error' for {component_name}, setting overall_ok=False", file=sys.stderr)
+            print(f"AudioProcessor | ERROR: {component_name} error details: {error_msg}", file=sys.stderr)
         elif status == "empty":
             # Empty is OK (e.g., silent video)
             pass
@@ -889,6 +1055,68 @@ def main() -> int:
     # Ensure progress bar is closed
     close_progress_bar()
     
+    # Log final status for debugging
+    if not overall_ok:
+        safe_log_warning(logger, f"AudioProcessor | overall_ok=False, returning exit code 2")
+        # Print to stderr so errors are always visible even if logging is suppressed
+        print("AudioProcessor | ERROR: overall_ok=False, returning exit code 2", file=sys.stderr)
+        # Log which extractors had errors
+        error_extractors = []
+        for key, component_name in key_to_component.items():
+            r = extractor_results.get(key) or {}
+            success = bool(r.get("success"))
+            if not success:
+                error_extractors.append(f"{component_name} (key={key})")
+        if error_extractors:
+            error_msg = f"AudioProcessor | Extractors with errors: {', '.join(error_extractors)}"
+            safe_log_warning(logger, error_msg)
+            print(error_msg, file=sys.stderr)
+        else:
+            # Check for validation errors or other issues
+            print("AudioProcessor | ERROR: No extractor failures found, but overall_ok=False. Check validation errors above.", file=sys.stderr)
+    else:
+        try:
+            logger.info(f"AudioProcessor | overall_ok=True, returning exit code 0")
+        except Exception:
+            pass  # Best-effort logging
+
+    try:
+        sum_extractor_wall_ms = sum(
+            float((timings_by_extractor.get(k) or {}).get("wall_ms") or 0.0) for k in extractor_keys
+        )
+        wall_ms_total = float(final_total_elapsed * 1000.0)
+        run_ext = float(stage_timings.get("run_extractors_wall_ms") or 0.0)
+        save_ms = float(stage_timings.get("save_npz_ms") or 0.0)
+        upd_ms = float(stage_timings.get("update_manifest_ms") or 0.0)
+        pre_internal = float(stage_timings.get("wall_subprocess_before_internal_t0_ms") or 0.0)
+        breakdown = {
+            "main_processor_init_ms": float(stage_timings.get("main_processor_init_ms") or 0.0),
+            "wall_subprocess_before_internal_t0_ms": pre_internal,
+            "wall_before_run_extractors_ms": float(stage_timings.get("wall_before_run_extractors_ms") or 0.0),
+            "run_extractors_wall_ms": run_ext,
+            "sum_extractor_wall_ms": sum_extractor_wall_ms,
+            "extractors_orchestration_overhead_ms": max(0.0, run_ext - sum_extractor_wall_ms),
+            "save_npz_stage_ms": save_ms,
+            "update_manifest_components_ms": upd_ms,
+            "load_input_ms": float(stage_timings.get("load_input_ms") or 0.0),
+            "audio_processor_internal_wall_ms": wall_ms_total,
+            "note": "internal_wall is wall-time from run_cli t0 (after MainProcessor init + segment load). "
+            "main_processor_init_ms is part of wall_subprocess_before_internal_t0_ms. "
+            "Per-row manifest durations include NPZ/validate/render per extractor; sum_extractor_wall_ms is inference-only.",
+        }
+        if subproc_wall_t0 is not None:
+            sub_wall = float((time.time() - subproc_wall_t0) * 1000.0)
+            breakdown["audio_subprocess_wall_ms"] = sub_wall
+            breakdown["subprocess_residual_ms"] = max(
+                0.0,
+                sub_wall - pre_internal - wall_ms_total,
+            )
+        manifest.run_meta["audio_processor_timings_ms"] = breakdown
+        logger.info("AudioProcessor | wall timing breakdown (ms): %s", json.dumps(breakdown, ensure_ascii=False))
+        manifest.flush()
+    except Exception:
+        pass
+
     return 0 if overall_ok else 2
 
 if __name__ == "__main__":

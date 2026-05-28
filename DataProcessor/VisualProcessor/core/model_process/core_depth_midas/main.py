@@ -9,27 +9,30 @@ Design decisions and behavior (short):
   * <rs_path>/core_depth_midas/depth.npz  -- compressed NPZ containing:
       - depth_maps: float32 array (N, out_h, out_w)
       - frame_indices: int32 (N,)
-      - version, model_name, created_at, total_frames
+      - meta (dict, object-array)  # includes created_at, models_used, run identity, etc.
 - Triton-only: preprocessing lives in Triton; no torch.hub / no local torch engine.
 """
 
+import sys
+from pathlib import Path
+# Ensure VisualProcessor root is first on path so "utils" resolves to VisualProcessor/utils (subprocess entry point).
+_vp = Path(__file__).resolve().parent  # core_depth_midas/
+for _ in range(3):
+    _vp = _vp.parent  # -> model_process -> core -> VisualProcessor
+sys.path.insert(0, str(_vp))
+
 import argparse
 import os
-import sys
 import tempfile
 import time
 from datetime import datetime
-from pathlib import Path
 from typing import Any, Dict, List, Tuple, Optional
 
 import numpy as np      # type: ignore
 import cv2              # type: ignore
 
-_path = os.path.dirname(os.path.dirname(os.path.dirname(os.path.dirname(__file__))))
-if _path not in sys.path:
-    sys.path.append(_path)
 # repo root (needed for dp_triton)
-_root = os.path.dirname(_path)
+_root = str(_vp.parent)
 if _root not in sys.path:
     sys.path.append(_root)
 
@@ -39,11 +42,46 @@ from utils.utilites import load_metadata
 from utils.meta_builder import apply_models_meta, model_used
 from utils.artifact_validator import validate_npz
 
-VERSION = "2.0"
+VERSION = "2.2"
 NAME = "core_depth_midas"
-SCHEMA_VERSION = "core_depth_midas_npz_v1"
+SCHEMA_VERSION = "core_depth_midas_npz_v3"
 ARTIFACT_FILENAME = "depth.npz"
 LOGGER = get_logger(NAME)
+
+
+def _resource_profile_snapshot() -> Dict[str, Any]:
+    """
+    Best-effort resource snapshot for audit/profiling.
+    Enabled only when VP_RESOURCE_PROFILE=1|true|yes.
+    """
+    v = str(os.environ.get("VP_RESOURCE_PROFILE") or "").strip().lower()
+    if v not in ("1", "true", "yes", "y", "on"):
+        return {}
+
+    out: Dict[str, Any] = {}
+    try:
+        import psutil  # type: ignore
+
+        p = psutil.Process(os.getpid())
+        rss = int(getattr(p.memory_info(), "rss", 0) or 0)
+        out["rss_bytes"] = rss
+        out["rss_mib"] = float(rss) / (1024.0 * 1024.0)
+    except Exception:
+        pass
+
+    try:
+        import torch  # type: ignore
+
+        if hasattr(torch, "cuda") and torch.cuda.is_available():
+            try:
+                out["cuda_max_memory_allocated_bytes"] = int(torch.cuda.max_memory_allocated())
+                out["cuda_max_memory_reserved_bytes"] = int(torch.cuda.max_memory_reserved())
+            except Exception:
+                pass
+    except Exception:
+        pass
+
+    return out
 
 
 def _atomic_save_npz(out_path: str, **kwargs: Any) -> None:
@@ -486,6 +524,51 @@ def main():
         stage="post_process",
     )
 
+    # -------------------------
+    # Backend-friendly proxies (Audit v3)
+    # -------------------------
+    # Normalized maps (robust per-frame scale using p05/p95) + proxy scores.
+    # MiDaS depth is relative; normalized maps are convenient for backend visualization and downstream heuristics.
+    eps = np.float32(1e-6)
+    denom = (depth_p95 - depth_p05).astype(np.float32)
+    denom = np.where(np.isfinite(denom) & (denom > 0), denom, eps).astype(np.float32)
+    depth_maps_norm = ((depth_maps - depth_p05[:, None, None]) / denom[:, None, None]).astype(np.float32)
+    depth_maps_norm = np.clip(depth_maps_norm, 0.0, 1.0).astype(np.float32)
+
+    depth_range_robust = (depth_p95 - depth_p05).astype(np.float32)  # (N,)
+    foreground_background_separation_proxy = (depth_range_robust / (depth_std.astype(np.float32) + eps)).astype(np.float32)
+
+    # Complexity proxy: mean absolute gradient magnitude on normalized maps.
+    gx = np.abs(np.diff(depth_maps_norm, axis=2))  # (N,H,W-1)
+    gy = np.abs(np.diff(depth_maps_norm, axis=1))  # (N,H-1,W)
+    depth_complexity_score = (0.5 * (gx.mean(axis=(1, 2)) + gy.mean(axis=(1, 2)))).astype(np.float32)
+
+    # Preview maps for backend: pick up to K maps uniformly over sampled timeline.
+    preview_k = 10
+    n_prev = int(min(preview_k, depth_maps.shape[0]))
+    if n_prev <= 0:
+        raise RuntimeError(f"{NAME} | internal error: n_prev<=0 with N={depth_maps.shape[0]}")
+    if n_prev == depth_maps.shape[0]:
+        sel = np.arange(depth_maps.shape[0], dtype=np.int64)
+    else:
+        sel = np.unique(np.round(np.linspace(0, depth_maps.shape[0] - 1, n_prev)).astype(np.int64))
+        # If rounding caused fewer unique indices, pad deterministically.
+        if sel.size < n_prev:
+            missing = n_prev - int(sel.size)
+            tail = np.arange(depth_maps.shape[0] - 1, -1, -1, dtype=np.int64)
+            for t in tail:
+                if int(t) not in set(map(int, sel.tolist())):
+                    sel = np.append(sel, t)
+                    missing -= 1
+                    if missing <= 0:
+                        break
+            sel = np.sort(sel.astype(np.int64))
+
+    preview_frame_indices = np.asarray(frame_indices, dtype=np.int32)[sel]
+    preview_times_s = times_s.astype(np.float32)[sel]
+    preview_depth_maps = depth_maps[sel].astype(np.float32, copy=False)
+    preview_depth_maps_norm = depth_maps_norm[sel].astype(np.float32, copy=False)
+
     out_path = os.path.join(core_dir, ARTIFACT_FILENAME)
     created_at = datetime.utcnow().isoformat()
 
@@ -512,6 +595,9 @@ def main():
         "device": "cuda",
         "triton_preprocess_preset": str(args.triton_preprocess_preset),
         "stage_timings_ms": stage_timings_ms,
+        # Backend contract
+        "backend_proxy_version": "core_depth_midas_backend_proxy_v1",
+        "preview_k": int(n_prev),
     }
     required_run_keys = ["platform_id", "video_id", "run_id", "sampling_policy_version", "config_hash"]
     missing = [k for k in required_run_keys if not meta.get(k)]
@@ -523,9 +609,14 @@ def main():
     meta_out["dataprocessor_version"] = str(meta.get("dataprocessor_version") or "unknown")
 
     # PR-3: model system baseline
-    meta_out = apply_models_meta(
-        meta_out,
-        models_used=[
+    # Prefer ModelManager-provided identity when --triton-model-spec is used.
+    models_used_list: List[Dict[str, Any]] = []
+    if isinstance(mm_entry, dict) and isinstance(mm_entry.get("models_used_entry"), dict):
+        models_used_list = [mm_entry["models_used_entry"]]
+        meta_out["triton_model_spec"] = str(args.triton_model_spec)
+        meta_out["triton_model_name"] = str(args.triton_model_name)
+    else:
+        models_used_list = [
             model_used(
                 model_name=str(args.triton_model_name),
                 model_version=str(args.model_version or "unknown"),
@@ -535,23 +626,29 @@ def main():
                 precision=str(args.precision or "unknown"),
                 device="cuda",
             )
-        ],
-    )
+        ]
+    meta_out = apply_models_meta(meta_out, models_used=models_used_list)
+    rp_before = _resource_profile_snapshot()
+    if isinstance(rp_before, dict) and rp_before:
+        meta_out["resource_profile_before"] = dict(rp_before)
 
     _atomic_save_npz(
         out_path,
-        # legacy fields (kept)
-        version=VERSION,
-        model_name=str(args.triton_model_name),
-        created_at=created_at,
-        total_frames=total_frames,
         frame_indices=np.array(frame_indices, dtype=np.int32),
         times_s=times_s.astype(np.float32),
         depth_maps=depth_maps,  # shape (N, out_h, out_w), dtype float32
+        depth_maps_norm=depth_maps_norm,  # (N,out_h,out_w) float32 in [0,1]
         depth_mean=depth_mean.astype(np.float32),
         depth_std=depth_std.astype(np.float32),
         depth_p05=depth_p05.astype(np.float32),
         depth_p95=depth_p95.astype(np.float32),
+        depth_range_robust=depth_range_robust.astype(np.float32),
+        depth_complexity_score=depth_complexity_score.astype(np.float32),
+        foreground_background_separation_proxy=foreground_background_separation_proxy.astype(np.float32),
+        preview_frame_indices=preview_frame_indices.astype(np.int32),
+        preview_times_s=preview_times_s.astype(np.float32),
+        preview_depth_maps=preview_depth_maps.astype(np.float32, copy=False),
+        preview_depth_maps_norm=preview_depth_maps_norm.astype(np.float32, copy=False),
         # canonical meta (required by artifact_validator)
         meta=np.asarray(meta_out, dtype=object),
     )

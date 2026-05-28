@@ -28,6 +28,11 @@ import numpy as np
 from src.core.base_extractor import BaseExtractor, ExtractorResult
 from src.core.audio_utils import AudioUtils
 
+from .utils.resource_profile import (
+    capture_voice_quality_resource_profile,
+    is_voice_quality_resource_profile_enabled,
+)
+
 logger = logging.getLogger(__name__)
 
 # Contract version for downstream extractors compatibility validation
@@ -41,7 +46,7 @@ class VoiceQualityExtractor(BaseExtractor):
     """Экстрактор метрик качества голоса: jitter, shimmer, HNR-подобная метрика."""
 
     name = "voice_quality"
-    version = "2.0.0"
+    version = "3.0.1"
     description = "Прокси метрики качества голоса: jitter, shimmer, HNR-подобная"
     category = "voice"
     dependencies = ["librosa", "numpy"]
@@ -213,17 +218,18 @@ class VoiceQualityExtractor(BaseExtractor):
 
     def _validate_output(self, features: Dict[str, Any]) -> tuple[bool, Optional[str]]:
         """
-        Полная валидация выходных данных: проверка диапазонов, NaN/inf, консистентность.
-
-        Args:
-            features: Словарь с выходными данными
-
-        Returns:
-            (is_valid, error_message)
+        Валидация выходных данных. Audit v3: NaN допустим в per-segment массивах (failed сегменты).
+        Model-facing скаляры не должны быть NaN/inf.
         """
         try:
-            # Check for NaN/inf
+            # Skip per-segment arrays (NaN allowed for failed segments)
+            skip_keys = {"segment_start_sec", "segment_end_sec", "segment_center_sec", "segment_mask",
+                        "jitter_by_segment", "shimmer_by_segment", "hnr_by_segment", "_features_enabled",
+                        "segment_centers_sec", "segment_durations_sec"}
+
             for key, value in features.items():
+                if key in skip_keys or key.startswith("_"):
+                    continue
                 if isinstance(value, (int, float)):
                     if np.isnan(value) or np.isinf(value):
                         return False, f"voice_quality | {key} contains NaN or inf: {value}"
@@ -286,18 +292,31 @@ class VoiceQualityExtractor(BaseExtractor):
         """
         # Если доступны результаты pitch_extractor, используем их
         if self.pitch_payload is not None:
-            # Извлекаем f0 из pitch_payload
             f0_series = None
-            if self.f0_method == "pyin" and "f0_series_pyin" in self.pitch_payload:
-                f0_series = self.pitch_payload.get("f0_series_pyin")
-            elif self.f0_method == "yin" and "f0_series_yin" in self.pitch_payload:
-                f0_series = self.pitch_payload.get("f0_series_yin")
-            elif self.f0_method == "torchcrepe" and "f0_series_torchcrepe" in self.pitch_payload:
-                f0_series = self.pitch_payload.get("f0_series_torchcrepe")
-            elif "f0_series_pyin" in self.pitch_payload:
-                f0_series = self.pitch_payload.get("f0_series_pyin")  # Fallback to pyin if available
-            elif "f0_series_yin" in self.pitch_payload:
-                f0_series = self.pitch_payload.get("f0_series_yin")  # Fallback to yin if available
+            # Q13: Load f0 from .npy when path is present (Audit v3: f0_series only in debug .npy)
+            for npy_key in ["f0_series_npy", "f0_series_torchcrepe_npy"]:
+                npy_path = self.pitch_payload.get(npy_key)
+                if isinstance(npy_path, str) and npy_path and os.path.exists(npy_path):
+                    try:
+                        f0_series = np.load(npy_path)
+                        f0_series = np.asarray(f0_series, dtype=np.float32)
+                        break
+                    except Exception:
+                        pass
+            # Fallback: in-memory f0_series (legacy)
+            if f0_series is None:
+                if self.f0_method == "pyin" and "f0_series_pyin" in self.pitch_payload:
+                    f0_series = self.pitch_payload.get("f0_series_pyin")
+                elif self.f0_method == "yin" and "f0_series_yin" in self.pitch_payload:
+                    f0_series = self.pitch_payload.get("f0_series_yin")
+                elif self.f0_method == "torchcrepe" and "f0_series_torchcrepe" in self.pitch_payload:
+                    f0_series = self.pitch_payload.get("f0_series_torchcrepe")
+                elif "f0_series_pyin" in self.pitch_payload:
+                    f0_series = self.pitch_payload.get("f0_series_pyin")
+                elif "f0_series_yin" in self.pitch_payload:
+                    f0_series = self.pitch_payload.get("f0_series_yin")
+                elif "f0_series_torchcrepe" in self.pitch_payload:
+                    f0_series = self.pitch_payload.get("f0_series_torchcrepe")
 
             if f0_series is not None:
                 if isinstance(f0_series, list):
@@ -555,6 +574,14 @@ class VoiceQualityExtractor(BaseExtractor):
             ExtractorResult с метриками качества голоса
         """
         start_time = time.time()
+        t0_total = time.perf_counter()
+        stage_timings_ms: Dict[str, float] = {}
+
+        voice_quality_resource_profile: Optional[Dict[str, Any]] = None
+        if is_voice_quality_resource_profile_enabled():
+            voice_quality_resource_profile = {
+                "at_start": capture_voice_quality_resource_profile(stage="at_start"),
+            }
         try:
             if not self._validate_input(input_uri):
                 error_code = self._classify_error(ValueError("Invalid input"), "audio_load_failed")
@@ -569,20 +596,26 @@ class VoiceQualityExtractor(BaseExtractor):
             # Load audio
             if self.progress_callback:
                 self.progress_callback("voice_quality", 0, 6, "Loading audio")
+            t0 = time.perf_counter()
             y_t, sr = self.audio_utils.load_audio(input_uri, self.sample_rate)
             y = self.audio_utils.to_numpy(y_t)
+            stage_timings_ms["load_audio_ms"] = (time.perf_counter() - t0) * 1000.0
             if y.ndim == 2:
                 y = np.mean(y, axis=0) if self.average_channels else y[0]
 
             # Normalize audio if enabled
+            t0 = time.perf_counter()
             y = self._normalize_audio(y)
+            stage_timings_ms["normalize_audio_ms"] = (time.perf_counter() - t0) * 1000.0
 
             duration = float(y.shape[-1] / sr)
 
             # Estimate f0 (fail-fast, no-fallback)
             if self.progress_callback:
                 self.progress_callback("voice_quality", 1, 6, f"Estimating f0 ({self.f0_method})")
+            t0 = time.perf_counter()
             f0 = self._estimate_f0(y, sr)
+            stage_timings_ms["estimate_f0_ms"] = (time.perf_counter() - t0) * 1000.0
 
             if f0.size == 0:
                 error_code = self._classify_error(RuntimeError("No valid f0 values"), "insufficient_data")
@@ -595,12 +628,15 @@ class VoiceQualityExtractor(BaseExtractor):
             # Compute metrics
             if self.progress_callback:
                 self.progress_callback("voice_quality", 2, 6, "Computing jitter")
+            t0 = time.perf_counter()
             features = self._compute_voice_quality_metrics(y, sr, f0)
+            stage_timings_ms["compute_metrics_ms"] = (time.perf_counter() - t0) * 1000.0
 
             # Save time series if needed
             if self.progress_callback:
                 self.progress_callback("voice_quality", 5, 6, "Saving artifacts")
             if self.enable_time_series:
+                t0 = time.perf_counter()
                 # Save f0
                 if "_f0" in features:
                     f0_npy_path = self._save_time_series_npy(features["_f0"], "f0")
@@ -627,6 +663,7 @@ class VoiceQualityExtractor(BaseExtractor):
                     else:
                         features["hnr_vals"] = features["_hnr_vals"].astype(np.float32).tolist()
                     del features["_hnr_vals"]
+                stage_timings_ms["save_artifacts_ms"] = (time.perf_counter() - t0) * 1000.0
 
             # Add metadata
             features["sample_rate"] = int(sr)
@@ -655,7 +692,9 @@ class VoiceQualityExtractor(BaseExtractor):
             features["_features_enabled"] = features_enabled
 
             # Validate output
+            t0 = time.perf_counter()
             is_valid, error_msg = self._validate_output(features)
+            stage_timings_ms["validate_output_ms"] = (time.perf_counter() - t0) * 1000.0
             if not is_valid:
                 error_code = self._classify_error(ValueError(error_msg), "validation_failed")
                 return self._create_result(
@@ -663,6 +702,12 @@ class VoiceQualityExtractor(BaseExtractor):
                     error=f"voice_quality | Validation failed: {error_msg} (error_code={error_code})",
                     processing_time=time.time() - start_time,
                 )
+
+            stage_timings_ms["total_ms"] = (time.perf_counter() - t0_total) * 1000.0
+            features["stage_timings_ms"] = stage_timings_ms
+            if voice_quality_resource_profile is not None:
+                voice_quality_resource_profile["at_end"] = capture_voice_quality_resource_profile(stage="at_end")
+                features["voice_quality_resource_profile"] = voice_quality_resource_profile
 
             dt = time.time() - start_time
             self._log_extraction_success(input_uri, dt)
@@ -699,6 +744,14 @@ class VoiceQualityExtractor(BaseExtractor):
             ExtractorResult с агрегированными метриками по сегментам
         """
         start_time = time.time()
+        t0_total = time.perf_counter()
+        stage_timings_ms: Dict[str, float] = {}
+
+        voice_quality_resource_profile: Optional[Dict[str, Any]] = None
+        if is_voice_quality_resource_profile_enabled():
+            voice_quality_resource_profile = {
+                "at_start": capture_voice_quality_resource_profile(stage="at_start"),
+            }
         try:
             if not self._validate_input(input_uri):
                 error_code = self._classify_error(ValueError("Invalid input"), "audio_load_failed")
@@ -716,102 +769,168 @@ class VoiceQualityExtractor(BaseExtractor):
             progress_report_interval = max(1, total_segments // 10) if total_segments >= 10 else 1
             last_reported_pct = -1
 
-            # Process segments
+            # Process segments (Audit v3: canonical axis, partial failures, per-segment arrays)
+            segment_start_sec: List[float] = []
+            segment_end_sec: List[float] = []
+            segment_center_sec: List[float] = []
+            segment_mask: List[bool] = []
+            jitter_by_segment: List[float] = []
+            shimmer_by_segment: List[float] = []
+            hnr_by_segment: List[float] = []
             all_jitter: List[float] = []
             all_shimmer: List[float] = []
             all_hnr: List[float] = []
             all_f0_mean: List[float] = []
             all_f0_stability: List[float] = []
-            segment_centers: List[float] = []
             segment_durations: List[float] = []
 
             seg_p = max(1, int(segment_parallelism or 1))
             inflight = int(max_inflight) if max_inflight is not None else seg_p
             inflight = max(1, int(inflight))
 
-            def _process_segment(i: int, seg: dict) -> tuple[int, float, Dict[str, Any], float]:
-                """Обработать один сегмент."""
-                ss = int(seg.get("start_sample", 0))
-                es = int(seg.get("end_sample", 0))
-                center_sec = float(seg.get("center_sec", 0.0))
+            def _process_segment(i: int, seg: dict) -> tuple[int, float, float, float, Dict[str, Any], float, bool]:
+                """Process one segment; on failure return ok=False, NaN for metrics."""
                 start_sec = float(seg.get("start_sec", 0.0))
                 end_sec = float(seg.get("end_sec", 0.0))
+                center_sec = float(seg.get("center_sec", 0.0))
                 duration = end_sec - start_sec
-
-                # Load audio segment
-                waveform_t, sr = self.audio_utils.load_audio_segment(
-                    input_uri,
-                    start_sample=ss,
-                    end_sample=es,
-                    target_sr=self.sample_rate,
-                    mix_to_mono=self.average_channels,
-                )
-                waveform_np = self.audio_utils.to_numpy(waveform_t)
-                if waveform_np.ndim == 2:
-                    waveform_np = np.mean(waveform_np, axis=0) if self.average_channels else waveform_np[0]
-
-                # Normalize audio if enabled
-                waveform_np = self._normalize_audio(waveform_np)
-
-                # Estimate f0 (fail-fast, no-fallback)
-                f0 = self._estimate_f0(waveform_np, int(sr))
-
-                # Compute metrics
-                seg_features = self._compute_voice_quality_metrics(waveform_np, int(sr), f0)
-
-                return i, center_sec, seg_features, duration
+                try:
+                    ss = int(seg.get("start_sample", 0))
+                    es = int(seg.get("end_sample", 0))
+                    waveform_t, sr = self.audio_utils.load_audio_segment(
+                        input_uri,
+                        start_sample=ss,
+                        end_sample=es,
+                        target_sr=self.sample_rate,
+                        mix_to_mono=self.average_channels,
+                    )
+                    waveform_np = self.audio_utils.to_numpy(waveform_t)
+                    if waveform_np.ndim == 2:
+                        waveform_np = np.mean(waveform_np, axis=0) if self.average_channels else waveform_np[0]
+                    waveform_np = self._normalize_audio(waveform_np)
+                    f0 = self._estimate_f0(waveform_np, int(sr))
+                    seg_features = self._compute_voice_quality_metrics(waveform_np, int(sr), f0)
+                    return i, start_sec, end_sec, center_sec, seg_features, duration, True
+                except Exception as e:
+                    logger.warning(f"voice_quality | segment {i} failed: {e}")
+                    nan_features = {}
+                    if self.enable_jitter:
+                        nan_features["vq_jitter"] = float("nan")
+                    if self.enable_shimmer:
+                        nan_features["vq_shimmer"] = float("nan")
+                    if self.enable_hnr:
+                        nan_features["vq_hnr_like_db"] = float("nan")
+                    if self.enable_f0_stats:
+                        nan_features["vq_f0_mean"] = float("nan")
+                        nan_features["vq_f0_stability"] = float("nan")
+                    return i, start_sec, end_sec, center_sec, nan_features, duration, False
 
             # Process segments (sequential or parallel)
+            results_by_idx: Dict[int, tuple] = {}
+            t0_proc = time.perf_counter()
             if seg_p <= 1:
                 for seg_idx, seg in enumerate(segments):
-                    _, center_sec, seg_features, duration = _process_segment(seg_idx, seg)
-                    if self.enable_jitter:
-                        all_jitter.append(seg_features.get("vq_jitter", 0.0))
-                    if self.enable_shimmer:
-                        all_shimmer.append(seg_features.get("vq_shimmer", 0.0))
-                    if self.enable_hnr:
-                        all_hnr.append(seg_features.get("vq_hnr_like_db", 0.0))
-                    if self.enable_f0_stats:
-                        all_f0_mean.append(seg_features.get("vq_f0_mean", 0.0))
-                        all_f0_stability.append(seg_features.get("vq_f0_stability", 0.0))
-                    segment_centers.append(center_sec)
-                    segment_durations.append(duration)
-
-                    # Progress reporting
+                    i, s0, s1, c, seg_features, dur, ok = _process_segment(seg_idx, seg)
+                    results_by_idx[i] = (s0, s1, c, seg_features, dur, ok)
                     if self.progress_callback and seg_idx % progress_report_interval == 0:
                         pct = int((seg_idx + 1) * 100 / total_segments)
                         if pct != last_reported_pct:
                             self.progress_callback("voice_quality", seg_idx + 1, total_segments, f"Processed {seg_idx + 1}/{total_segments} segments")
                             last_reported_pct = pct
             else:
-                # Parallel processing
                 workers = max(1, min(int(seg_p), int(inflight)))
                 with ThreadPoolExecutor(max_workers=workers) as ex:
                     futures = [ex.submit(_process_segment, i, seg) for i, seg in enumerate(segments)]
                     completed = 0
                     for fut in as_completed(futures):
-                        i, center_sec, seg_features, duration = fut.result()
-                        if self.enable_jitter:
-                            all_jitter.append(seg_features.get("vq_jitter", 0.0))
-                        if self.enable_shimmer:
-                            all_shimmer.append(seg_features.get("vq_shimmer", 0.0))
-                        if self.enable_hnr:
-                            all_hnr.append(seg_features.get("vq_hnr_like_db", 0.0))
-                        if self.enable_f0_stats:
-                            all_f0_mean.append(seg_features.get("vq_f0_mean", 0.0))
-                            all_f0_stability.append(seg_features.get("vq_f0_stability", 0.0))
-                        segment_centers.append(center_sec)
-                        segment_durations.append(duration)
+                        i, s0, s1, c, seg_features, dur, ok = fut.result()
+                        results_by_idx[int(i)] = (s0, s1, c, seg_features, dur, ok)
                         completed += 1
-
-                        # Progress reporting
                         if self.progress_callback and completed % progress_report_interval == 0:
                             pct = int(completed * 100 / total_segments)
                             if pct != last_reported_pct:
                                 self.progress_callback("voice_quality", completed, total_segments, f"Processed {completed}/{total_segments} segments")
                                 last_reported_pct = pct
+            stage_timings_ms["process_segments_ms"] = (time.perf_counter() - t0_proc) * 1000.0
 
-            # Aggregate metrics across all segments
+            # Build canonical axis and per-segment arrays (in order)
+            for idx in range(len(segments)):
+                r = results_by_idx.get(idx)
+                if r is None:
+                    seg = segments[idx]
+                    s0, s1, c = float(seg.get("start_sec", 0.0)), float(seg.get("end_sec", 0.0)), float(seg.get("center_sec", 0.0))
+                    seg_features, dur, ok = {}, 0.0, False
+                else:
+                    s0, s1, c, seg_features, dur, ok = r
+                segment_start_sec.append(s0)
+                segment_end_sec.append(s1)
+                segment_center_sec.append(c)
+                segment_mask.append(ok)
+                segment_durations.append(dur)
+                jv = seg_features.get("vq_jitter", float("nan"))
+                sv = seg_features.get("vq_shimmer", float("nan"))
+                hv = seg_features.get("vq_hnr_like_db", float("nan"))
+                if self.enable_jitter:
+                    jitter_by_segment.append(jv)
+                    if ok and np.isfinite(jv):
+                        all_jitter.append(jv)
+                if self.enable_shimmer:
+                    shimmer_by_segment.append(sv)
+                    if ok and np.isfinite(sv):
+                        all_shimmer.append(sv)
+                if self.enable_hnr:
+                    hnr_by_segment.append(hv)
+                    if ok and np.isfinite(hv):
+                        all_hnr.append(hv)
+                if self.enable_f0_stats:
+                    f0m = seg_features.get("vq_f0_mean", float("nan"))
+                    f0s = seg_features.get("vq_f0_stability", float("nan"))
+                    if ok and np.isfinite(f0m):
+                        all_f0_mean.append(f0m)
+                    if ok and np.isfinite(f0s):
+                        all_f0_stability.append(f0s)
+
+            n_ok = sum(segment_mask)
+            if n_ok == 0:
+                # Empty semantics: all segments failed
+                features_enabled = []
+                if self.enable_jitter:
+                    features_enabled.append("jitter")
+                if self.enable_shimmer:
+                    features_enabled.append("shimmer")
+                if self.enable_hnr:
+                    features_enabled.append("hnr")
+                if self.enable_f0_stats:
+                    features_enabled.append("f0_stats")
+                if self.enable_time_series:
+                    features_enabled.append("time_series")
+                empty_payload = {
+                    "status": "empty",
+                    "empty_reason": "voice_quality_all_segments_failed",
+                    "segment_start_sec": segment_start_sec,
+                    "segment_end_sec": segment_end_sec,
+                    "segment_center_sec": segment_center_sec,
+                    "segment_mask": segment_mask,
+                    "jitter_by_segment": jitter_by_segment if self.enable_jitter else [],
+                    "shimmer_by_segment": shimmer_by_segment if self.enable_shimmer else [],
+                    "hnr_by_segment": hnr_by_segment if self.enable_hnr else [],
+                    "sample_rate": int(self.sample_rate),
+                    "duration": sum(segment_durations),
+                    "segments_count": total_segments,
+                    "f0_method": self.f0_method,
+                    "f0_fmin": self.f0_fmin,
+                    "f0_fmax": self.f0_fmax,
+                    "voice_quality_contract_version": VOICE_QUALITY_CONTRACT_VERSION,
+                    "_features_enabled": features_enabled,
+                }
+                stage_timings_ms["total_ms"] = (time.perf_counter() - t0_total) * 1000.0
+                empty_payload["stage_timings_ms"] = stage_timings_ms
+                if voice_quality_resource_profile is not None:
+                    voice_quality_resource_profile["at_end"] = capture_voice_quality_resource_profile(stage="at_end")
+                    empty_payload["voice_quality_resource_profile"] = voice_quality_resource_profile
+                return self._create_result(True, payload=empty_payload, processing_time=time.time() - start_time)
+
+            # Aggregate metrics across valid segments only
             features: Dict[str, Any] = {}
 
             if self.enable_jitter and all_jitter:
@@ -840,7 +959,9 @@ class VoiceQualityExtractor(BaseExtractor):
                 features["vq_f0_std"] = float(np.std(all_f0_mean))
                 features["vq_f0_min"] = float(np.min(all_f0_mean))
                 features["vq_f0_max"] = float(np.max(all_f0_mean))
+                features["vq_f0_median"] = float(np.median(all_f0_mean))
                 features["vq_f0_stability"] = float(np.mean(all_f0_stability))
+                features["vq_voice_presence_ratio"] = float(n_ok / total_segments) if total_segments else 0.0
 
             # Voice quality score
             if self.enable_jitter and self.enable_shimmer and self.enable_hnr:
@@ -881,10 +1002,22 @@ class VoiceQualityExtractor(BaseExtractor):
                 features_enabled.append("time_series")
             features["_features_enabled"] = features_enabled
 
-            # Add segment-level time series if enabled
+            # Audit v3: canonical axis and per-segment arrays
+            features["segment_start_sec"] = segment_start_sec
+            features["segment_end_sec"] = segment_end_sec
+            features["segment_center_sec"] = segment_center_sec
+            features["segment_mask"] = segment_mask
+            if self.enable_jitter:
+                features["jitter_by_segment"] = jitter_by_segment
+            if self.enable_shimmer:
+                features["shimmer_by_segment"] = shimmer_by_segment
+            if self.enable_hnr:
+                features["hnr_by_segment"] = hnr_by_segment
+            features["segment_durations_sec"] = segment_durations
+
+            # Add segment-level time series if enabled (legacy keys)
             if self.enable_time_series:
-                features["segment_centers_sec"] = segment_centers
-                features["segment_durations_sec"] = segment_durations
+                features["segment_centers_sec"] = segment_center_sec
 
             # Validate output
             is_valid, error_msg = self._validate_output(features)
@@ -895,6 +1028,12 @@ class VoiceQualityExtractor(BaseExtractor):
                     error=f"voice_quality | Validation failed: {error_msg} (error_code={error_code})",
                     processing_time=time.time() - start_time,
                 )
+
+            stage_timings_ms["total_ms"] = (time.perf_counter() - t0_total) * 1000.0
+            features["stage_timings_ms"] = stage_timings_ms
+            if voice_quality_resource_profile is not None:
+                voice_quality_resource_profile["at_end"] = capture_voice_quality_resource_profile(stage="at_end")
+                features["voice_quality_resource_profile"] = voice_quality_resource_profile
 
             dt = time.time() - start_time
             return self._create_result(True, payload=features, processing_time=dt)

@@ -1,0 +1,2 @@
+# Dependencies for text_scoring module
+# Add module-specific dependencies here

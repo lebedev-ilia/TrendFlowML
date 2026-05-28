@@ -15,7 +15,7 @@ from typing import Any, Dict, List, Optional
 
 sys.path.append(os.path.dirname(os.path.dirname(os.path.dirname(__file__))))
 
-from modules.frames_composition.balance_composition import FramesCompositionModule
+from modules.frames_composition.utils.balance_composition import FramesCompositionModule
 from utils.logger import get_logger
 
 MODULE_NAME = "frames_composition"

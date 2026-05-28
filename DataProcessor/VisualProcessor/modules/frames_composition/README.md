@@ -2,6 +2,9 @@
 
 Baseline-ready модуль VisualProcessor для извлечения **композиционных признаков** по кадрам (union-domain) и их агрегации на уровне видео.
 
+- **Фичи и NPZ-контракт:** `docs/FEATURE_DESCRIPTION.md` (сверка с прогоном, QA, melt).
+- **Валидатор артефакта:** `utils/validate_frames_composition.py` (`--struct --qa --ranges` или батч `--results-base`).
+
 ## Что делает
 
 - Считает набор **классических** композиционных сигналов (якоря/баланс/симметрия/негативное пространство/сложность/ведущие линии) и базовые сигналы по лицам/объектам.
@@ -39,6 +42,10 @@ Baseline-ready модуль VisualProcessor для извлечения **ком
 
 `schema_version`: `frames_composition_npz_v1`
 
+**producer_version**: `2.0.1`  
+**Human schema**: `DataProcessor/VisualProcessor/modules/frames_composition/docs/SCHEMA.md`  
+**Machine schema**: `DataProcessor/VisualProcessor/schemas/frames_composition_npz_v1.json`
+
 Ключи внутри NPZ:
 
 - `frame_indices`: `int32[N]`
@@ -47,6 +54,7 @@ Baseline-ready модуль VisualProcessor для извлечения **ком
 - `feature_values`: `float32[F]`
 - `frame_feature_names`: `object[str][D]`
 - `frame_feature_values`: `float32[N,D]`
+- `frame_feature_present_ratio`: `float32[D]` (доля finite по колонкам; помогает моделям интерпретировать NaN)
 - `meta`: dict (object) — общий baseline meta контракт (producer/run identity/status/models_used/model_signature)
 
 ## CLI
@@ -107,6 +115,16 @@ Segmenter является единственным владельцем samplin
 
 Модуль реализует **внутренний параллелизм** по кадрам (`--num-workers`), но чтение кадров через `FrameManager` защищено от гонок (safe access).
 
+**Default для `--num-workers`**: автоматически определяется как `max(1, min(8, os.cpu_count() or 4))` (минимум 1, максимум 8, по умолчанию 4 если `os.cpu_count()` недоступен).
+
+## Batch Processing
+
+Модуль поддерживает **batch processing** для одновременной обработки нескольких видео:
+
+- **Поддержка батчинга**: модуль реализует `supports_batch = True`
+- **CPU-based**: модуль использует CPU для обработки (не требует GPU)
+- **Изоляция**: каждый видео имеет свой `rs_path` для артефактов
+
 ## Progress / observability
 
 В процессе обработки пишет progress-events в append-only файл:
@@ -114,5 +132,19 @@ Segmenter является единственным владельцем samplin
 - `state/<platform_id>/<video_id>/<run_id>/state_events.jsonl` (PR‑5)
 
 Backend worker читает этот файл и пушит события в WS (`component.progress`).
+
+## Render System
+
+Модуль поддерживает генерацию render-context JSON и HTML debug страницы (аналогично другим модулям):
+
+- **Render-context JSON**: `result_store/.../frames_composition/_render/render_context.json`
+- **HTML debug страница**: `result_store/.../frames_composition/_render/render.html`
+
+Render-context содержит:
+- **Summary**: статистики по композиционным фичам
+- **Timeline**: данные по каждому кадру (key features)
+- **Distributions**: распределения композиционных метрик
+
+HTML страница содержит **offline** графики (без CDN) для визуализации композиционных фич по времени.
 
 

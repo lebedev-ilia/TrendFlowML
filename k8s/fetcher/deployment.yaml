@@ -1,0 +1,72 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: fetcher-worker
+  labels:
+    app: fetcher
+    component: worker
+spec:
+  replicas: 2  # Начать с 2 worker'ов
+  selector:
+    matchLabels:
+      app: fetcher
+      component: worker
+  template:
+    metadata:
+      labels:
+        app: fetcher
+        component: worker
+    spec:
+      containers:
+      - name: worker
+        image: trendflow-fetcher:latest  # Замените на ваш registry
+        imagePullPolicy: Always
+        env:
+        - name: DATABASE_URL
+          valueFrom:
+            secretKeyRef:
+              name: app-secrets
+              key: database-url
+        - name: REDIS_URL
+          valueFrom:
+            secretKeyRef:
+              name: app-secrets
+              key: redis-url
+        - name: MINIO_ENDPOINT
+          value: "http://minio-service:9000"
+        - name: MINIO_ACCESS_KEY
+          valueFrom:
+            secretKeyRef:
+              name: app-secrets
+              key: minio-access-key
+        - name: MINIO_SECRET_KEY
+          valueFrom:
+            secretKeyRef:
+              name: app-secrets
+              key: minio-secret-key
+        - name: LOG_LEVEL
+          value: "INFO"
+        resources:
+          requests:
+            cpu: "1"         # 1 CPU
+            memory: "2Gi"    # 2 GB RAM
+          limits:
+            cpu: "4"         # Максимум 4 CPU
+            memory: "4Gi"    # Максимум 4 GB RAM
+        livenessProbe:
+          exec:
+            command:
+            - /bin/sh
+            - -c
+            - "ps aux | grep '[c]elery' || exit 1"
+          initialDelaySeconds: 60
+          periodSeconds: 30
+        readinessProbe:
+          exec:
+            command:
+            - /bin/sh
+            - -c
+            - "celery -A fetcher.celery_app inspect ping || exit 1"
+          initialDelaySeconds: 30
+          periodSeconds: 10
+

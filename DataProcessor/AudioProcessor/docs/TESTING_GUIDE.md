@@ -1,339 +1,187 @@
 # Руководство по тестированию AudioProcessor
 
+Полное руководство по запуску smoke-тестов и полного тестирования всех 21 extractors.
+
+---
+
+## Оглавление
+
+1. [Обзор](#обзор)
+2. [Структура результатов](#структура-результатов)
+3. [Smoke-тест (1 короткое видео на компонент)](#smoke-тест)
+4. [Полное тестирование (20 видео на компонент)](#полное-тестирование)
+5. [Валидация и анализ](#валидация-и-анализ)
+6. [Устранение ошибок](#устранение-ошибок)
+
+---
+
 ## Обзор
 
-Это руководство описывает процесс тестирования AudioProcessor с поочередным добавлением компонентов и измерением производительности.
+| Режим | Скрипт | Видео на компонент | Результаты |
+|-------|--------|-------------------|------------|
+| **Smoke** | `run_smoke_all_components.sh` | 1 (короткое) | `dp_results/smoke_test/` |
+| **Full** | `run_full_all_components.sh` | 20 | `dp_results/full_test/` |
 
-## Подготовка к тестам
+**Smoke-тест** — быстрая проверка всех компонентов на одном коротком видео. Используется для выявления и исправления ошибок перед полным прогоном.
 
-### 1. Конфигурация через global_config.yaml
+**Полное тестирование** — 20 видео на каждый компонент для валидации качества (по образцу VisualProcessor).
 
-Все тесты проводятся через верхний оркестратор `DataProcessor/main.py` с использованием `global_config.yaml`.
+### Статус smoke-тестов (21/21)
 
-**Важно**: 
-- Для **single-file mode** (одиночная обработка): используйте `DataProcessor/main.py` с `--global-config`
-  - Оптимизации (`batch_processing.enabled: true`) в single-file mode включают GPU batching сегментов и CPU parallelism внутри одного файла
-- Для **batch mode** (батчевая обработка нескольких файлов): запускайте напрямую `AudioProcessor/run_cli.py` с `--audio-input-dir` или `--audio-input-list`
+Все 21 компонент проходят smoke при корректной подготовке:
+- **Подготовка**: `./DataProcessor/scripts/prepare_hf_cache.sh` (emotion_diarization требует WavLM cache)
+- **Валидация**: `./DataProcessor/scripts/validate_smoke_results.sh` → 21/21
 
-### 2. Структура тестирования
+---
 
-1. **Поочередное добавление компонентов**: начните с верха списка в `global_config.yaml` (extractors в порядке: clap, tempo, loudness, asr, ...)
-2. **Два режима тестирования** (для single-file mode через DataProcessor/main.py):
-   - **Без оптимизаций**: 
-     - `batch_processing.enabled: false`
-     - `scheduler.segment_parallelism: 1`
-     - `scheduler.clap_batch_size: 1`
-   - **С оптимизациями**: 
-     - `batch_processing.enabled: true` (включает GPU batching сегментов и CPU parallelism внутри одного файла)
-     - `scheduler.segment_parallelism: 16` (параллелизм для CPU extractors)
-     - `scheduler.clap_batch_size: 16` (размер батча для GPU extractors)
-     - `batch_processing.enable_gpu_batching: true` (GPU batching для ML моделей)
-     - `batch_processing.enable_cpu_parallel: true` (CPU parallelism для CPU extractors)
-     - `batch_processing.enable_video_parallel: true` (параллелизм на уровне видео)
+## Структура результатов
 
-**Примечание**: В single-file mode `batch_processing.enabled: true` не означает обработку нескольких файлов, а включает оптимизации внутри одного файла (GPU batching сегментов, CPU parallelism).
+### Smoke-тест
 
-### 3. Фиксация времени
-
-Время обработки сохраняется в:
-- **NPZ meta**: `stage_timings_ms` и `timings_by_extractor` (для каждого extractor'а)
-- **Batch results**: `processing_time` и `timings.wall_clock.elapsed_s` (для каждого файла в batch mode)
-- **Manifest**: `duration_ms` для каждого компонента
-
-### 4. HTML Render
-
-HTML render генерируется автоматически для каждого extractor'а:
-- **Single-file mode**: `result_store/<platform_id>/<video_id>/<run_id>/<component_name>/_render/render_context.json`
-- **Batch mode**: `result_store/<platform_id>/<video_id>/<run_id>/<component_name>/_render/render_context.json` (для каждого файла)
-
-## Анализ производительности
-
-При тестировании может наблюдаться минимальное ускорение от оптимизаций (особенно на коротких видео). Это нормально и объясняется следующими факторами:
-
-1. **Фиксированное время инициализации модели** (~19% от общего времени) не зависит от `batch_size`
-2. **Последовательная загрузка/предобработка сегментов** (~21% от общего времени) не оптимизируется через `clap_batch_size`
-3. **Небольшое количество сегментов** на коротких видео (например, 29 сегментов для 28.8 секунд видео)
-4. **GPU inference уже быстрый** для одного сегмента
-
-Подробный анализ см. в `docs/PERFORMANCE_ANALYSIS.md`.
-
-## Процесс тестирования
-
-### Шаг 1: Подготовка global_config.yaml
-
-Начните с минимальной конфигурации (только первый extractor):
-
-```yaml
-processors:
-  audio:
-    enabled: true
-    required: false
-    device: "auto"
-    
-    scheduler:
-      segment_parallelism: 1
-      max_inflight: null
-      clap_batch_size: 1
-    
-    # Batch processing: отключено для первого теста
-    batch_processing:
-      enabled: false
-    
-    extractors:
-      clap:
-        enabled: true
-      tempo:
-        enabled: false
-      loudness:
-        enabled: false
-      # ... остальные extractors disabled
+```
+DataProcessor/dp_results/smoke_test/
+└── youtube/
+    ├── smoke_asr_shortest/
+    │   └── smoke_asr_shortest/
+    │       └── asr_extractor/
+    │           └── asr_extractor_features.npz
+    ├── smoke_clap_shortest/
+    │   └── smoke_clap_shortest/
+    │       └── clap_extractor/
+    ├── smoke_tempo_shortest/
+    ├── ... (21 компонент)
+    └── smoke_voice_quality_shortest/
 ```
 
-### Шаг 2: Тест без оптимизаций
+### Полное тестирование
 
-Убедитесь, что в `global_config.yaml`:
-```yaml
-    batch_processing:
-      enabled: false
-    scheduler:
-      segment_parallelism: 1
-      clap_batch_size: 1
 ```
+DataProcessor/dp_results/full_test/
+└── youtube/
+    ├── full_asr_v1/
+    │   └── full_asr_v1/
+    │       └── asr_extractor/
+    ├── full_asr_v2/
+    ├── ...
+    ├── full_asr_v20/
+    ├── full_clap_v1/
+    ├── ...
+    └── full_voice_quality_v20/
+```
+
+Каждый run: `{rs_base}/youtube/{video_id}/{run_id}/{component_name}/`
+
+---
+
+## Smoke-тест
+
+**Цель**: Проверить, что все 21 компонент запускаются без ошибок на одном коротком видео.
+
+**Видео**: `-Q6fnPIybEI.mp4` (~12 сек)
+
+**Перед первым запуском** (для emotion_diarization):
+```bash
+./DataProcessor/scripts/prepare_hf_cache.sh
+```
+
+**Запуск**:
 
 ```bash
-python3 DataProcessor/main.py \
-  --video-path /path/to/video.mp4 \
-  --global-config DataProcessor/configs/global_config.yaml \
-  --run-audio \
-  --platform-id youtube \
-  --video-id test_video_1 \
-  --run-id test_run_1_no_optimizations
+cd "/media/ilya/Новый том/TrendFlowML"
+chmod +x DataProcessor/scripts/run_smoke_all_components.sh
+./DataProcessor/scripts/run_smoke_all_components.sh
 ```
 
-**Что проверять**:
-- Время обработки в NPZ meta (`stage_timings_ms`, `timings_by_extractor`)
-- Корректность HTML render: `result_store/.../<component_name>/_render/render_context.json`
-- Корректность NPZ файла
-- Запишите время обработки для сравнения
+**Логи**: `/tmp/audio_smoke_<component>_shortest.log`
 
-### Шаг 3: Тест с оптимизациями
+**После прогона**: Исправьте ошибки в компонентах, затем повторите smoke до успешного прохождения всех 21.
 
-Обновите `global_config.yaml`:
+---
 
-```yaml
-    scheduler:
-      segment_parallelism: 16  # Параллелизм для CPU extractors
-      max_inflight: null  # null = segment_parallelism
-      clap_batch_size: 16  # Размер батча для GPU extractors
-    
-    batch_processing:
-      enabled: true  # Enable batch processing optimizations (GPU batching + CPU parallelism)
-      max_video_workers: null  # Number of parallel workers for video-level processing (null = auto)
-      enable_video_parallel: true  # Enable parallel processing of multiple videos
-      max_segment_workers: null  # Number of parallel workers for segment-level processing (null = auto)
-      enable_segment_parallel: true  # Enable parallel processing of segments
-      enable_gpu_batching: true  # Use extract_batch() for GPU extractors with supports_batch=true
-      max_segments_per_gpu_batch: null  # Limit batch size for GPU extractors (null = no limit)
-      enable_cpu_parallel: true  # Parallelize CPU extractors across documents using ThreadPoolExecutor
-```
+## Полное тестирование
+
+**Цель**: Полная валидация на 20 видео разной длительности (12 сек — 759 сек).
+
+**Запуск** (последовательно по всем компонентам):
 
 ```bash
-python3 DataProcessor/main.py \
-  --video-path /path/to/video.mp4 \
-  --global-config DataProcessor/configs/global_config.yaml \
-  --run-audio \
-  --platform-id youtube \
-  --video-id test_video_1 \
-  --run-id test_run_1_with_optimizations
+cd "/media/ilya/Новый том/TrendFlowML"
+chmod +x DataProcessor/scripts/run_full_all_components.sh
+./DataProcessor/scripts/run_full_all_components.sh
 ```
 
-**Что проверять**:
-- Время обработки (должно быть меньше, чем без оптимизаций)
-- Ускорение: сравните с результатом без оптимизаций
-- Корректность HTML render
-- Корректность NPZ файла
-- Запишите время обработки и ускорение
+**Внимание**: Полный прогон занимает много времени (21 компонент × 20 видео = 420 запусков).
 
-### Шаг 4: Добавление следующего компонента
+**Логи**: `/tmp/audio_full_<component>_<run_id>.log`
 
-Обновите `global_config.yaml`, включив следующий extractor:
+---
 
-```yaml
-    extractors:
-      clap:
-        enabled: true
-      tempo:
-        enabled: true  # Добавлен
-      loudness:
-        enabled: false
-```
+## Валидация и анализ
 
-Повторите шаги 2 и 3 для нового набора extractors.
-
-### Шаг 5: Batch mode тестирование (опционально)
-
-Для batch mode запускайте напрямую `AudioProcessor/run_cli.py`:
+### Валидация smoke-результатов
 
 ```bash
-# Подготовка: создайте директорию с несколькими frames_dirs
-mkdir -p /path/to/batch_frames_dirs
-# Скопируйте frames_dirs в эту директорию
-
-# Тест без оптимизаций
-python3 AudioProcessor/run_cli.py \
-  --audio-input-dir /path/to/batch_frames_dirs \
-  --rs-base /path/to/result_store \
-  --platform-id youtube \
-  --run-id batch_test_1_no_optimizations \
-  --sampling-policy-version v1 \
-  --dataprocessor-version unknown \
-  --extractors clap,tempo,loudness \
-  --no-batch-gpu \
-  --no-batch-cpu-parallel
-
-# Тест с оптимизациями
-python3 AudioProcessor/run_cli.py \
-  --audio-input-dir /path/to/batch_frames_dirs \
-  --rs-base /path/to/result_store \
-  --platform-id youtube \
-  --run-id batch_test_1_with_optimizations \
-  --sampling-policy-version v1 \
-  --dataprocessor-version unknown \
-  --extractors clap,tempo,loudness \
-  --batch-max-workers 4
+./DataProcessor/scripts/validate_smoke_results.sh
 ```
 
-## Документирование результатов
+### Валидация full-результатов
 
-### Формат документации
-
-Создайте документ `docs/TEST_RESULTS.md` со следующей структурой:
-
-```markdown
-# Результаты тестирования AudioProcessor
-
-## Тестовая конфигурация
-- Дата: YYYY-MM-DD
-- Видео: <video_id>
-- Платформа: youtube
-- Устройство: cuda/cpu
-
-## Результаты по компонентам
-
-### clap_extractor
-
-#### Без оптимизаций
-- Время обработки: X.XX секунд
-- Stage timings:
-  - load_input_ms: XX
-  - run_extractors_ms: XX
-  - save_npz_ms: XX
-- Per-extractor timing: XX ms
-- HTML render: ✅ / ❌
-- NPZ валидация: ✅ / ❌
-
-#### С оптимизациями
-- Время обработки: X.XX секунд
-- Ускорение: X.XXx
-- Stage timings: ...
-- HTML render: ✅ / ❌
-- NPZ валидация: ✅ / ❌
-
-### tempo_extractor
-...
+```bash
+./DataProcessor/scripts/validate_full_results.sh
 ```
 
-### Извлечение метрик времени
+### Анализ по компоненту
 
-**Из NPZ файла**:
-```python
-import numpy as np
-
-npz = np.load("result_store/.../clap_extractor/clap_extractor_features.npz", allow_pickle=True)
-meta = npz["meta"].item() if hasattr(npz["meta"], "item") else npz["meta"]
-
-stage_timings = meta.get("stage_timings_ms", {})
-timings_by_extractor = meta.get("timings_by_extractor", {})
-
-print(f"Total time: {stage_timings.get('run_extractors_ms', 0)} ms")
-print(f"CLAP time: {timings_by_extractor.get('clap', {}).get('wall_ms', 0)} ms")
+```bash
+cd DataProcessor
+PYTHONPATH=AudioProcessor/src .data_venv/bin/python3 \
+  AudioProcessor/src/extractors/<extractor>/utils/analyze_all_results.py \
+  --rs-base dp_results/full_test \
+  --run-id-prefix "full_<key>_" \
+  --component-name "<extractor>"
 ```
 
-**Из batch results** (batch mode):
-```python
-# batch_results содержит список результатов для каждого файла
-for result in batch_results:
-    file_id = result["file_id"]
-    processing_time = result["processing_time"]
-    timings = result["timings"]
-    print(f"{file_id}: {processing_time} seconds")
-```
+---
 
-## Проверка HTML Render
+## Устранение ошибок
 
-### Расположение файлов
+1. **Smoke не прошёл** — проверьте лог `/tmp/audio_smoke_<component>_shortest.log`
+2. **Зависимости** — некоторые extractors требуют другие (например, `voice_quality` → `pitch`, `speech_analysis` → `asr`+`speaker_diarization`). Обновите `configs/audit_v3/audio/profile_<key>.yaml` (корень репозитория)
+3. **Модели** — убедитесь, что `DP_MODELS_ROOT` указывает на bundle с моделями
+4. **GPU/CPU** — при нехватке GPU некоторые extractors могут падать; проверьте `device: "cpu"` в профиле
+5. **emotion_diarization** — требует WavLM (microsoft/wavlm-large) в HuggingFace cache:
+   - **Подготовка кэша**: запустите `./DataProcessor/scripts/prepare_hf_cache.sh` — скрипт добавит недостающий `preprocessor_config.json` в snapshots (при неполной загрузке)
+   - Вариант A: `DP_MODELS_ROOT/hf_cache/hub` с `models--microsoft--wavlm-large` (symlink на `~/.cache/huggingface/hub` или копия)
+   - Вариант B: `~/.cache/huggingface/hub/models--microsoft--wavlm-large` — main.py передаёт HF_HOME в subprocess
+   - При ошибке "couldn't find them in the cached files" — скачайте модель: `huggingface-cli download microsoft/wavlm-large`, затем `prepare_hf_cache.sh`
 
-- **Render-context JSON**: `result_store/.../<component_name>/_render/render_context.json`
-- **HTML файл** (если генерируется): `result_store/.../<component_name>/_render/render.html`
+---
 
-### Проверка корректности
+## Чеклист перед первым запуском
 
-1. **Проверка существования файла**:
-   ```bash
-   ls -la result_store/.../<component_name>/_render/render_context.json
-   ```
+1. **Модели**: `DP_MODELS_ROOT` указывает на `DataProcessor/dp_models/bundled_models` (или аналог)
+2. **emotion_diarization**: `./DataProcessor/scripts/prepare_hf_cache.sh` — подготовка WavLM cache
+3. **Видео**: `example/example_videos/-Q6fnPIybEI.mp4` (или `VIDEOS_DIR`)
 
-2. **Проверка структуры JSON**:
-   ```python
-   import json
-   
-   with open("render_context.json", "r") as f:
-       render = json.load(f)
-   
-   # Проверка обязательных полей
-   assert "component" in render
-   assert "summary" in render
-   assert "timeline" in render
-   assert "meta" in render
-   ```
+## Конфиги
 
-3. **Проверка HTML** (если генерируется):
-   - Откройте HTML файл в браузере
-   - Проверьте корректность отображения графиков и данных
-   - Проверьте интерактивные элементы (если есть)
+Профили: `configs/audit_v3/audio/` (корень репозитория). Скрипты используют `$REPO_ROOT/configs/audit_v3/audio`.
 
-## Troubleshooting
+---
 
-### Проблема: Render не генерируется
+## Расположение скриптов
 
-**Причина**: Render генерируется только для успешно обработанных extractors.
+Все скрипты в `DataProcessor/scripts/`:
+- `prepare_hf_cache.sh` — подготовка HF cache для emotion_diarization (WavLM)
+- `run_smoke_all_components.sh`
+- `run_full_all_components.sh`
+- `validate_smoke_results.sh`
+- `validate_full_results.sh`
 
-**Решение**: 
-- Проверьте статус extractor'а в NPZ meta (`status="ok"`)
-- Проверьте логи на наличие ошибок render
+---
 
-### Проблема: Время не сохраняется
+## Связанные документы
 
-**Причина**: Время сохраняется только при успешной обработке.
-
-**Решение**:
-- Проверьте статус в NPZ meta
-- Проверьте наличие `stage_timings_ms` и `timings_by_extractor` в meta
-
-### Проблема: Batch mode не работает через DataProcessor/main.py
-
-**Причина**: `DataProcessor/main.py` не поддерживает batch mode напрямую (он всегда передает `--frames-dir` для одного видео).
-
-**Решение**: 
-- Для batch mode запускайте напрямую `AudioProcessor/run_cli.py` с `--audio-input-dir` или `--audio-input-list`
-- Или используйте single-file mode через `DataProcessor/main.py` для каждого видео отдельно
-
-## Следующие шаги
-
-После завершения тестирования всех компонентов:
-
-1. Создайте сводную таблицу результатов
-2. Проанализируйте ускорение от оптимизаций
-3. Выявите узкие места производительности
-4. Документируйте рекомендации по настройке для production
-
+- [TESTING_STRUCTURE.md](TESTING_STRUCTURE.md) — структура папок extractors
+- [README.md](README.md) — главный индекс документации
+- [MAIN_INDEX.md](MAIN_INDEX.md) — индекс всех extractors

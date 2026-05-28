@@ -1,0 +1,97 @@
+# .dockerignore для DataProcessor API
+#
+# Исключает ненужные файлы из Docker образа
+
+# Python
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+.Python
+*.egg-info/
+dist/
+build/
+*.egg
+venv/
+env/
+ENV/
+
+# IDE
+.vscode/
+.idea/
+*.swp
+*.swo
+*~
+
+# Git
+.git/
+.gitignore
+.gitattributes
+
+# Docker
+docker/
+Dockerfile*
+docker-compose*.yml
+.dockerignore
+
+# Документация
+*.md
+docs/
+README.md
+
+# Тесты
+tests/
+test_*.py
+*_test.py
+.pytest_cache/
+.coverage
+htmlcov/
+
+# Логи
+*.log
+logs/
+
+# Временные файлы
+tmp/
+temp/
+*.tmp
+*.bak
+*.swp
+
+# Результаты обработки (будут монтироваться как volumes)
+dp_results/
+dp_output/
+dp_queue/
+dp_triton/
+
+# Модели и индексы (слишком большие для образа)
+faiss_indices/
+wav2vec2_checkpoint/
+triton/models*/
+*.faiss
+*.npy
+
+# Кэш
+.cache/
+*.cache
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Environment
+.env
+.env.local
+.env.*.local
+
+# Jupyter
+.ipynb_checkpoints/
+*.ipynb
+
+# Coverage
+.coverage
+htmlcov/
+
+# Profiling
+*.prof
+

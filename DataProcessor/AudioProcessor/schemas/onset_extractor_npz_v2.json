@@ -1,0 +1,65 @@
+{
+  "schema_system_version": "vp_schema_v1",
+  "schema_version": "onset_extractor_npz_v2",
+  "producer": "onset_extractor",
+  "artifact_kind": "npz",
+  "allow_extra_keys": false,
+  "meta": {
+    "required_keys": [
+      "producer",
+      "producer_version",
+      "schema_version",
+      "created_at",
+      "platform_id",
+      "video_id",
+      "run_id",
+      "config_hash",
+      "sampling_policy_version",
+      "dataprocessor_version",
+      "status",
+      "empty_reason",
+      "models_used",
+      "model_signature",
+      "stage_timings_ms"
+    ],
+    "optional_keys": [
+      "device_used",
+      "backend",
+      "scheduler_knobs",
+      "resource_metrics",
+      "error",
+      "onset_contract_version",
+      "features_enabled",
+      "onset_times_npy"
+    ]
+  },
+  "fields": {
+    "feature_names": { "required": true, "tier": "model_facing", "dtype": "object", "shape": ["F"] },
+    "feature_values": { "required": true, "tier": "model_facing", "dtype": "float32", "shape": ["F"] },
+
+    "segment_start_sec": { "required": true, "tier": "analytics", "dtype": "float32", "shape": ["N"] },
+    "segment_end_sec": { "required": true, "tier": "analytics", "dtype": "float32", "shape": ["N"] },
+    "segment_center_sec": { "required": true, "tier": "analytics", "dtype": "float32", "shape": ["N"] },
+    "segment_mask": { "required": true, "tier": "analytics", "dtype": "bool", "shape": ["N"] },
+
+    "onset_count": { "required": false, "tier": "model_facing", "dtype": "float32", "shape": [] },
+    "onset_density_per_sec": { "required": false, "tier": "model_facing", "dtype": "float32", "shape": [] },
+    "onset_tempo_estimate": { "required": false, "tier": "model_facing", "dtype": "float32", "shape": [] },
+    "onset_regularity_score": { "required": false, "tier": "model_facing", "dtype": "float32", "shape": [] },
+
+    "insufficient_onsets": { "required": false, "tier": "model_facing", "dtype": "bool", "shape": [] },
+    "avg_interval_sec": { "required": false, "tier": "analytics", "dtype": "float32", "shape": [] },
+    "interval_std": { "required": false, "tier": "analytics", "dtype": "float32", "shape": [] },
+    "interval_min": { "required": false, "tier": "analytics", "dtype": "float32", "shape": [] },
+    "interval_max": { "required": false, "tier": "analytics", "dtype": "float32", "shape": [] },
+    "interval_median": { "required": false, "tier": "analytics", "dtype": "float32", "shape": [] },
+
+    "onset_syncopation_score": { "required": false, "tier": "analytics", "dtype": "float32", "shape": [] },
+    "onset_strength_mean": { "required": false, "tier": "analytics", "dtype": "float32", "shape": [] },
+    "onset_strength_std": { "required": false, "tier": "analytics", "dtype": "float32", "shape": [] },
+    "onset_density_variance": { "required": false, "tier": "analytics", "dtype": "float32", "shape": [] },
+    "onset_tempo_consistency": { "required": false, "tier": "analytics", "dtype": "float32", "shape": [] },
+
+    "meta": { "required": true, "tier": "debug", "dtype": "object", "shape": [] }
+  }
+}

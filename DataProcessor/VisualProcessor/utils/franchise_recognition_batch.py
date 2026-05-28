@@ -53,26 +53,33 @@ if _franchise_recognition_main.exists():
         _auto_find_ocr_npz = getattr(franchise_recognition_module, "_auto_find_ocr_npz", None)
         NAME = getattr(franchise_recognition_module, "NAME", "franchise_recognition")
         VERSION = getattr(franchise_recognition_module, "VERSION", "0.1")
-        SCHEMA_VERSION = getattr(franchise_recognition_module, "SCHEMA_VERSION", "franchise_recognition_npz_v1")
+        SCHEMA_VERSION = getattr(franchise_recognition_module, "SCHEMA_VERSION", "franchise_recognition_npz_v2")
         ARTIFACT_FILENAME = getattr(franchise_recognition_module, "ARTIFACT_FILENAME", "franchise_recognition.npz")
         FRANCHISE_CATEGORY = getattr(franchise_recognition_module, "FRANCHISE_CATEGORY", "franchise")
         TOP_K = getattr(franchise_recognition_module, "TOP_K", 5)
         
         # Import EmbeddingServiceClient
         try:
-            from embedding_service_client import EmbeddingServiceClient
+            from utils.embedding_service_client import EmbeddingServiceClient
         except ImportError:
-            _embedding_client_path = _franchise_recognition_path / "embedding_service_client.py"
-            if _embedding_client_path.exists():
-                spec_client = importlib.util.spec_from_file_location("embedding_service_client", str(_embedding_client_path))
-                if spec_client and spec_client.loader:
-                    embedding_client_module = importlib.util.module_from_spec(spec_client)
-                    spec_client.loader.exec_module(embedding_client_module)
-                    EmbeddingServiceClient = embedding_client_module.EmbeddingServiceClient
+            try:
+                from embedding_service_client import EmbeddingServiceClient
+            except ImportError:
+                # Try utils directory first, then root
+                _embedding_client_path = _franchise_recognition_path / "utils" / "embedding_service_client.py"
+                if not _embedding_client_path.exists():
+                    _embedding_client_path = _franchise_recognition_path / "embedding_service_client.py"
+                
+                if _embedding_client_path.exists():
+                    spec_client = importlib.util.spec_from_file_location("embedding_service_client", str(_embedding_client_path))
+                    if spec_client and spec_client.loader:
+                        embedding_client_module = importlib.util.module_from_spec(spec_client)
+                        spec_client.loader.exec_module(embedding_client_module)
+                        EmbeddingServiceClient = embedding_client_module.EmbeddingServiceClient
+                    else:
+                        raise ImportError("Failed to load EmbeddingServiceClient")
                 else:
-                    raise ImportError("Failed to load EmbeddingServiceClient")
-            else:
-                raise ImportError(f"embedding_service_client.py not found at {_embedding_client_path}")
+                    raise ImportError(f"embedding_service_client.py not found. Checked: {_franchise_recognition_path / 'utils' / 'embedding_service_client.py'}, {_franchise_recognition_path / 'embedding_service_client.py'}")
     else:
         raise ImportError("Failed to load franchise_recognition module")
 else:

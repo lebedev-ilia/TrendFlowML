@@ -1,5 +1,22 @@
 ## Component: `core_object_detections` (Tier‑0 baseline)
 
+**Версия**: 2.2  
+**Schema Version**: `core_object_detections_npz_v2`  
+**Категория**: core provider (Tier-0)
+
+**Кратко о фичах, NPZ, meta→CSV, QA/melt:** [`docs/FEATURE_DESCRIPTION.md`](docs/FEATURE_DESCRIPTION.md) · валидатор: [`utils/validate_core_object_detections_npz.py`](utils/validate_core_object_detections_npz.py) (`--struct`, `--qa`, `--ranges`, пакетно `--results-base` / `**/core_object_detections/detections.npz`).
+
+### Audit v3 status
+
+**Статус**: ✅ PASS (Audit v3)  
+**Dev-run (smoke, reproducible)**: `youtube/audit3_cod_smoke_2/audit3_cod_smoke_2` (см. `DataProcessor/docs/audit_v3/RUN_LOG.md`)
+
+**Как воспроизвести**:
+- Visual cfg: `DataProcessor/configs/audit_v3/visual_core_object_detections_only.yaml`
+- Profile: `DataProcessor/configs/audit_v3/profile_core_object_detections.yaml`
+- Артефакт: `dp_results/youtube/audit3_cod_smoke_2/audit3_cod_smoke_2/core_object_detections/detections.npz`
+- Рендер: `dp_results/.../core_object_detections/_render/render_context.json` + `render.html`
+
 ### Назначение
 
 `core_object_detections` вычисляет детекции объектов на primary выборке кадров (union-domain) и пишет их в `detections.npz`.
@@ -28,10 +45,23 @@ No-fallback:
 - `frame_indices (N,) int32` — union-domain
 - `times_s (N,) float32` — `union_timestamps_sec[frame_indices]`
 - `boxes (N, MAX, 4) float32` (xyxy)
+- `boxes_norm (N, MAX, 4) float32` — нормализованные bbox (0..1) относительно analysis width/height
+- `centers_norm (N, MAX, 2) float32` — нормализованные центры bbox (0..1)
+- `areas_frac (N, MAX) float32` — площадь bbox как доля площади кадра (0..1)
 - `scores (N, MAX) float32`
 - `class_ids (N, MAX) int32`
 - `valid_mask (N, MAX) bool`
-- `class_names (M,) str` — `"id:name"` mapping
+- `class_names (41,) str` — полный стабильный `"id:name"` mapping для class_id 0..40
+- `det_count (N,) int32` — количество valid детекций на кадр (по `valid_mask`)
+- `person_count (N,) int32` — количество `person` детекций на кадр (valid)
+- `text_region_count (N,) int32` — количество `text_region` детекций на кадр (valid)
+- `logo_region_count (N,) int32` — количество `logo_region` детекций на кадр (valid)
+- `sum_person_area_frac (N,) float32` — сумма площадей person bbox как доля кадра (valid)
+- `max_person_area_frac (N,) float32` — максимальная площадь person bbox как доля кадра (valid)
+- `sum_text_area_frac (N,) float32` — сумма площадей text_region bbox как доля кадра (valid)
+- `max_text_area_frac (N,) float32` — максимальная площадь text_region bbox как доля кадра (valid)
+- `sum_logo_area_frac (N,) float32` — сумма площадей logo_region bbox как доля кадра (valid)
+- `max_logo_area_frac (N,) float32` — максимальная площадь logo_region bbox как доля кадра (valid)
 - `meta` (dict, object-array) — canonical meta с `stage_timings_ms` (legacy формат для обратной совместимости)
 - `meta_json` (str, unicode array) — meta в формате JSON-строки (предпочтительно для совместимости между виртуальными окружениями)
 
@@ -64,7 +94,29 @@ No-fallback:
 - Стадии: `start → load_deps → process_frames → save → done`
 - Гранулярный прогресс во время `process_frames` (≥10 обновлений по кадрам)
 
-### Batch size (scheduler-controlled)
+### Параметры конфигурации компонента
+
+Все параметры принимаются через аргументы командной строки:
+
+| Параметр | Тип | По умолчанию | Описание |
+|----------|-----|--------------|----------|
+| `--frames-dir` | str | required | Путь к директории с кадрами |
+| `--rs-path` | str | required | Путь к result_store |
+| `--model` | str | `yolov8n.pt` | Путь к модели YOLO (для ultralytics runtime) |
+| `--runtime` | str | `ultralytics` | Runtime режим: `ultralytics` или `triton` |
+| `--triton-model-spec` | str | `None` | Spec name из ModelManager (рекомендуется, переопределяет явные triton_* параметры) |
+| `--triton-http-url` | str | `None` | URL Triton HTTP сервера (требуется, если не используется --triton-model-spec) |
+| `--triton-model-name` | str | `None` | Имя модели в Triton (требуется, если не используется --triton-model-spec) |
+| `--triton-model-version` | str | `None` | Версия модели в Triton |
+| `--triton-input-name` | str | `images` | Имя входа модели в Triton |
+| `--triton-output-name` | str | `output0` | Имя выхода модели в Triton |
+| `--triton-preprocess-preset` | str | `yolo11x_640` | Пресет размера входа: `yolo11x_320`, `yolo11x_640`, `yolo11x_960` |
+| `--batch-size` | int | required | Размер батча (обязателен, задаётся scheduler) |
+| `--box-threshold` | float | `0.6` | Порог confidence для детекций |
+| `--device` | str | `auto` | Устройство: `auto`, `cpu`, `cuda` |
+| `--iou-threshold` | float | `0.3` | Порог IoU для NMS (используется только для Triton runtime) |
+
+**Batch size (scheduler-controlled)**:
 
 `--batch-size` обязателен и задаётся верхним scheduler/DynamicBatching (пока вручную в конфиге).
 Auto-batching внутри компонента запрещён.
@@ -193,39 +245,106 @@ Auto-batching внутри компонента запрещён.
 
 **Важно**: Оптимизации не влияют на качество результатов — все формулы остались идентичными, изменилась только производительность.
 
+### Empty/error semantics
+
+Компонент поддерживает **valid empty** артефакты:
+- Если нет детекций выше порога `box_threshold` на всех кадрах → компонент создаёт валидный empty artifact с:
+  - `status="empty"`
+  - `empty_reason="no_detections_above_threshold"`
+  - Все массивы (`boxes`, `scores`, `class_ids`, `valid_mask`) заполнены нулями/False
+
+### Threshold semantics (Audit v3)
+
+`box_threshold` используется **только** для формирования `valid_mask` (и derived агрегатов/кривых).  
+`boxes/scores/class_ids` сохраняются для top‑MAX детекций (после NMS), даже если `score < box_threshold`.
+
+**No-fallback policy**:
+- Отсутствие/пустота `frame_indices` → **RuntimeError** (no-fallback)
+- Отсутствие `union_timestamps_sec` → **RuntimeError** (no-fallback)
+- Отсутствие модели (для ultralytics runtime) → **RuntimeError** (no-fallback)
+- Недоступность Triton (для triton runtime) → **RuntimeError** (no-fallback)
+
+### Artifact save / validation (baseline contract)
+
+- NPZ сохраняется **атомарно** (tmp → `os.replace`).
+- После записи артефакт проходит `artifact_validator.validate_npz()` (fail-fast).
+
 ---
 
 ## Quality validation & human-friendly inspection
 
-### Human-friendly визуализация (Render System)
+### Render (dev-only): как читать детекции человеку
 
-Компонент автоматически генерирует **render-context JSON** для каждого запуска:
+Цель рендера `core_object_detections`: чтобы человек понял:
 
-- Путь: `result_store/<platform_id>/<video_id>/<run_id>/core_object_detections/_render/render_context.json`
+- **Какие объекты нашли**, и **похоже ли это на правду**
+- **Сколько объектов** обычно на кадре (и где пики)
+- **Есть ли текстовые регионы** (для OCR downstream) и насколько они уверенные
 
-Этот JSON содержит:
-- **Summary**: статистики по детекциям (frames_count, total_detections, detections_per_frame_mean/std/min/max, unique_classes_count, score_mean/std/min/max/median, box_area_mean/std/min/max/median)
-- **Timeline**: данные по каждому кадру (frame_index, time_sec, detections_count, average_score)
-- **Distributions**: распределения detections_per_frame, scores и box_areas (min, max, mean, std, median, percentiles)
-- **Top classes**: топ-10 классов с количеством детекций
+#### Где лежат файлы рендера
 
-**HTML debug страница** (опционально):
-- Путь: `result_store/.../core_object_detections/_render/render.html`
-- Содержит интерактивные графики (Chart.js):
-  - Timeline: количество детекций и средний score по времени
-  - Top classes: таблица с топ-классами и количеством детекций
-  - Distributions: статистики по detections_per_frame, scores и box_areas
-  - Summary metrics: ключевые показатели в удобном формате
+- `.../core_object_detections/_render/render_context.json`
+- `.../core_object_detections/_render/render.html`
 
-**Конфигурация** (в `global_config.yaml`):
+#### Что показывает текущий HTML (MVP сейчас)
+
+- **Timeline**:
+  - `detections_count` — сколько valid детекций на кадре
+  - `average_score` — средний confidence по valid детекциям
+- **Top classes** — какие классы встречаются чаще всего
+- **Distributions** — распределения по count/score/area (как sanity-check)
+
+Этого хватает для “статистики”, но **не хватает для визуальной проверки качества**.
+
+#### Что ДОЛЖНО появиться в персонализированном рендере (target)
+
+Это твой прямой запрос из аудита: рендер должен включать **несколько кадров с боксами**.
+Минимальный обязательный набор (ориентирован на человека):
+
+- **Gallery: K кадров с наложенными bbox** (K=12 равномерно по видео):
+  - рисуем bbox + подпись `class_name` + `score`
+  - отдельно переключатели: показывать только `person` / `text_region` / `logo_region` / все
+- **Топ проблемных кадров**:
+  - кадры с максимальным `det_count`
+  - кадры с максимальной суммой площади `sum_text_area_frac` (полезно для OCR pipeline)
+- **Отдельный блок “Текст”**:
+  - K кадров с `text_region` bbox (если есть) — чтобы QA увидел, что OCR будет получать
+- **Объяснение каждого поля** (простыми словами):
+  - что такое `valid_mask`, почему могут быть `boxes` даже при `score < box_threshold`,
+    и что “валидность” определяется порогом.
+
+#### Как интерпретировать типовые ситуации
+
+- **det_count очень высокий почти на всех кадрах**:
+  - подозрение на слишком низкий порог/ошибку NMS/тяжёлый шум.
+- **text_region почти всегда 0** при явном тексте в видео:
+  - проблема таксономии/модели или порога `box_threshold`/`min_det_score` downstream.
+- **scores низкие, но боксы “похожи”**:
+  - можно подумать про калибровку порога: `box_threshold` влияет только на `valid_mask`.
+
+#### Время выполнения (что смотреть)
+
+- `meta.stage_timings_ms.process_frames` — основная стоимость.
+
+#### Параметры конфига, которые сильнее всего влияют на результат
+
+- `box_threshold`:
+  - меняет `valid_mask` и derived поля (`det_count`, `*_count`, `*_area_frac`)
+  - **не удаляет** боксы из `boxes/scores/class_ids`
+- `iou_threshold` — влияет на NMS (актуально для triton runtime)
+- `model` / `triton_preprocess_preset` — влияет на качество и стоимость
+- `max_dets_per_frame (MAX)` (фиксировано контрактом) — лимит top детекций на кадр
+
+#### Конфигурация render
+
 ```yaml
 core_object_detections:
   render:
-    enable_render: true  # Генерировать render-context JSON
-    enable_html_render: true  # Генерировать HTML debug страницу
+    enable_render: true
+    enable_html_render: true
 ```
 
-**Примечание**: Render генерируется автоматически после успешной обработки компонента (best-effort: ошибки render не валят основной процесс).
+**Примечание**: render — best-effort и не должен ломать основной pipeline.
 
 ### Как проверить качество выхода компонента
 
@@ -321,7 +440,12 @@ python3 DataProcessor/VisualProcessor/core/model_process/core_object_detections/
 
 > Цель: компонент даёт сильный “sensor” сигнал (объекты/персоны/геометрия/динамика),
 > но чтобы это стало максимально полезно для моделей, нужно добавить несколько вещей.
-> При этом **baseline правила сохраняем**: tracking required, Triton batching не меняем, no-network.
+> При этом **baseline правила сохраняем**: Triton batching не меняем, no-network.
+
+#### Tracking (future improvement)
+
+В baseline Audit v3 трекинг удалён (см. выше). Если появится реальная потребность в track-level признаках,
+мы можем добавить трекинг как улучшение (или добавить лёгкий surrogate linking) без изменения core NPZ контрактов.
 
 #### 1) Устойчивое “кто есть кто” (ReID / appearance)
 

@@ -16,6 +16,8 @@ import tempfile
 import shutil
 import subprocess
 import re
+import hashlib
+import json
 from typing import Dict, List, Any, Optional, Tuple
 from pathlib import Path
 from datetime import datetime
@@ -57,14 +59,26 @@ if _ocr_main.exists():
         _class_id_map = getattr(ocr_module, "_class_id_map", None)
         _crop_rgb = getattr(ocr_module, "_crop_rgb", None)
         _run_tesseract = getattr(ocr_module, "_run_tesseract", None)
+        _run_ppocr_rec_onnx = getattr(ocr_module, "_run_ppocr_rec_onnx", None)
+        _load_ppocr_dict = getattr(ocr_module, "_load_ppocr_dict", None)
         atomic_save_npz = getattr(ocr_module, "atomic_save_npz", None)
         NAME = getattr(ocr_module, "NAME", "ocr_extractor")
         VERSION = getattr(ocr_module, "VERSION", "0.1")
-        SCHEMA_VERSION = getattr(ocr_module, "SCHEMA_VERSION", "ocr_extractor_npz_v1")
+        SCHEMA_VERSION = getattr(ocr_module, "SCHEMA_VERSION", "ocr_extractor_npz_v2")
     else:
         raise ImportError("Failed to load ocr_extractor module")
 else:
     raise ImportError(f"ocr_extractor/main.py not found at {_ocr_main}")
+
+
+def _require_meta_str(meta: dict, key: str) -> str:
+    v = meta.get(key)
+    if v is None:
+        raise RuntimeError(f"{NAME} | metadata.json missing required key '{key}' (no-fallback)")
+    s = str(v).strip()
+    if not s:
+        raise RuntimeError(f"{NAME} | metadata.json has empty required key '{key}' (no-fallback)")
+    return s
 
 
 def _process_single_crop(
@@ -72,13 +86,36 @@ def _process_single_crop(
     video_idx: int,
     frame_idx: int,
     box_idx: int,
+    engine: str,
+    rec_session: Any,
+    rec_chars: List[str],
+    ppocr_img_h: int,
+    ppocr_img_w: int,
+    min_rec_score: float,
     lang: str,
     psm: int,
 ) -> Optional[Dict[str, Any]]:
-    """Обработать один bbox-кроп через tesseract."""
+    """Обработать один bbox-кроп через выбранный OCR engine."""
     try:
-        txt = _run_tesseract(crop, lang=lang, psm=psm)
-        txt_raw = str(txt or "").strip()
+        txt_raw = ""
+        rec_conf = None
+        if str(engine) == "tesseract":
+            txt = _run_tesseract(crop, lang=lang, psm=psm)
+            txt_raw = str(txt or "").strip()
+        else:
+            if _run_ppocr_rec_onnx is None:
+                raise RuntimeError("ppocr_rec_onnx engine is not available in this build")
+            txt_raw, rc = _run_ppocr_rec_onnx(
+                crop,
+                session=rec_session,
+                chars=rec_chars,
+                img_h=int(ppocr_img_h),
+                img_w=int(ppocr_img_w),
+            )
+            rec_conf = float(rc)
+            if rec_conf < float(min_rec_score):
+                return None
+
         txt_norm = _norm_text(txt_raw) if txt_raw else ""
         if not txt_norm:
             return None
@@ -88,6 +125,7 @@ def _process_single_crop(
             "box_idx": box_idx,
             "text_raw": txt_raw,
             "text_norm": txt_norm,
+            "rec_confidence": rec_conf,
         }
     except Exception as e:
         logger.warning(f"ocr_extractor | batch | failed to process crop: {e}")
@@ -115,72 +153,66 @@ def process_ocr_extractor_batch(
     """
     if not video_contexts:
         return []
-    
-    # Проверяем наличие tesseract
-    if shutil.which("tesseract") is None:
-        logger.warning("ocr_extractor | batch | tesseract not found; writing empty artifacts")
-        results = []
-        for video_ctx in video_contexts:
-            try:
-                metadata = video_ctx.load_metadata()
-                frame_indices = _require_frame_indices(metadata)
-                uts = metadata.get("union_timestamps_sec")
-                if uts is None:
-                    raise RuntimeError("metadata.json missing union_timestamps_sec")
-                uts_arr = np.asarray(uts, dtype=np.float32).reshape(-1)
-                fi_np = np.asarray(frame_indices, dtype=np.int32).reshape(-1)
-                times_s = uts_arr[fi_np].astype(np.float32)
-                
-                out_dir = os.path.join(video_ctx.rs_path, NAME)
-                os.makedirs(out_dir, exist_ok=True)
-                out_path = os.path.join(out_dir, "ocr.npz")
-                
-                timings = {"initialization": 0.0, "load_deps": 0.0, "process_frames": 0.0, "saving": 0.0, "total": 0.0}
-                stage_timings_ms = {k: v * 1000.0 for k, v in timings.items()}
-                
-                meta_out = {
-                    "producer": NAME,
-                    "producer_version": VERSION,
-                    "schema_version": SCHEMA_VERSION,
-                    "created_at": datetime.utcnow().isoformat() + "Z",
-                    "status": "empty",
-                    "empty_reason": "dependency_missing",
-                    "platform_id": metadata.get("platform_id") or "unknown",
-                    "video_id": metadata.get("video_id") or "unknown",
-                    "run_id": metadata.get("run_id") or "unknown",
-                    "config_hash": metadata.get("config_hash") or "unknown",
-                    "sampling_policy_version": metadata.get("sampling_policy_version") or "unknown",
-                    "dataprocessor_version": metadata.get("dataprocessor_version") or "unknown",
-                    "engine": "tesseract",
-                    "tesseract_lang": str(config.get("tesseract_lang", "eng+rus")),
-                    "tesseract_psm": int(config.get("tesseract_psm", 6)),
-                    "models_used": [],
-                    "stage_timings_ms": stage_timings_ms,
-                }
-                meta_out = apply_models_meta(meta_out, models_used=meta_out.get("models_used"))
-                
-                atomic_save_npz(
-                    out_path,
-                    frame_indices=fi_np,
-                    times_s=times_s,
-                    ocr_raw=np.asarray([], dtype=object),
-                    meta=np.asarray(meta_out, dtype=object),
-                )
-                
-                results.append({
-                    "video_id": video_ctx.video_id,
-                    "status": "ok",
-                    "out_path": out_path,
-                })
-            except Exception as e:
-                logger.exception(f"ocr_extractor | batch | video {video_ctx.video_id} failed: {e}")
-                results.append({
-                    "video_id": video_ctx.video_id,
-                    "status": "error",
-                    "error": str(e),
-                })
-        return results
-    
+
+    # Engine selection (kept deterministic by config; no-network)
+    engine = str(config.get("engine", "tesseract")).strip().lower()
+    if engine not in ("tesseract", "ppocr_rec_onnx"):
+        err = f"unsupported engine={engine}. Expected: tesseract|ppocr_rec_onnx"
+        logger.error(f"ocr_extractor | batch | {err}")
+        return [{"video_id": ctx.video_id, "status": "error", "error": err} for ctx in video_contexts]
+
+    # Engine init
+    rec_session: Any = None
+    rec_chars: List[str] = []
+    rec_models_used: List[Dict[str, Any]] = []
+
+    if engine == "tesseract":
+        if shutil.which("tesseract") is None:
+            err = "tesseract binary not found in PATH (hard dependency for engine=tesseract)"
+            logger.error(f"ocr_extractor | batch | {err}")
+            return [{"video_id": ctx.video_id, "status": "error", "error": err} for ctx in video_contexts]
+    else:
+        rec_model_spec = str(config.get("rec_model_spec", "ppocr_rec_onnx_v1_inprocess"))
+        try:
+            dp_root = Path(__file__).resolve().parents[2]  # DataProcessor/
+            if str(dp_root) not in sys.path:
+                sys.path.insert(0, str(dp_root))
+            from dp_models import get_global_model_manager  # type: ignore
+        except Exception as e:
+            err = f"dp_models is required for engine=ppocr_rec_onnx: {e}"
+            logger.error(f"ocr_extractor | batch | {err}")
+            return [{"video_id": ctx.video_id, "status": "error", "error": err} for ctx in video_contexts]
+
+        # See ocr_extractor/main.py: ModelManager expects models_root=".../dp_models" (parent of bundled_models)
+        try:
+            env_root = str(os.environ.get("DP_MODELS_ROOT") or "").strip()
+            if env_root and os.path.basename(env_root) == "bundled_models":
+                os.environ["DP_MODELS_ROOT"] = os.path.abspath(os.path.join(env_root, os.pardir))
+        except Exception:
+            pass
+
+        mm = get_global_model_manager()
+        rm = mm.get(model_name=rec_model_spec)
+        h = rm.handle or {}
+        rec_session = h.get("session")
+        if rec_session is None:
+            err = f"ModelManager returned empty session handle for {rec_model_spec}"
+            logger.error(f"ocr_extractor | batch | {err}")
+            return [{"video_id": ctx.video_id, "status": "error", "error": err} for ctx in video_contexts]
+
+        dict_path = None
+        for rel, abs_path in (rm.resolved_artifacts or {}).items():
+            if str(rel).lower().endswith("dict.txt"):
+                dict_path = abs_path
+                break
+        if dict_path is None:
+            err = f"OCR dict artifact not found in model spec {rec_model_spec}"
+            logger.error(f"ocr_extractor | batch | {err}")
+            return [{"video_id": ctx.video_id, "status": "error", "error": err} for ctx in video_contexts]
+        if callable(_load_ppocr_dict):
+            rec_chars = _load_ppocr_dict(str(dict_path))
+        rec_models_used = [rm.models_used_entry]
+
     logger.info(
         f"ocr_extractor | batch | processing {len(video_contexts)} videos "
         f"(max_workers={max_workers})"
@@ -196,6 +228,11 @@ def process_ocr_extractor_batch(
     crop_margin_frac = float(config.get("crop_margin_frac", 0.02))
     tesseract_lang = str(config.get("tesseract_lang", "eng+rus"))
     tesseract_psm = int(config.get("tesseract_psm", 6))
+    retain_raw_ocr_text = bool(config.get("retain_raw_ocr_text", False))
+    rec_model_spec = str(config.get("rec_model_spec", "ppocr_rec_onnx_v1_inprocess"))
+    ppocr_img_h = int(config.get("ppocr_img_h", 48))
+    ppocr_img_w = int(config.get("ppocr_img_w", 320))
+    min_rec_score = float(config.get("min_rec_score", 0.0))
     
     # Этап 1: Сбор всех bbox-кропов с привязкой к видео
     crops_by_video: List[Dict[str, Any]] = []
@@ -362,7 +399,21 @@ def process_ocr_extractor_batch(
     
     with ThreadPoolExecutor(max_workers=effective_max_workers) as executor:
         futures = {
-            executor.submit(_process_single_crop, crop, video_idx, frame_idx, box_idx, tesseract_lang, tesseract_psm): (video_idx, frame_idx, box_idx, frame_n_idx)
+            executor.submit(
+                _process_single_crop,
+                crop,
+                video_idx,
+                frame_idx,
+                box_idx,
+                engine,
+                rec_session,
+                rec_chars,
+                ppocr_img_h,
+                ppocr_img_w,
+                min_rec_score,
+                tesseract_lang,
+                tesseract_psm,
+            ): (video_idx, frame_idx, box_idx, frame_n_idx)
             for video_idx, frame_idx, box_idx, frame_n_idx, crop in all_crops
         }
         
@@ -414,14 +465,36 @@ def process_ocr_extractor_batch(
                     "text_raw": result["text_raw"],
                     "text_norm": result["text_norm"],
                     "det_confidence": float(scores[frame_n_idx, box_idx]),
-                    "engine": "tesseract",
-                    "lang": tesseract_lang,
+                    "engine": engine,
+                    "lang": (tesseract_lang if engine == "tesseract" else None),
+                    "rec_confidence": result.get("rec_confidence"),
                 })
+
+        # Privacy: optionally redact text before saving
+        if not retain_raw_ocr_text and ocr_rows:
+            red: List[Dict[str, Any]] = []
+            for r in ocr_rows:
+                if not isinstance(r, dict):
+                    continue
+                txt_norm = str(r.get("text_norm") or "")
+                rr = {k: v for k, v in r.items() if k not in ("text_raw", "text_norm")}
+                rr["text_sha256"] = hashlib.sha256(txt_norm.encode("utf-8")).hexdigest()
+                rr["text_len"] = int(len(txt_norm))
+                red.append(rr)
+            ocr_rows = red
         
         # Сохраняем артефакт
         try:
             video_ctx = next(ctx for ctx in video_contexts if ctx.video_id == video_id)
             metadata = video_ctx.load_metadata()
+
+            # Strict run-identity keys (contract)
+            platform_id = _require_meta_str(metadata, "platform_id")
+            video_id_meta = _require_meta_str(metadata, "video_id")
+            run_id = _require_meta_str(metadata, "run_id")
+            config_hash = _require_meta_str(metadata, "config_hash")
+            sampling_policy_version = _require_meta_str(metadata, "sampling_policy_version")
+            dataprocessor_version = _require_meta_str(metadata, "dataprocessor_version")
             
             out_dir = os.path.join(video_ctx.rs_path, NAME)
             os.makedirs(out_dir, exist_ok=True)
@@ -443,20 +516,25 @@ def process_ocr_extractor_batch(
                 "created_at": datetime.utcnow().isoformat() + "Z",
                 "status": "ok" if ocr_rows else "empty",
                 "empty_reason": None if ocr_rows else "no_text_available",
-                "platform_id": metadata.get("platform_id") or "unknown",
-                "video_id": metadata.get("video_id") or "unknown",
-                "run_id": metadata.get("run_id") or "unknown",
-                "config_hash": metadata.get("config_hash") or "unknown",
-                "sampling_policy_version": metadata.get("sampling_policy_version") or "unknown",
-                "dataprocessor_version": metadata.get("dataprocessor_version") or "unknown",
-                "engine": "tesseract",
+                "platform_id": platform_id,
+                "video_id": video_id_meta,
+                "run_id": run_id,
+                "config_hash": config_hash,
+                "sampling_policy_version": sampling_policy_version,
+                "dataprocessor_version": dataprocessor_version,
+                "engine": engine,
                 "tesseract_lang": tesseract_lang,
                 "tesseract_psm": tesseract_psm,
                 "proposal_class": proposal_class,
-                "models_used": [],
+                "retain_raw_ocr_text": retain_raw_ocr_text,
+                "rec_model_spec": (rec_model_spec if engine != "tesseract" else None),
+                "ppocr_img_h": (ppocr_img_h if engine != "tesseract" else None),
+                "ppocr_img_w": (ppocr_img_w if engine != "tesseract" else None),
+                "models_used": rec_models_used,
                 "stage_timings_ms": stage_timings_ms,
             }
             meta_out = apply_models_meta(meta_out, models_used=meta_out.get("models_used"))
+            meta_json = json.dumps(meta_out, ensure_ascii=False, sort_keys=True)
             
             t_save_start = time.perf_counter()
             atomic_save_npz(
@@ -464,6 +542,7 @@ def process_ocr_extractor_batch(
                 frame_indices=np.asarray(frame_indices, dtype=np.int32),
                 times_s=times_s,
                 ocr_raw=np.asarray(ocr_rows, dtype=object),
+                meta_json=np.asarray(meta_json),
                 meta=np.asarray(meta_out, dtype=object),
             )
             timings["saving"] = time.perf_counter() - t_save_start
@@ -472,6 +551,17 @@ def process_ocr_extractor_batch(
             # Update stage_timings_ms with final timings
             stage_timings_ms = {k: v * 1000.0 for k, v in timings.items()}
             meta_out["stage_timings_ms"] = stage_timings_ms
+            meta_json = json.dumps(meta_out, ensure_ascii=False, sort_keys=True)
+
+            # Two-pass: rewrite artifact with final stage timings/meta_json
+            atomic_save_npz(
+                out_path,
+                frame_indices=np.asarray(frame_indices, dtype=np.int32),
+                times_s=times_s,
+                ocr_raw=np.asarray(ocr_rows, dtype=object),
+                meta_json=np.asarray(meta_json),
+                meta=np.asarray(meta_out, dtype=object),
+            )
             
             # Validate artifact
             ok, issues, _ = validate_npz(out_path)

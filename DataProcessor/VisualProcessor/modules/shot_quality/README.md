@@ -1,4 +1,4 @@
-# `shot_quality` (v2)
+# `shot_quality` (Audit v3)
 
 Модуль оценивает **техническое качество** видео на уровне:
 - **кадров** (frame-level признаки по выборке `frame_indices`)
@@ -71,8 +71,9 @@ Segmenter обязан записать в `frames_dir/metadata.json`:
 Модуль сохраняет **фиксированный** артефакт через `BaseModule.save_results()` в директорию:
 `rs_path/shot_quality/`
 
-Имя файла:
-`shot_quality.npz`
+**Version**: 2.0.2  
+**Schema**: `shot_quality_npz_v3`  
+**Artifact filename**: `shot_quality.npz`
 
 ### Ключи
 
@@ -80,13 +81,17 @@ Segmenter обязан записать в `frames_dir/metadata.json`:
 - **`times_s`**: `(N,) float32` — временная ось строго из `union_timestamps_sec[frame_indices]` (no-fallback)
 - **`feature_names`**: `(F,) object` — имена признаков в `frame_features`
 - **`frame_features`**: `(N, F) float32`
+- **`frame_feature_present_ratio`**: `(F,) float32` — доля finite по каждой колонке `frame_features` (помогает моделям интерпретировать NaN)
 - **`quality_probs`**: `(N, P) float16` — вероятности zero-shot классов качества (через `core_clip`)
 - **`shot_ids`**: `(N,) int32` — принадлежность каждого кадра шоту
 - **`shot_start_frame`**: `(S,) int32`
 - **`shot_end_frame`**: `(S,) int32`
 - **`shot_frame_count`**: `(S,) int32` — число sampled кадров в шоте
 - **`shot_features_mean/std/min/max`**: `(S, F) float32` — агрегаты по кадрам шота
-- **`impl_meta`**: `object` — модульный словарь (маппинги категорий, prompts и др.)
+- **`shot_frame_feature_present_ratio`**: `(S,F) float32` — доля finite в `frame_features` внутри каждого шота (QA/model)
+- **`shot_quality_topk_ids` / `shot_quality_topk_probs`**: `(S,K)` — top‑K quality классы по средним вероятностям внутри шота
+- **`shot_quality_conf_mean` / `shot_quality_entropy_mean`**: `(S,)` — shot-level confidence/entropy
+- **`impl_meta`**: **внутри `meta.impl_meta`** (debug) — модульный словарь (маппинги категорий, prompts и др.)
 
 **Важно про `meta`:** canonical `meta` всегда добавляется `BaseModule.save_results()` и содержит run identity keys, status/empty_reason и т.д.
 
@@ -102,17 +107,17 @@ Segmenter обязан записать в `frames_dir/metadata.json`:
 Важно: текст промптов **не хранится**. UI должен маппить `class_id` → label по `prompts.version` / `prompts.sha256`.
 
 ### “Нет лиц” — это нормально
-Если на видео нет лиц, это **валидная пустота**:
-- `core_face_landmarks` выставляет `has_any_face=False`, `empty_reason="no_faces_in_video"`
-- `shot_quality` ставит `meta.status="empty"`, `meta.empty_reason="no_faces_in_video"`
-- при этом non-face метрики и `quality_probs` всё равно вычисляются и сохраняются (а `face_*` признаки остаются `NaN`)
+Если на видео нет лиц, это **валидный OK результат**:
+- `core_face_landmarks` может быть `status="empty"` с `empty_reason="no_faces_in_video"`
+- `shot_quality` остаётся `meta.status="ok"` (non-face метрики и `quality_probs` вычисляются)
+- `face_*` признаки в `frame_features` будут `NaN`
 
 ### Human-friendly распаковка
 
 ```python
 import numpy as np
 
-data = np.load(".../shot_quality_features.npz", allow_pickle=True)
+data = np.load(".../shot_quality/shot_quality.npz", allow_pickle=True)
 
 frame_indices = data["frame_indices"]
 feature_names = data["feature_names"].tolist()
@@ -144,10 +149,23 @@ shots = [
 from pathlib import Path
 import numpy as np
 
-root = Path(".../result_store/shot_quality")
-latest = max(root.glob("shot_quality_features_*.npz"), key=lambda p: p.stat().st_mtime)
-data = np.load(latest, allow_pickle=True)
+# фиксированное имя в result_store/.../shot_quality/shot_quality.npz
+p = Path(".../result_store/<platform>/<video>/<run_id>/shot_quality/shot_quality.npz")
+data = np.load(p, allow_pickle=True)
 ```
+
+### Проверка NPZ (валидатор)
+
+```bash
+cd /path/to/TrendFlowML
+export PYTHONPATH=DataProcessor:DataProcessor/VisualProcessor
+DataProcessor/VisualProcessor/.vp_venv/bin/python3 \
+  DataProcessor/VisualProcessor/modules/shot_quality/utils/validate_shot_quality_npz.py \
+  storage/result_store/youtube/-15jH8mtfJw/25506df0-a75a-4c26-a3f1-79d07c4cb810/shot_quality/shot_quality.npz \
+  --struct --qa --ranges
+```
+
+Пакетный обход: `--results-base storage/result_store --platform-id youtube` (ищет `shot_quality/shot_quality.npz`). Подробности: [docs/FEATURE_DESCRIPTION.md](docs/FEATURE_DESCRIPTION.md).
 
 ---
 
@@ -180,13 +198,14 @@ data = np.load(latest, allow_pickle=True)
 Для контроля памяти матмала используется **явный** параметр:
 - `matmul_chunk_size` (через config), default `2048` (без эвристик).
 
-## Batch Processing (Stage 3)
+## Batch Processing
 
 Компонент поддерживает **batch processing** для одновременной обработки нескольких видео:
 
 - **Batch-safe**: использует per-video rs_path (нет shared mutable state между видео).
 - **Дефолтный process_batch()**: последовательная обработка каждого видео через BaseModule.
 - **GPU batching**: не требуется (CPU-only модуль).
+- **supports_batch**: возвращает `False` (компонент не реализует оптимизированный GPU batching, но поддерживает последовательную обработку батчей через BaseModule).
 
 **Использование**:
 - Batch processing автоматически активируется при обработке нескольких видео через `--video-input-dir` или `--video-input-list`
@@ -234,7 +253,7 @@ Render-context может быть использован:
 
 **HTML debug страница** (опционально):
 - Путь: `result_store/.../shot_quality/_render/render.html`
-- Содержит интерактивные графики (Chart.js):
+- Содержит offline SVG графики (без CDN):
   - Timeline: sharpness и quality confidence по времени
   - Shots summary: таблица со всеми shots (shot_id, start_frame, end_frame, frame_count)
   - Distributions: статистики по метрикам

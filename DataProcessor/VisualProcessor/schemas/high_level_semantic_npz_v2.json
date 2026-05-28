@@ -1,0 +1,77 @@
+{
+  "schema_system_version": "vp_schema_v1",
+  "schema_version": "high_level_semantic_npz_v2",
+  "producer": "high_level_semantic",
+  "artifact_kind": "npz",
+  "allow_extra_keys": false,
+  "meta": {
+    "required_keys": [
+      "producer",
+      "producer_version",
+      "schema_version",
+      "created_at",
+      "platform_id",
+      "video_id",
+      "run_id",
+      "config_hash",
+      "sampling_policy_version",
+      "dataprocessor_version",
+      "status",
+      "empty_reason",
+      "models_used",
+      "model_signature",
+      "stage_timings_ms"
+    ],
+    "optional_keys": [
+      "total_frames",
+      "processed_frames",
+      "frames_dir",
+      "analysis_fps",
+      "analysis_width",
+      "analysis_height",
+      "ui_payload",
+      "feature_groups",
+      "require_cut_detection_model_facing",
+      "require_text_processor",
+      "require_audio_loudness",
+      "require_audio_tempo",
+      "require_audio_clap",
+      "progress_every_frames",
+      "semantic_jump_topk_events",
+      "semantic_jump_min_strength",
+      "semantic_jump_min_distance_frames"
+    ]
+  },
+  "fields": {
+    "frame_indices": { "required": true, "tier": "model_facing", "dtype": "int32", "shape": ["N"] },
+    "times_s": { "required": true, "tier": "model_facing", "dtype": "float32", "shape": ["N"] },
+
+    "scene_id": { "required": true, "tier": "model_facing", "dtype": "int32", "shape": ["N"] },
+    "scene_embeddings": { "required": true, "tier": "model_facing", "dtype": "float32", "shape": ["S", "D"] },
+    "scene_embedding_mean_norm": { "required": true, "tier": "analytics", "dtype": "float32", "shape": ["S"] },
+    "scene_start_frame_idx": { "required": true, "tier": "model_facing", "dtype": "int32", "shape": ["S"] },
+    "scene_end_frame_idx": { "required": true, "tier": "model_facing", "dtype": "int32", "shape": ["S"] },
+    "scene_start_time_s": { "required": true, "tier": "model_facing", "dtype": "float32", "shape": ["S"] },
+    "scene_end_time_s": { "required": true, "tier": "model_facing", "dtype": "float32", "shape": ["S"] },
+    "scene_duration_s": { "required": true, "tier": "model_facing", "dtype": "float32", "shape": ["S"] },
+    "scene_representative_frame_idx": { "required": true, "tier": "model_facing", "dtype": "int32", "shape": ["S"] },
+
+    "frame_feature_names": { "required": true, "tier": "model_facing", "dtype": "object", "shape": ["F"] },
+    "frame_features": { "required": true, "tier": "model_facing", "dtype": "float32", "shape": ["N", "F"] },
+    "frame_feature_present_ratio": { "required": true, "tier": "model_facing", "dtype": "float32", "shape": ["F"] },
+
+    "event_times_s": { "required": true, "tier": "analytics", "dtype": "float32", "shape": ["E"] },
+    "event_type_id": { "required": true, "tier": "analytics", "dtype": "int16", "shape": ["E"] },
+    "event_strength": { "required": true, "tier": "analytics", "dtype": "float32", "shape": ["E"] },
+    "event_frame_pos": { "required": true, "tier": "analytics", "dtype": "int32", "shape": ["E"] },
+
+    "text_feature_names": { "required": true, "tier": "analytics", "dtype": "object", "shape": ["T"] },
+    "text_feature_values": { "required": true, "tier": "analytics", "dtype": "float32", "shape": ["T"] },
+
+    "features": { "required": true, "tier": "analytics", "dtype": "object", "shape": [] },
+    "ui": { "required": true, "tier": "debug", "dtype": "object", "shape": [] },
+    "meta": { "required": true, "tier": "debug", "dtype": "object", "shape": [] }
+  }
+}
+
+

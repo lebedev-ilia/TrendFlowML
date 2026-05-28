@@ -1,0 +1,53 @@
+{
+  "schema_system_version": "vp_schema_v1",
+  "schema_version": "uniqueness_npz_v3",
+  "producer": "uniqueness",
+  "artifact_kind": "npz",
+  "allow_extra_keys": false,
+  "meta": {
+    "required_keys": [
+      "producer",
+      "producer_version",
+      "schema_version",
+      "created_at",
+      "platform_id",
+      "video_id",
+      "run_id",
+      "config_hash",
+      "sampling_policy_version",
+      "dataprocessor_version",
+      "status",
+      "empty_reason",
+      "models_used",
+      "model_signature",
+      "stage_timings_ms"
+    ],
+    "optional_keys": [
+      "total_frames",
+      "processed_frames",
+      "frames_dir",
+      "analysis_fps",
+      "analysis_width",
+      "analysis_height",
+      "ui_payload",
+      "repeat_threshold_mode",
+      "repeat_threshold",
+      "repeat_threshold_min",
+      "repeat_threshold_max",
+      "repeat_threshold_bins",
+      "ui_topk",
+      "max_frames"
+    ]
+  },
+  "fields": {
+    "frame_indices": { "required": true, "tier": "model_facing", "dtype": "int32", "shape": ["N"] },
+    "times_s": { "required": true, "tier": "model_facing", "dtype": "float32", "shape": ["N"] },
+    "max_sim_to_other": { "required": true, "tier": "model_facing", "dtype": "float32", "shape": ["N"] },
+    "cos_dist_next": { "required": true, "tier": "model_facing", "dtype": "float32", "shape": ["N-1"] },
+    "feature_names": { "required": true, "tier": "model_facing", "dtype": "object", "shape": ["F"] },
+    "feature_values": { "required": true, "tier": "model_facing", "dtype": "float32", "shape": ["F"] },
+    "meta": { "required": true, "tier": "debug", "dtype": "object", "shape": [] }
+  }
+}
+
+

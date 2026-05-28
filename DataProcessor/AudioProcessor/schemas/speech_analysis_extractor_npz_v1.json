@@ -1,0 +1,43 @@
+{
+  "schema_system_version": "vp_schema_v1",
+  "schema_version": "speech_analysis_extractor_npz_v1",
+  "producer": "speech_analysis_extractor",
+  "artifact_kind": "npz",
+  "allow_extra_keys": false,
+  "meta": {
+    "required_keys": [
+      "producer",
+      "producer_version",
+      "schema_version",
+      "created_at",
+      "platform_id",
+      "video_id",
+      "run_id",
+      "config_hash",
+      "sampling_policy_version",
+      "dataprocessor_version",
+      "status",
+      "empty_reason"
+    ],
+    "optional_keys": [
+      "device_used",
+      "scheduler_knobs",
+      "resource_metrics",
+      "error",
+      "speech_analysis_contract_version",
+      "features_enabled",
+      "stage_timings_ms"
+    ]
+  },
+  "fields": {
+    "feature_names": { "required": true, "tier": "model_facing", "dtype": "object", "shape": ["F"] },
+    "feature_values": { "required": true, "tier": "model_facing", "dtype": "float32", "shape": ["F"] },
+
+    "asr_lang_id_by_segment": { "required": false, "tier": "analytics", "dtype": "int32", "shape": ["N"] },
+    "speaker_ids": { "required": false, "tier": "analytics", "dtype": "int32", "shape": ["M"] },
+    "asr_lang_distribution": { "required": false, "tier": "analytics", "dtype": "object", "shape": [] },
+    "pitch_distribution": { "required": false, "tier": "analytics", "dtype": "object", "shape": [] },
+
+    "meta": { "required": true, "tier": "debug", "dtype": "object", "shape": [] }
+  }
+}

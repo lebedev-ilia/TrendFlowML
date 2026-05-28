@@ -27,6 +27,8 @@ import librosa
 from src.core.base_extractor import BaseExtractor, ExtractorResult
 from src.core.audio_utils import AudioUtils
 
+from .utils.resource_profile import capture_spectral_entropy_resource_profile, is_spectral_entropy_resource_profile_enabled
+
 logger = logging.getLogger(__name__)
 
 # Contract version for downstream extractors compatibility validation
@@ -37,7 +39,7 @@ class SpectralEntropyExtractor(BaseExtractor):
     """Экстрактор спектральной энтропии с поддержкой segment-based обработки."""
 
     name = "spectral_entropy"
-    version = "2.0.0"
+    version = "2.0.1"
     description = "Спектральная энтропия, flatness и spread"
     category = "spectral"
     dependencies = ["librosa", "numpy"]
@@ -57,13 +59,13 @@ class SpectralEntropyExtractor(BaseExtractor):
         smoothing_window: int = 0,
         use_mel: bool = False,
         n_mels: int = 128,
-        # Feature gating flags (per-feature control, default: all False)
-        enable_basic_stats: bool = False,
+        # Feature gating flags (Audit v3 defaults: basic stats enabled)
+        enable_basic_stats: bool = True,
         enable_flatness: bool = False,
         enable_spread: bool = False,
-        enable_time_series: bool = False,
+        enable_time_series: bool = False,  # legacy/no-op in audited v3 contract
         enable_extended_stats: bool = False,
-        enable_dynamics: bool = False,
+        enable_dynamics: bool = False,  # legacy/no-op in audited v3 contract
         # Optional audio normalization
         enable_audio_normalization: bool = False,
         # Progress reporting callback
@@ -205,30 +207,9 @@ class SpectralEntropyExtractor(BaseExtractor):
         Returns:
             S: Спектрограмма мощности [n_freq, n_time]
         """
-        # Try to reuse provided spectrogram if present in shared_features
-        if shared_features:
-            # Try to get STFT magnitude from spectral_extractor
-            stft_magnitude = shared_features.get("stft_magnitude")
-            if stft_magnitude is not None:
-                if not isinstance(stft_magnitude, np.ndarray):
-                    stft_magnitude = np.array(stft_magnitude)
-                if stft_magnitude.ndim == 2:
-                    # Convert magnitude to power spectrum
-                    S = stft_magnitude.astype(np.float32) ** 2
-                    logger.debug(f"spectral_entropy | Reusing STFT from shared_features: {S.shape}")
-                    return S
-                else:
-                    logger.warning(f"spectral_entropy | Invalid stft_magnitude shape in shared_features: {stft_magnitude.shape}, recomputing")
-
-            # Try to get mel spectrogram
-            mel_spectrogram = shared_features.get("mel_spectrogram")
-            if mel_spectrogram is not None and self.use_mel:
-                if not isinstance(mel_spectrogram, np.ndarray):
-                    mel_spectrogram = np.array(mel_spectrogram)
-                if mel_spectrogram.ndim == 2:
-                    S = mel_spectrogram.astype(np.float32) ** 2
-                    logger.debug(f"spectral_entropy | Reusing mel spectrogram from shared_features: {S.shape}")
-                    return S
+        # Audit v3: correctness-first. Do NOT reuse shared_features spectrograms.
+        # (shared_features may correspond to full-audio STFT and is not safe for segment runs.)
+        _ = shared_features
 
         # Compute spectrogram here
         if not self.use_mel:
@@ -302,7 +283,7 @@ class SpectralEntropyExtractor(BaseExtractor):
     def _calc_stats(self, arr: np.ndarray) -> Dict[str, float]:
         """Вычисление базовых статистик."""
         if len(arr) == 0:
-            return {"mean": 0.0, "std": 0.0}
+            return {"mean": float("nan"), "std": float("nan")}
         return {
             "mean": float(np.mean(arr)),
             "std": float(np.std(arr)),
@@ -311,7 +292,7 @@ class SpectralEntropyExtractor(BaseExtractor):
     def _calc_extended_stats(self, arr: np.ndarray) -> Dict[str, float]:
         """Вычисление расширенных статистик."""
         if len(arr) == 0:
-            return {"min": 0.0, "max": 0.0, "p25": 0.0, "p75": 0.0}
+            return {"min": float("nan"), "max": float("nan"), "p25": float("nan"), "p75": float("nan")}
         return {
             "min": float(np.min(arr)),
             "max": float(np.max(arr)),
@@ -364,7 +345,7 @@ class SpectralEntropyExtractor(BaseExtractor):
         if not isinstance(features, dict):
             return False, "spectral_entropy | features must be a dict"
 
-        # Validate entropy stats if present
+        # Validate entropy stats if present (allow NaN for missing values)
         if "spectral_entropy_stats" in features:
             stats = features.get("spectral_entropy_stats")
             if not isinstance(stats, dict):
@@ -373,32 +354,38 @@ class SpectralEntropyExtractor(BaseExtractor):
             for stat_key in ["mean", "std", "min", "max"]:
                 if stat_key in stats:
                     value = float(stats.get(stat_key))
-                    if np.isnan(value) or np.isinf(value):
-                        return False, f"spectral_entropy | spectral_entropy_stats.{stat_key} is NaN or Inf"
+                    if np.isinf(value):
+                        return False, f"spectral_entropy | spectral_entropy_stats.{stat_key} is Inf"
+                    if np.isnan(value):
+                        continue
                     if value < 0 or value > max_entropy:
                         return False, f"spectral_entropy | spectral_entropy_stats.{stat_key} must be in [0, {max_entropy}], got {value}"
 
-        # Validate flatness (should be in [0, 1])
+        # Validate flatness (should be in [0, 1]) (allow NaN)
         if "spectral_flatness_stats" in features:
             stats = features.get("spectral_flatness_stats")
             if isinstance(stats, dict):
                 for stat_key in ["mean", "std", "min", "max"]:
                     if stat_key in stats:
                         value = float(stats.get(stat_key))
+                        if np.isnan(value):
+                            continue
                         if value < 0.0 or value > 1.0:
                             return False, f"spectral_entropy | spectral_flatness_stats.{stat_key} must be in [0, 1], got {value}"
 
-        # Validate spread (should be >= 0)
+        # Validate spread (should be >= 0) (allow NaN)
         if "spectral_spread_stats" in features:
             stats = features.get("spectral_spread_stats")
             if isinstance(stats, dict):
                 for stat_key in ["mean", "std", "min", "max"]:
                     if stat_key in stats:
                         value = float(stats.get(stat_key))
+                        if np.isnan(value):
+                            continue
                         if value < 0.0:
                             return False, f"spectral_entropy | spectral_spread_stats.{stat_key} must be >= 0, got {value}"
 
-        # Validate time series if present
+        # Validate time series if present (legacy; allow empty; forbid NaN/Inf/negative if present)
         for series_key in ["spectral_entropy_series", "spectral_flatness_series", "spectral_spread_series"]:
             if series_key in features:
                 series = features.get(series_key)
@@ -425,6 +412,14 @@ class SpectralEntropyExtractor(BaseExtractor):
             ExtractorResult с payload
         """
         start_time = time.time()
+        t0_total = time.perf_counter()
+        stage_timings_ms: Dict[str, float] = {}
+
+        spectral_entropy_resource_profile: Optional[Dict[str, Any]] = None
+        if is_spectral_entropy_resource_profile_enabled():
+            spectral_entropy_resource_profile = {
+                "at_start": capture_spectral_entropy_resource_profile(stage="at_start"),
+            }
         try:
             if not self._validate_input(input_uri):
                 error_code = self._classify_error(ValueError("Invalid input"), "audio_load_failed")
@@ -437,18 +432,47 @@ class SpectralEntropyExtractor(BaseExtractor):
             self._log_extraction_start(input_uri)
 
             # Загружаем аудио
+            t0 = time.perf_counter()
             y_t, sr = self.audio_utils.load_audio(input_uri, self.sample_rate)
             y = self.audio_utils.to_numpy(y_t)
+            stage_timings_ms["load_audio_ms"] = (time.perf_counter() - t0) * 1000.0
 
-            # Проверка минимальной длительности
+            # Проверка минимальной длительности (Audit v3: short audio -> empty)
             duration = len(y) / sr
             if duration < 1.0:
-                error_code = self._classify_error(ValueError("Audio too short"), "audio_too_short")
-                return self._create_result(
-                    success=False,
-                    error=f"spectral_entropy | Аудио слишком короткое: {duration:.2f}s < 1.0s (error_code={error_code})",
-                    processing_time=time.time() - start_time,
-                )
+                payload = {
+                    "status": "empty",
+                    "empty_reason": "audio_too_short",
+                    "device_used": self.device,
+                    "sample_rate": sr,
+                    "n_fft": self.n_fft,
+                    "hop_length": self.hop_length,
+                    "use_mel": self.use_mel,
+                    "n_mels": self.n_mels,
+                    "average_channels": self.average_channels,
+                    "smoothing_window": self.smoothing_window,
+                    "duration": float(duration),
+                    "segments_count": 0,
+                    # model-facing scalars (NaN = missing)
+                    "spectral_entropy_mean": float("nan"),
+                    "spectral_entropy_std": float("nan"),
+                    # canonical axis (synthetic single window)
+                    "segment_start_sec": [0.0],
+                    "segment_end_sec": [float(duration)],
+                    "segment_center_sec": [0.5 * float(duration)],
+                    "segment_mask": [False],
+                    # per-segment arrays (N=1)
+                    "entropy_mean_by_segment": [float("nan")],
+                    "entropy_std_by_segment": [float("nan")],
+                    "spectral_entropy_contract_version": SPECTRAL_ENTROPY_CONTRACT_VERSION,
+                    "_features_enabled": ["basic_stats"],
+                }
+                stage_timings_ms["total_ms"] = (time.perf_counter() - t0_total) * 1000.0
+                payload["stage_timings_ms"] = stage_timings_ms
+                if spectral_entropy_resource_profile is not None:
+                    spectral_entropy_resource_profile["at_end"] = capture_spectral_entropy_resource_profile(stage="at_end")
+                    payload["spectral_entropy_resource_profile"] = spectral_entropy_resource_profile
+                return self._create_result(True, payload=payload, processing_time=time.time() - start_time)
 
             # Обработка многоканального аудио
             if y.ndim == 2:
@@ -458,11 +482,15 @@ class SpectralEntropyExtractor(BaseExtractor):
                     y = y[0]  # use first channel
 
             # Нормализация аудио (опционально)
+            t0 = time.perf_counter()
             y = self._normalize_audio(y)
+            stage_timings_ms["normalize_audio_ms"] = (time.perf_counter() - t0) * 1000.0
 
             # Вычисление спектрограммы
             try:
+                t0 = time.perf_counter()
                 S = self._compute_spectrogram(y, sr, shared_features)
+                stage_timings_ms["spectrogram_ms"] = (time.perf_counter() - t0) * 1000.0
             except Exception as e:
                 error_code = self._classify_error(e, "stft_computation_failed")
                 return self._create_result(
@@ -473,8 +501,10 @@ class SpectralEntropyExtractor(BaseExtractor):
 
             # Вычисление метрик
             try:
+                t0 = time.perf_counter()
                 ent = self._compute_entropy(S)
                 ent = self._apply_smoothing(ent)
+                stage_timings_ms["entropy_ms"] = (time.perf_counter() - t0) * 1000.0
             except Exception as e:
                 error_code = self._classify_error(e, "entropy_computation_failed")
                 return self._create_result(
@@ -504,7 +534,10 @@ class SpectralEntropyExtractor(BaseExtractor):
                     spread = None
 
             # Формирование payload
+            t0 = time.perf_counter()
             payload: Dict[str, Any] = {
+                "status": "ok",
+                "empty_reason": "none",
                 "device_used": self.device,
                 "sample_rate": sr,
                 "n_fft": self.n_fft,
@@ -522,6 +555,11 @@ class SpectralEntropyExtractor(BaseExtractor):
                 payload["spectral_entropy_stats"] = self._calc_stats(ent)
                 if self.enable_extended_stats:
                     payload["spectral_entropy_stats"].update(self._calc_extended_stats(ent))
+                payload["spectral_entropy_mean"] = float(payload["spectral_entropy_stats"].get("mean", float("nan")))
+                payload["spectral_entropy_std"] = float(payload["spectral_entropy_stats"].get("std", float("nan")))
+            else:
+                payload["spectral_entropy_mean"] = float("nan")
+                payload["spectral_entropy_std"] = float("nan")
 
             # Feature gating: flatness
             if self.enable_flatness and flatness is not None:
@@ -535,13 +573,13 @@ class SpectralEntropyExtractor(BaseExtractor):
                 if self.enable_extended_stats:
                     payload["spectral_spread_stats"].update(self._calc_extended_stats(spread))
 
-            # Feature gating: time series
-            if self.enable_time_series:
-                payload["spectral_entropy_series"] = ent.tolist()
-                if flatness is not None:
-                    payload["spectral_flatness_series"] = flatness.tolist()
-                if spread is not None:
-                    payload["spectral_spread_series"] = spread.tolist()
+            # Audit v3: per-segment arrays are the primary time-axis contract.
+            payload["segment_start_sec"] = [0.0]
+            payload["segment_end_sec"] = [float(duration)]
+            payload["segment_center_sec"] = [0.5 * float(duration)]
+            payload["segment_mask"] = [True]
+            payload["entropy_mean_by_segment"] = [float(payload.get("spectral_entropy_mean", float("nan")))]
+            payload["entropy_std_by_segment"] = [float(payload.get("spectral_entropy_std", float("nan")))]
 
             # Additional ML/analytics metrics
             additional_metrics = self._calc_additional_metrics(ent, flatness, spread)
@@ -556,16 +594,15 @@ class SpectralEntropyExtractor(BaseExtractor):
                 enabled_features.append("flatness")
             if self.enable_spread:
                 enabled_features.append("spread")
-            if self.enable_time_series:
-                enabled_features.append("time_series")
             if self.enable_extended_stats:
                 enabled_features.append("extended_stats")
-            if self.enable_dynamics:
-                enabled_features.append("dynamics")
             payload["_features_enabled"] = enabled_features
+            stage_timings_ms["build_payload_ms"] = (time.perf_counter() - t0) * 1000.0
 
             # Валидация выходных данных
+            t0 = time.perf_counter()
             is_valid, error_msg = self._validate_output(payload)
+            stage_timings_ms["validate_output_ms"] = (time.perf_counter() - t0) * 1000.0
             if not is_valid:
                 error_code = self._classify_error(ValueError(error_msg), "validation_failed")
                 return self._create_result(
@@ -575,6 +612,11 @@ class SpectralEntropyExtractor(BaseExtractor):
                 )
 
             processing_time = time.time() - start_time
+            stage_timings_ms["total_ms"] = (time.perf_counter() - t0_total) * 1000.0
+            payload["stage_timings_ms"] = stage_timings_ms
+            if spectral_entropy_resource_profile is not None:
+                spectral_entropy_resource_profile["at_end"] = capture_spectral_entropy_resource_profile(stage="at_end")
+                payload["spectral_entropy_resource_profile"] = spectral_entropy_resource_profile
             self._log_extraction_success(input_uri, processing_time)
             return self._create_result(True, payload=payload, processing_time=processing_time)
 
@@ -608,6 +650,14 @@ class SpectralEntropyExtractor(BaseExtractor):
             ExtractorResult с payload
         """
         start_time = time.time()
+        t0_total = time.perf_counter()
+        stage_timings_ms: Dict[str, float] = {}
+
+        spectral_entropy_resource_profile: Optional[Dict[str, Any]] = None
+        if is_spectral_entropy_resource_profile_enabled():
+            spectral_entropy_resource_profile = {
+                "at_start": capture_spectral_entropy_resource_profile(stage="at_start"),
+            }
         try:
             if not self._validate_input(input_uri):
                 error_code = self._classify_error(ValueError("Invalid input"), "audio_load_failed")
@@ -618,19 +668,39 @@ class SpectralEntropyExtractor(BaseExtractor):
                 )
 
             if not segments:
-                error_code = self._classify_error(ValueError("Empty segments"), "invalid_parameters")
+                payload = {
+                    "status": "error",
+                    "empty_reason": "none",
+                    "error_code": "invalid_parameters",
+                }
                 return self._create_result(
                     success=False,
-                    error=f"spectral_entropy | Пустой список сегментов (error_code={error_code})",
+                    error="spectral_entropy | Пустой список сегментов (error_code=invalid_parameters)",
                     processing_time=time.time() - start_time,
                 )
 
             self._log_extraction_start(input_uri)
 
             total_segments = len(segments)
-            entropy_series_all = []
-            flatness_series_all = []
-            spread_series_all = []
+            t0_process = time.perf_counter()
+
+            segment_start_sec = [0.0 for _ in range(total_segments)]
+            segment_end_sec = [0.0 for _ in range(total_segments)]
+            segment_center_sec = [0.0 for _ in range(total_segments)]
+            segment_mask = [False for _ in range(total_segments)]
+
+            entropy_mean_by_segment = np.full((total_segments,), np.nan, dtype=np.float32)
+            entropy_std_by_segment = np.full((total_segments,), np.nan, dtype=np.float32)
+            entropy_min_by_segment = np.full((total_segments,), np.nan, dtype=np.float32)
+            entropy_max_by_segment = np.full((total_segments,), np.nan, dtype=np.float32)
+
+            flatness_mean_by_segment = np.full((total_segments,), np.nan, dtype=np.float32)
+            flatness_std_by_segment = np.full((total_segments,), np.nan, dtype=np.float32)
+
+            spread_mean_by_segment = np.full((total_segments,), np.nan, dtype=np.float32)
+            spread_std_by_segment = np.full((total_segments,), np.nan, dtype=np.float32)
+
+            seg_duration_sec = np.zeros((total_segments,), dtype=np.float32)
 
             # Обработка сегментов
             for i, seg in enumerate(segments):
@@ -646,6 +716,9 @@ class SpectralEntropyExtractor(BaseExtractor):
                 end_sample = int(seg.get("end_sample", 0))
                 start_sec = float(seg.get("start_sec", 0.0))
                 end_sec = float(seg.get("end_sec", 0.0))
+                segment_start_sec[i] = start_sec
+                segment_end_sec[i] = end_sec
+                segment_center_sec[i] = 0.5 * (start_sec + end_sec) if end_sec > start_sec else start_sec
                 
                 # Вычисление длительности: предпочтительно из start_sec/end_sec, fallback на samples
                 if end_sec > start_sec:
@@ -656,6 +729,7 @@ class SpectralEntropyExtractor(BaseExtractor):
                     duration = (end_sample - start_sample) / float(segment_sr)
                 else:
                     duration = 0.0
+                seg_duration_sec[i] = float(max(0.0, duration))
 
                 # Проверка минимальной длительности (до загрузки аудио)
                 if duration < 0.1:  # Минимум 100ms для сегмента
@@ -703,17 +777,25 @@ class SpectralEntropyExtractor(BaseExtractor):
                 try:
                     ent = self._compute_entropy(S)
                     ent = self._apply_smoothing(ent)
-                    entropy_series_all.extend(ent.tolist())
                 except Exception as e:
                     error_code = self._classify_error(e, "entropy_computation_failed")
                     logger.warning(f"spectral_entropy | Ошибка вычисления энтропии для сегмента {i}: {str(e)} (error_code={error_code})")
                     continue
 
+                # Per-segment entropy stats
+                entropy_mean_by_segment[i] = float(np.mean(ent)) if ent.size else np.nan
+                entropy_std_by_segment[i] = float(np.std(ent)) if ent.size else np.nan
+                if self.enable_extended_stats and ent.size:
+                    entropy_min_by_segment[i] = float(np.min(ent))
+                    entropy_max_by_segment[i] = float(np.max(ent))
+
                 if self.enable_flatness:
                     try:
                         flatness = self._compute_flatness(S)
                         flatness = self._apply_smoothing(flatness)
-                        flatness_series_all.extend(flatness.tolist())
+                        if flatness.size:
+                            flatness_mean_by_segment[i] = float(np.mean(flatness))
+                            flatness_std_by_segment[i] = float(np.std(flatness))
                     except Exception as e:
                         error_code = self._classify_error(e, "flatness_computation_failed")
                         logger.warning(f"spectral_entropy | Ошибка вычисления flatness для сегмента {i}: {str(e)} (error_code={error_code})")
@@ -722,41 +804,71 @@ class SpectralEntropyExtractor(BaseExtractor):
                     try:
                         spread = self._compute_spread(S)
                         spread = self._apply_smoothing(spread)
-                        spread_series_all.extend(spread.tolist())
+                        if spread.size:
+                            spread_mean_by_segment[i] = float(np.mean(spread))
+                            spread_std_by_segment[i] = float(np.std(spread))
                     except Exception as e:
                         error_code = self._classify_error(e, "spread_computation_failed")
                         logger.warning(f"spectral_entropy | Ошибка вычисления spread для сегмента {i}: {str(e)} (error_code={error_code})")
 
+                segment_mask[i] = True
+
             # Проверка на пустые результаты
-            if len(entropy_series_all) == 0:
-                error_code = self._classify_error(ValueError("All segments failed"), "entropy_computation_failed")
-                return self._create_result(
-                    success=False,
-                    error=f"spectral_entropy | Все сегменты не удалось обработать (error_code={error_code})",
-                    processing_time=time.time() - start_time,
-                )
+            valid_idx = np.asarray(segment_mask, dtype=bool)
+            if not np.any(valid_idx):
+                # Audit v3: empty when all segments failed
+                payload = {
+                    "status": "empty",
+                    "empty_reason": "spectral_entropy_all_segments_failed",
+                    "device_used": self.device,
+                    "sample_rate": self.sample_rate,
+                    "n_fft": self.n_fft,
+                    "hop_length": self.hop_length,
+                    "use_mel": self.use_mel,
+                    "n_mels": self.n_mels,
+                    "average_channels": self.average_channels,
+                    "smoothing_window": self.smoothing_window,
+                    "duration": float(max(segment_end_sec) if segment_end_sec else 0.0),
+                    "segments_count": int(total_segments),
+                    "spectral_entropy_mean": float("nan"),
+                    "spectral_entropy_std": float("nan"),
+                    "segment_start_sec": segment_start_sec,
+                    "segment_end_sec": segment_end_sec,
+                    "segment_center_sec": segment_center_sec,
+                    "segment_mask": [bool(x) for x in segment_mask],
+                    "entropy_mean_by_segment": entropy_mean_by_segment.tolist(),
+                    "entropy_std_by_segment": entropy_std_by_segment.tolist(),
+                    "spectral_entropy_contract_version": SPECTRAL_ENTROPY_CONTRACT_VERSION,
+                    "_features_enabled": ["basic_stats"],
+                }
+                stage_timings_ms["process_segments_ms"] = (time.perf_counter() - t0_process) * 1000.0
+                stage_timings_ms["total_ms"] = (time.perf_counter() - t0_total) * 1000.0
+                payload["stage_timings_ms"] = stage_timings_ms
+                if spectral_entropy_resource_profile is not None:
+                    spectral_entropy_resource_profile["at_end"] = capture_spectral_entropy_resource_profile(stage="at_end")
+                    payload["spectral_entropy_resource_profile"] = spectral_entropy_resource_profile
+                return self._create_result(True, payload=payload, processing_time=time.time() - start_time)
 
-            # Агрегация результатов
-            entropy_arr = np.asarray(entropy_series_all, dtype=np.float32)
-            flatness_arr = np.asarray(flatness_series_all, dtype=np.float32) if flatness_series_all else None
-            spread_arr = np.asarray(spread_series_all, dtype=np.float32) if spread_series_all else None
-
-            # Формирование payload
-            # Вычисляем общую длительность из сегментов
-            total_duration = 0.0
-            for seg in segments:
-                start_sec = float(seg.get("start_sec", 0.0))
-                end_sec = float(seg.get("end_sec", 0.0))
-                if end_sec > start_sec:
-                    total_duration += (end_sec - start_sec)
-                else:
-                    start_sample = int(seg.get("start_sample", 0))
-                    end_sample = int(seg.get("end_sample", 0))
-                    if end_sample > start_sample:
-                        segment_sr = int(seg.get("sample_rate", self.sample_rate))
-                        total_duration += (end_sample - start_sample) / float(segment_sr)
+            # Global mean/std pooled over segments (duration-weighted)
+            stage_timings_ms["process_segments_ms"] = (time.perf_counter() - t0_process) * 1000.0
+            t0 = time.perf_counter()
+            w = seg_duration_sec[valid_idx]
+            m = entropy_mean_by_segment[valid_idx]
+            # per-segment variance from std
+            v = (entropy_std_by_segment[valid_idx] ** 2).astype(np.float64)
+            wsum = float(np.sum(w)) if w.size else 0.0
+            if wsum <= 0:
+                global_mean = float(np.nanmean(m)) if m.size else float("nan")
+                global_var = float(np.nanmean(v)) if v.size else float("nan")
+            else:
+                global_mean = float(np.sum(w * m) / wsum)
+                global_var = float(np.sum(w * (v + (m - global_mean) ** 2)) / wsum)
+            global_std = float(np.sqrt(global_var)) if np.isfinite(global_var) else float("nan")
+            stage_timings_ms["aggregate_metrics_ms"] = (time.perf_counter() - t0) * 1000.0
             
             payload: Dict[str, Any] = {
+                "status": "ok",
+                "empty_reason": "none",
                 "device_used": self.device,
                 "sample_rate": self.sample_rate,
                 "n_fft": self.n_fft,
@@ -765,76 +877,46 @@ class SpectralEntropyExtractor(BaseExtractor):
                 "n_mels": self.n_mels,
                 "average_channels": self.average_channels,
                 "smoothing_window": self.smoothing_window,
-                "duration": total_duration,
+                "duration": float(max(segment_end_sec) if segment_end_sec else 0.0),
                 "segments_count": int(total_segments),
                 "spectral_entropy_contract_version": SPECTRAL_ENTROPY_CONTRACT_VERSION,
+                "spectral_entropy_mean": float(global_mean),
+                "spectral_entropy_std": float(global_std),
+                "segment_start_sec": segment_start_sec,
+                "segment_end_sec": segment_end_sec,
+                "segment_center_sec": segment_center_sec,
+                "segment_mask": [bool(x) for x in segment_mask],
+                "entropy_mean_by_segment": entropy_mean_by_segment.tolist(),
+                "entropy_std_by_segment": entropy_std_by_segment.tolist(),
             }
 
-            # Feature gating: basic stats
-            if self.enable_basic_stats:
-                payload["spectral_entropy_stats"] = self._calc_stats(entropy_arr)
-                if self.enable_extended_stats:
-                    payload["spectral_entropy_stats"].update(self._calc_extended_stats(entropy_arr))
+            if self.enable_extended_stats:
+                payload["entropy_min_by_segment"] = entropy_min_by_segment.tolist()
+                payload["entropy_max_by_segment"] = entropy_max_by_segment.tolist()
 
-            # Feature gating: flatness
-            if self.enable_flatness and flatness_arr is not None and len(flatness_arr) > 0:
-                payload["spectral_flatness_stats"] = self._calc_stats(flatness_arr)
-                if self.enable_extended_stats:
-                    payload["spectral_flatness_stats"].update(self._calc_extended_stats(flatness_arr))
+            if self.enable_flatness:
+                payload["flatness_mean_by_segment"] = flatness_mean_by_segment.tolist()
+                payload["flatness_std_by_segment"] = flatness_std_by_segment.tolist()
 
-            # Feature gating: spread
-            if self.enable_spread and spread_arr is not None and len(spread_arr) > 0:
-                payload["spectral_spread_stats"] = self._calc_stats(spread_arr)
-                if self.enable_extended_stats:
-                    payload["spectral_spread_stats"].update(self._calc_extended_stats(spread_arr))
-
-            # Feature gating: time series
-            if self.enable_time_series:
-                payload["spectral_entropy_series"] = entropy_arr.tolist()
-                if flatness_arr is not None:
-                    payload["spectral_flatness_series"] = flatness_arr.tolist()
-                if spread_arr is not None:
-                    payload["spectral_spread_series"] = spread_arr.tolist()
-
-            # Feature gating: dynamics metrics
-            if self.enable_dynamics:
-                # Стабильность энтропии
-                payload["spectral_entropy_stability"] = float(np.var(entropy_arr))
-                # Количество переходов (простой эвристический метод)
-                transitions = np.sum(np.abs(np.diff(entropy_arr)) > np.std(entropy_arr))
-                payload["spectral_entropy_transitions_count"] = int(transitions)
-                payload["spectral_entropy_transitions_rate"] = float(transitions / len(entropy_arr)) if len(entropy_arr) > 0 else 0.0
-                # Распределение и разнообразие
-                payload["spectral_entropy_distribution"] = {
-                    "low": float(np.sum(entropy_arr < np.percentile(entropy_arr, 33)) / len(entropy_arr)),
-                    "medium": float(np.sum((entropy_arr >= np.percentile(entropy_arr, 33)) & (entropy_arr < np.percentile(entropy_arr, 67))) / len(entropy_arr)),
-                    "high": float(np.sum(entropy_arr >= np.percentile(entropy_arr, 67)) / len(entropy_arr)),
-                }
-                payload["spectral_entropy_diversity"] = float(len(np.unique(np.round(entropy_arr, decimals=2))) / len(entropy_arr))
-
-            # Additional ML/analytics metrics
-            additional_metrics = self._calc_additional_metrics(entropy_arr, flatness_arr, spread_arr)
-            if additional_metrics:
-                payload.update(additional_metrics)
+            if self.enable_spread:
+                payload["spread_mean_by_segment"] = spread_mean_by_segment.tolist()
+                payload["spread_std_by_segment"] = spread_std_by_segment.tolist()
 
             # Features enabled list
             enabled_features = []
-            if self.enable_basic_stats:
-                enabled_features.append("basic_stats")
+            enabled_features.append("basic_stats")
             if self.enable_flatness:
                 enabled_features.append("flatness")
             if self.enable_spread:
                 enabled_features.append("spread")
-            if self.enable_time_series:
-                enabled_features.append("time_series")
             if self.enable_extended_stats:
                 enabled_features.append("extended_stats")
-            if self.enable_dynamics:
-                enabled_features.append("dynamics")
             payload["_features_enabled"] = enabled_features
 
             # Валидация выходных данных
+            t0 = time.perf_counter()
             is_valid, error_msg = self._validate_output(payload)
+            stage_timings_ms["validate_output_ms"] = (time.perf_counter() - t0) * 1000.0
             if not is_valid:
                 error_code = self._classify_error(ValueError(error_msg), "validation_failed")
                 return self._create_result(
@@ -844,6 +926,11 @@ class SpectralEntropyExtractor(BaseExtractor):
                 )
 
             processing_time = time.time() - start_time
+            stage_timings_ms["total_ms"] = (time.perf_counter() - t0_total) * 1000.0
+            payload["stage_timings_ms"] = stage_timings_ms
+            if spectral_entropy_resource_profile is not None:
+                spectral_entropy_resource_profile["at_end"] = capture_spectral_entropy_resource_profile(stage="at_end")
+                payload["spectral_entropy_resource_profile"] = spectral_entropy_resource_profile
             self._log_extraction_success(input_uri, processing_time)
             return self._create_result(True, payload=payload, processing_time=processing_time)
 

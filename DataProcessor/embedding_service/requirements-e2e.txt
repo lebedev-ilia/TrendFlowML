@@ -1,0 +1,18 @@
+# Минимум для локального E2E (start_e2e_stack.sh → embedding-service на :8005).
+#
+#   cd DataProcessor && .data_venv/bin/pip install -r embedding_service/requirements-e2e.txt
+#
+# Намеренно без faiss-gpu — только CPU; Postgres с pgvector — setup_e2e_infra.sh + Fetcher compose.
+
+fastapi>=0.104.0
+uvicorn[standard]>=0.24.0
+python-multipart>=0.0.6
+pydantic>=2.0.0
+psycopg2-binary>=2.9.9
+faiss-cpu>=1.7.4
+opencv-python>=4.8.0
+Pillow>=10.0.0
+numpy>=1.24.0,<2.0.0
+insightface>=0.7.3
+onnxruntime>=1.16.0
+python-dotenv>=1.0.0

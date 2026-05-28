@@ -52,23 +52,21 @@ def create_emonet(*, n_expression: int = 8) -> Any:
     Create EmoNet architecture (no weights) for TorchStateDictProvider.
 
     Notes:
-    - The architecture implementation is vendored under VisualProcessor module sources.
+    - The architecture implementation is vendored under dp_models/emonet/.
     - We load it by file path to avoid relying on package import layout.
     """
-    # dp_models/ -> DataProcessor/
+    # dp_models/factories/ -> dp_models/ -> dp_models/emonet/emonet/models/emonet.py
     dp_models_dir = os.path.dirname(__file__)
-    data_processor_root = os.path.abspath(os.path.join(dp_models_dir, "..", ".."))
     emonet_py = os.path.join(
-        data_processor_root,
-        "VisualProcessor",
-        "modules",
-        "emotion_face",
-        "models",
+        dp_models_dir,
+        "..",
         "emonet",
         "emonet",
         "models",
         "emonet.py",
     )
+    emonet_py = os.path.abspath(emonet_py)
+    
     if not os.path.isfile(emonet_py):
         raise RuntimeError(f"EmoNet source file not found: {emonet_py}")
 

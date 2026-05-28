@@ -24,49 +24,92 @@ import hashlib
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from datetime import datetime
 from pathlib import Path
-from typing import Any, Dict, List, Optional, Tuple
+from typing import Any, Dict, List, Optional, Set, Tuple
 
 import numpy as np
 
 _vp_root = os.path.dirname(
-    os.path.dirname(os.path.dirname(os.path.dirname(os.path.dirname(__file__))))
+    os.path.dirname(os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__)))))
 )
+# Must be first: core_identity/*/utils/ must not shadow VisualProcessor/utils.
 if _vp_root not in sys.path:
-    sys.path.append(_vp_root)
+    sys.path.insert(0, _vp_root)
+elif sys.path[0] != _vp_root:
+    try:
+        sys.path.remove(_vp_root)
+    except ValueError:
+        pass
+    sys.path.insert(0, _vp_root)
 
+from utils.embedding_service_errors import EmbeddingServiceUnavailableError  # noqa: E402
 from utils.logger import get_logger  # type: ignore  # noqa: E402
 from utils.utilites import load_metadata  # type: ignore  # noqa: E402
 from utils.meta_builder import apply_models_meta  # type: ignore  # noqa: E402
 
-# Import Embedding Service client (create if doesn't exist)
+# Import Embedding Service client (try utils directory first, then fallback)
 try:
-    from embedding_service_client import EmbeddingServiceClient
+    from utils.embedding_service_client import EmbeddingServiceClient
 except ImportError:
-    # Fallback: try to import from brand_semantics or car_semantics
-    _brand_path = os.path.join(
-        os.path.dirname(__file__), "..", "brand_semantics", "embedding_service_client.py"
-    )
-    if os.path.isfile(_brand_path):
-        import importlib.util
-        spec = importlib.util.spec_from_file_location("embedding_service_client", _brand_path)
-        embedding_service_client = importlib.util.module_from_spec(spec)
-        spec.loader.exec_module(embedding_service_client)
-        EmbeddingServiceClient = embedding_service_client.EmbeddingServiceClient
-    else:
-        raise RuntimeError(
-            "franchise_recognition | embedding_service_client not found. "
-            "Please ensure EmbeddingServiceClient is available."
-        )
+    try:
+        from embedding_service_client import EmbeddingServiceClient
+    except ImportError:
+        # Fallback: try to import from utils directory or other modules
+        _current_dir = Path(__file__).parent
+        _utils_path = _current_dir / "utils" / "embedding_service_client.py"
+        _brand_path = _current_dir.parent / "brand_semantics" / "utils" / "embedding_service_client.py"
+        
+        _embedding_client_path = None
+        if _utils_path.exists():
+            _embedding_client_path = _utils_path
+        elif _brand_path.exists():
+            _embedding_client_path = _brand_path
+        
+        if _embedding_client_path:
+            import importlib.util
+            spec = importlib.util.spec_from_file_location("embedding_service_client", str(_embedding_client_path))
+            if spec and spec.loader:
+                embedding_service_client = importlib.util.module_from_spec(spec)
+                spec.loader.exec_module(embedding_service_client)
+                EmbeddingServiceClient = embedding_service_client.EmbeddingServiceClient
+            else:
+                raise RuntimeError(
+                    "franchise_recognition | Failed to load EmbeddingServiceClient from file"
+                )
+        else:
+            raise RuntimeError(
+                "franchise_recognition | embedding_service_client not found. "
+                f"Checked: {_utils_path}, {_brand_path}. "
+                "Please ensure EmbeddingServiceClient is available."
+            )
 
 NAME = "franchise_recognition"
-VERSION = "0.1"
-SCHEMA_VERSION = "franchise_recognition_npz_v1"
+VERSION = "0.2"
+SCHEMA_VERSION = "franchise_recognition_npz_v2"
 ARTIFACT_FILENAME = "franchise_recognition.npz"
 LOGGER = get_logger(NAME)
 
 # Franchise category for Embedding Service
 FRANCHISE_CATEGORY = "franchise"
 TOP_K = 5
+
+
+def _franchise_embeddings_to_matrix(franchise_emb_list: List[Any]) -> np.ndarray:
+    """Stack DB franchise embeddings into (M, D) float32. Raises ValueError if ragged or empty."""
+    rows: List[np.ndarray] = []
+    for emb in franchise_emb_list:
+        a = np.asarray(emb, dtype=np.float32).reshape(-1)
+        if a.size == 0:
+            raise ValueError("empty franchise embedding row")
+        rows.append(a)
+    if not rows:
+        raise ValueError("no franchise embedding rows")
+    d0 = int(rows[0].shape[0])
+    for i, r in enumerate(rows):
+        if int(r.shape[0]) != d0:
+            raise ValueError(
+                f"ragged franchise embeddings: row0 dim {d0} vs row{i} dim {int(r.shape[0])}"
+            )
+    return np.stack(rows, axis=0)
 
 
 def _append_state_event_if_possible(*, rs_path: str, event: Dict[str, Any]) -> None:
@@ -176,6 +219,11 @@ def _require_frame_indices(meta: dict) -> List[int]:
             f"{NAME} | core_clip.frame_indices empty/invalid (no-fallback)"
         )
     return [int(x) for x in frame_indices]
+
+
+def _sha256_hex(s: str) -> str:
+    """Compute SHA256 hex digest of a string."""
+    return hashlib.sha256(s.encode("utf-8")).hexdigest()
 
 
 def _norm_text(s: str) -> str:
@@ -402,16 +450,48 @@ def main() -> int:
         sel_rows.append(int(clip_map[int(u)]))
     frame_emb = clip_emb[np.asarray(sel_rows, dtype=np.int32)]  # (N, D)
 
-    # Initialize Embedding Service client (fail-fast if unavailable)
-    try:
-        embedding_client = EmbeddingServiceClient(base_url=args.embedding_service_url)
-        # Test connection
-        embedding_client._ensure_url()
-    except Exception as e:
+    # Initialize Embedding Service client (fail-fast if unavailable → EmbeddingServiceUnavailableError)
+    embedding_client = EmbeddingServiceClient(base_url=args.embedding_service_url)
+    embedding_client._ensure_url()
+
+    # Load label-space (db provenance + deterministic UUID->int32 mapping)
+    labels = embedding_client.get_labels(category=FRANCHISE_CATEGORY)
+    if not labels:
         raise RuntimeError(
-            f"{NAME} | Embedding Service unavailable (fail-fast): {e}. "
-            "Ensure Embedding Service is running and accessible."
+            f"{NAME} | Embedding Service category '{FRANCHISE_CATEGORY}' has 0 labels (fail-fast)"
         )
+
+    def _canon_label_row(r: Dict[str, Any]) -> Dict[str, Any]:
+        return {
+            "id": str(r.get("id") or ""),
+            "name": str(r.get("name") or ""),
+            "embedding_model": str(r.get("embedding_model") or ""),
+            "embedding_dim": int(r.get("embedding_dim") or 0),
+            "updated_at": str(r.get("updated_at") or ""),
+        }
+
+    labels_canon = [_canon_label_row(r) for r in labels]
+    labels_canon = [r for r in labels_canon if r["id"]]
+    if not labels_canon:
+        raise RuntimeError(
+            f"{NAME} | Embedding Service returned invalid labels for '{FRANCHISE_CATEGORY}' (no ids)"
+        )
+    labels_canon.sort(key=lambda r: r["id"])
+
+    db_digest = _sha256_hex(
+        json.dumps(labels_canon, ensure_ascii=False, sort_keys=True, separators=(",", ":"))
+    )
+
+    # Build canonical label space (stable UUID->int32 mapping)
+    uuid_to_int: Dict[str, int] = {r["id"]: i for i, r in enumerate(labels_canon)}
+    canonical_semantic_object_ids = np.asarray([r["id"] for r in labels_canon], dtype="U")
+    canonical_semantic_label_names = np.asarray(
+        [f"{i}:{labels_canon[i]['name']}" for i in range(len(labels_canon))],
+        dtype="U",
+    )
+    
+    embedding_models = sorted({r["embedding_model"] for r in labels_canon if r["embedding_model"]})
+    embedding_model = embedding_models[0] if len(embedding_models) == 1 else ""
 
     t_load_deps_end = time.perf_counter()
     timings["load_deps"] = t_load_deps_end - t_load_deps
@@ -559,59 +639,89 @@ def main() -> int:
             f"Skipping all frames. Check Embedding Service status."
         )
     
+    direct_path_completed = False
     if use_embedding_direct and franchise_embeddings:
         # OPTIMIZATION 2: Direct embedding comparison (no HTTP requests per frame)
-        # Prepare franchise embeddings matrix
-        franchise_emb_matrix = np.array([f["embedding"] for f in franchise_embeddings], dtype=np.float32)  # (M, D)
-        franchise_names = [f.get("name", "unknown") for f in franchise_embeddings]
-        franchise_ids = [f.get("id", "") for f in franchise_embeddings]
-        franchise_metadata = [f.get("metadata", {}) for f in franchise_embeddings]
-        
-        # L2 normalize franchise embeddings
-        franchise_norms = np.linalg.norm(franchise_emb_matrix, axis=1, keepdims=True)
-        franchise_norms = np.where(franchise_norms > 1e-10, franchise_norms, 1.0)
-        franchise_emb_normalized = franchise_emb_matrix / franchise_norms  # (M, D)
-        
-        # L2 normalize frame embeddings
-        frame_emb_normalized = _l2norm_rows(frame_emb)  # (N, D)
-        
-        # Compute cosine similarity: (N, D) @ (D, M) = (N, M)
-        similarities = np.dot(frame_emb_normalized, franchise_emb_normalized.T)  # (N, M)
-        
-        # Apply similarity threshold
-        similarity_threshold = float(args.similarity_threshold)
-        if similarity_threshold > 0:
-            similarities = np.where(similarities >= similarity_threshold, similarities, -1.0)
-        
-        # Get top-K for each frame
-        topk_indices = np.argsort(similarities, axis=1)[:, -K:][:, ::-1]  # (N, K)
-        topk_similarities = np.take_along_axis(similarities, topk_indices, axis=1)  # (N, K)
-        
-        # Build frame_results
-        for frame_idx in range(n_frames):
-            frame_result = []
-            for k_idx in range(K):
-                franchise_idx = topk_indices[frame_idx, k_idx]
-                similarity = float(topk_similarities[frame_idx, k_idx])
-                
-                if similarity < similarity_threshold:
-                    continue
-                
-                frame_result.append({
-                    "id": str(franchise_ids[franchise_idx]),
-                    "name": str(franchise_names[franchise_idx]),
-                    "similarity": similarity,
-                    "metadata": franchise_metadata[franchise_idx],
-                })
-            frame_results[frame_idx] = frame_result
-        
-        processed_frames = n_frames
+        franchise_emb_by_uuid: Dict[str, Dict[str, Any]] = {
+            str(f.get("id") or ""): f for f in franchise_embeddings if f.get("id")
+        }
+
+        franchise_emb_raw: List[Any] = []
+        franchise_uuid_list: List[str] = []
+        for uuid in canonical_semantic_object_ids:
+            uid = str(uuid)
+            if uid in franchise_emb_by_uuid:
+                franchise_emb_raw.append(franchise_emb_by_uuid[uid]["embedding"])
+                franchise_uuid_list.append(uid)
+
+        if not franchise_emb_raw:
+            LOGGER.warning(
+                f"{NAME} | No franchise embeddings match canonical label space, falling back to image search"
+            )
+        else:
+            try:
+                franchise_emb_matrix = _franchise_embeddings_to_matrix(franchise_emb_raw)
+                fdim = int(frame_emb.shape[1])
+                if franchise_emb_matrix.shape[1] != fdim:
+                    raise ValueError(
+                        f"franchise embedding dim {franchise_emb_matrix.shape[1]} != "
+                        f"frame_emb dim {fdim} (check embedding_model vs core_clip)"
+                    )
+
+                franchise_norms = np.linalg.norm(franchise_emb_matrix, axis=1, keepdims=True)
+                franchise_norms = np.where(franchise_norms > 1e-10, franchise_norms, 1.0)
+                franchise_emb_normalized = franchise_emb_matrix / franchise_norms
+
+                frame_emb_normalized = _l2norm_rows(frame_emb)
+
+                similarities = np.dot(frame_emb_normalized, franchise_emb_normalized.T)
+
+                similarity_threshold = float(args.similarity_threshold)
+                if similarity_threshold > 0:
+                    similarities = np.where(
+                        similarities >= similarity_threshold, similarities, -1.0
+                    )
+
+                topk_indices = np.argsort(similarities, axis=1)[:, -K:][:, ::-1]
+                topk_similarities = np.take_along_axis(similarities, topk_indices, axis=1)
+
+                for frame_idx in range(n_frames):
+                    frame_result = []
+                    for k_idx in range(K):
+                        emb_idx = int(topk_indices[frame_idx, k_idx])
+                        if emb_idx >= len(franchise_uuid_list):
+                            continue
+                        franchise_uuid = franchise_uuid_list[emb_idx]
+                        similarity = float(topk_similarities[frame_idx, k_idx])
+
+                        if similarity < similarity_threshold:
+                            continue
+
+                        franchise_data = franchise_emb_by_uuid[franchise_uuid]
+                        frame_result.append(
+                            {
+                                "id": str(franchise_uuid),
+                                "name": str(franchise_data.get("name", "unknown")),
+                                "similarity": similarity,
+                                "metadata": franchise_data.get("metadata", {}),
+                            }
+                        )
+                    frame_results[frame_idx] = frame_result
+                direct_path_completed = True
+            except Exception as e:
+                LOGGER.warning(
+                    f"{NAME} | Direct franchise embedding comparison failed ({e}); "
+                    f"falling back to image search"
+                )
+                frame_results = [[] for _ in range(n_frames)]
+
+    if direct_path_completed:
         _emit_progress(
             rs_path=args.rs_path,
             platform_id=platform_id,
             video_id=video_id,
             run_id=run_id,
-            done=processed_frames,
+            done=n_frames,
             total=n_frames,
             stage="process_frames",
         )
@@ -775,23 +885,19 @@ def main() -> int:
     timings["process_frames"] = t_process_end - t_process_start
 
     # Build output arrays
-    # Collect all unique franchise names and create label mapping
-    all_franchise_names: Dict[str, int] = {}  # franchise_name -> label_id
-    label_id_counter = 0
-
-    # First pass: collect all franchise names
+    # Use canonical label space (from Embedding Service labels)
+    # Map search results to canonical label IDs via UUID
+    semantic_label_names = canonical_semantic_label_names
+    semantic_object_ids = canonical_semantic_object_ids
+    n_franchises = len(labels_canon)
+    
+    # Collect franchises that appear in results (for stats)
+    franchises_found: Set[str] = set()  # UUIDs of franchises found in results
     for results in frame_results:
         for result in results:
-            franchise_name = result.get("name", "unknown")
-            if franchise_name not in all_franchise_names:
-                all_franchise_names[franchise_name] = label_id_counter
-                label_id_counter += 1
-
-    # Build semantic_label_names
-    franchise_names_list = sorted(all_franchise_names.keys(), key=lambda x: all_franchise_names[x])
-    semantic_label_names = np.asarray(
-        [f"{all_franchise_names[name]}:{name}" for name in franchise_names_list], dtype="U"
-    )
+            franchise_id = result.get("id", "")
+            if franchise_id and franchise_id in uuid_to_int:
+                franchises_found.add(franchise_id)
 
     # Build frame-level arrays
     frame_topk_ids = np.full((n_frames, K), -1, dtype=np.int32)
@@ -799,10 +905,10 @@ def main() -> int:
 
     for frame_idx, results in enumerate(frame_results):
         for k, result in enumerate(results[:K]):
-            franchise_name = result.get("name", "unknown")
+            franchise_id = result.get("id", "")
             similarity = float(result.get("similarity", 0.0))
-            if franchise_name in all_franchise_names:
-                label_id = all_franchise_names[franchise_name]
+            if franchise_id and franchise_id in uuid_to_int:
+                label_id = uuid_to_int[franchise_id]
                 frame_topk_ids[frame_idx, k] = label_id
                 frame_topk_scores[frame_idx, k] = similarity
 
@@ -814,14 +920,13 @@ def main() -> int:
             frame_is_confident_top1[i] = bool(frame_topk_scores[i, 0] >= threshold_global)
 
     # Video-level aggregate: max over time per franchise
-    n_franchises = len(all_franchise_names)
     if n_franchises > 0:
         max_scores = np.full((n_franchises,), np.nan, dtype=np.float32)
-        for franchise_name, label_id in all_franchise_names.items():
+        for franchise_uuid, label_id in uuid_to_int.items():
             scores_for_franchise = []
             for frame_idx, results in enumerate(frame_results):
                 for result in results:
-                    if result.get("name") == franchise_name:
+                    if result.get("id") == franchise_uuid:
                         scores_for_franchise.append(float(result.get("similarity", 0.0)))
             if scores_for_franchise:
                 max_scores[label_id] = float(max(scores_for_franchise))
@@ -844,19 +949,25 @@ def main() -> int:
     for j in range(K):
         if track_topk_ids[0, j] >= 0:
             label_id = int(track_topk_ids[0, j])
-            franchise_name = franchise_names_list[label_id]
-            # Find frame with max similarity for this franchise
-            best_frame_idx = -1
-            best_score = -1.0
-            for frame_idx, results in enumerate(frame_results):
-                for result in results:
-                    if result.get("name") == franchise_name:
-                        score = float(result.get("similarity", 0.0))
-                        if score > best_score:
-                            best_score = score
-                            best_frame_idx = frame_idx
-            if best_frame_idx >= 0:
-                track_topk_evidence_frame_indices[0, j] = int(frame_indices[best_frame_idx])
+            # Find UUID for this label_id
+            franchise_uuid = None
+            for uuid, lid in uuid_to_int.items():
+                if lid == label_id:
+                    franchise_uuid = uuid
+                    break
+            if franchise_uuid:
+                # Find frame with max similarity for this franchise
+                best_frame_idx = -1
+                best_score = -1.0
+                for frame_idx, results in enumerate(frame_results):
+                    for result in results:
+                        if result.get("id") == franchise_uuid:
+                            score = float(result.get("similarity", 0.0))
+                            if score > best_score:
+                                best_score = score
+                                best_frame_idx = frame_idx
+                if best_frame_idx >= 0:
+                    track_topk_evidence_frame_indices[0, j] = int(frame_indices[best_frame_idx])
 
     # Track-level confidence
     top1_lid = int(track_topk_ids[0, 0]) if track_topk_ids[0, 0] >= 0 else -1
@@ -883,13 +994,23 @@ def main() -> int:
         "created_at": datetime.utcnow().isoformat() + "Z",
         "status": "ok",
         "empty_reason": None,
+        # DB provenance
+        "db_name": "embedding_service",
+        "db_version": "v1",
+        "db_digest": db_digest,
+        "db_path": f"{embedding_client.base_url}/categories/{FRANCHISE_CATEGORY}",
+        # Service/runtime
         "embedding_service_url": embedding_client.base_url,
         "franchise_category": FRANCHISE_CATEGORY,
+        "embedding_model": embedding_model,
+        # Config highlights
         "topk": K,
         "similarity_threshold": args.similarity_threshold,
         "threshold_global": threshold_global,
+        # Stats
         "num_franchises": n_franchises,
         "num_frames": n_frames,
+        "franchises_found_count": len(franchises_found),
         # OCR stats
         "ocr_npz": str(ocr_npz_path) if ocr_npz_path else None,
         "ocr_events_used": int(ocr_events),
@@ -942,6 +1063,22 @@ def main() -> int:
 
     t_save_start = time.perf_counter()
 
+    # Add meta_json (cross-venv safe) - must be done before final timings update
+    import json as json_module
+    try:
+        output_meta_json = json_module.dumps(output_meta, ensure_ascii=False, sort_keys=True)
+    except Exception as e:
+        LOGGER.warning(f"{NAME} | Failed to serialize meta to JSON: {e}, using empty string")
+        output_meta_json = "{}"
+
+    # Update stage_timings_ms with final timings (before save)
+    timings["saving"] = 0.0  # Will be updated after save
+    timings["total"] = time.perf_counter() - t0
+    stage_timings_ms: Dict[str, float] = {}
+    for key, value in timings.items():
+        stage_timings_ms[key] = float(value) * 1000.0
+    output_meta["stage_timings_ms"] = stage_timings_ms
+
     # Save output (atomic save)
     output_dir = os.path.join(str(args.rs_path), NAME)
     output_path = os.path.join(output_dir, ARTIFACT_FILENAME)
@@ -959,6 +1096,7 @@ def main() -> int:
             frame_indices=fi_np,
             times_s=times_s,
             semantic_label_names=semantic_label_names,
+            semantic_object_ids=semantic_object_ids,
             threshold_per_label_arr=threshold_per_label_arr,
             track_ids=track_ids,
             track_present_mask=track_present_mask,
@@ -970,6 +1108,7 @@ def main() -> int:
             frame_topk_scores=frame_topk_scores,
             frame_is_confident_top1=frame_is_confident_top1,
             meta=np.asarray(output_meta, dtype=object),
+            meta_json=np.asarray(output_meta_json, dtype="U"),
         )
         os.replace(tmp_path, output_path)
     except Exception:
@@ -983,7 +1122,7 @@ def main() -> int:
     timings["saving"] = time.perf_counter() - t_save_start
     timings["total"] = time.perf_counter() - t0
 
-    # Update stage_timings_ms with final timings
+    # Update stage_timings_ms with final timings (after save)
     stage_timings_ms = {}
     for key, value in timings.items():
         stage_timings_ms[key] = float(value) * 1000.0
@@ -1016,4 +1155,8 @@ def main() -> int:
 
 
 if __name__ == "__main__":
-    raise SystemExit(main())
+    try:
+        raise SystemExit(main())
+    except EmbeddingServiceUnavailableError as ex:
+        print(f"{NAME}: {ex}", file=sys.stderr)
+        raise SystemExit(1) from None

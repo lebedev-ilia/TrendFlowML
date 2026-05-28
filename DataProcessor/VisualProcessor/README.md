@@ -322,7 +322,7 @@ Render-context может быть использован:
 
 **HTML debug страница** (опционально):
 - Путь: `result_store/.../<component_name>/_render/render.html`
-- Содержит интерактивные графики (Chart.js):
+- Содержит offline SVG графики (без CDN):
   - Timeline: визуализация признаков по времени
   - Distributions: статистики и распределения значений
   - Summary metrics: ключевые показатели в удобном формате

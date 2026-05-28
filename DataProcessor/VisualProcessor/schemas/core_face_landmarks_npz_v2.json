@@ -1,0 +1,78 @@
+{
+  "schema_system_version": "vp_schema_v1",
+  "schema_version": "core_face_landmarks_npz_v2",
+  "producer": "core_face_landmarks",
+  "artifact_kind": "npz",
+  "allow_extra_keys": false,
+  "meta": {
+    "required_keys": [
+      "producer",
+      "producer_version",
+      "schema_version",
+      "created_at",
+      "platform_id",
+      "video_id",
+      "run_id",
+      "config_hash",
+      "sampling_policy_version",
+      "dataprocessor_version",
+      "status",
+      "empty_reason",
+      "models_used",
+      "model_signature",
+      "stage_timings_ms"
+    ],
+    "optional_keys": [
+      "model_name",
+      "total_frames",
+      "device",
+      "face_empty_reason",
+      "pose_empty_reason",
+      "hands_empty_reason",
+      "person_mask_enabled",
+      "person_class_id",
+      "person_frames_count",
+      "person_window_radius",
+      "face_mesh_frames_count",
+      "temporal_filter_enabled",
+      "temporal_filter_min_cutoff",
+      "temporal_filter_beta"
+    ]
+  },
+  "fields": {
+    "frame_indices": { "required": true, "tier": "model_facing", "dtype": "int32", "shape": ["N"] },
+    "times_s": { "required": true, "tier": "model_facing", "dtype": "float32", "shape": ["N"] },
+
+    "face_landmarks": { "required": true, "tier": "model_facing", "dtype": "float32", "shape": ["N", "FACES", 468, 3] },
+    "face_landmarks_raw": { "required": true, "tier": "debug", "dtype": "float32", "shape": ["N", "FACES", 468, 3] },
+    "face_present": { "required": true, "tier": "model_facing", "dtype": "bool", "shape": ["N", "FACES"] },
+
+    "person_present": { "required": true, "tier": "analytics", "dtype": "bool", "shape": ["N"] },
+    "face_mesh_ran": { "required": true, "tier": "analytics", "dtype": "bool", "shape": ["N"] },
+
+    "has_any_face": { "required": true, "tier": "analytics", "dtype": "bool", "shape": [] },
+    "empty_reason": { "required": true, "tier": "analytics", "dtype": ["object", "str"], "shape": [] },
+    "face_empty_reason": { "required": true, "tier": "analytics", "dtype": ["object", "str"], "shape": [] },
+    "pose_empty_reason": { "required": true, "tier": "analytics", "dtype": ["object", "str"], "shape": [] },
+    "hands_empty_reason": { "required": true, "tier": "analytics", "dtype": ["object", "str"], "shape": [] },
+
+    "pose_landmarks": { "required": false, "tier": "analytics", "dtype": "float32", "shape": ["N", 33, 4] },
+    "pose_landmarks_raw": { "required": false, "tier": "debug", "dtype": "float32", "shape": ["N", 33, 4] },
+    "pose_present": { "required": false, "tier": "analytics", "dtype": "bool", "shape": ["N"] },
+    "has_any_pose": { "required": false, "tier": "analytics", "dtype": "bool", "shape": [] },
+
+    "hands_landmarks": { "required": false, "tier": "analytics", "dtype": "float32", "shape": ["N", "HANDS", 21, 3] },
+    "hands_landmarks_raw": { "required": false, "tier": "debug", "dtype": "float32", "shape": ["N", "HANDS", 21, 3] },
+    "hands_present": { "required": false, "tier": "analytics", "dtype": "bool", "shape": ["N", "HANDS"] },
+    "has_any_hands": { "required": false, "tier": "analytics", "dtype": "bool", "shape": [] },
+
+    "version": { "required": false, "tier": "debug", "dtype": ["str", "float32", "float64", "int32", "int64", "object"], "shape": [] },
+    "created_at": { "required": false, "tier": "debug", "dtype": ["str", "object"], "shape": [] },
+    "model_name": { "required": false, "tier": "debug", "dtype": ["str", "object"], "shape": [] },
+    "total_frames": { "required": false, "tier": "debug", "dtype": ["int32", "int64", "object"], "shape": [] },
+
+    "meta": { "required": true, "tier": "debug", "dtype": "object", "shape": [] }
+  }
+}
+
+

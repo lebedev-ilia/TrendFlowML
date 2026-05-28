@@ -177,6 +177,39 @@ stages:
         soft_dependencies: []
         wait_on_checkpoints: []
 
+  # --- TextProcessor (Audit v3): Tier-0 + embedders, зависящие от очистки тегов ---
+  text_processor_tier0:
+    nodes:
+      - component_name: tags_extractor
+        owner_processor: text
+        depends_on_components: []
+        soft_dependencies: []
+        wait_on_checkpoints: []
+
+      - component_name: lexico_static_features
+        owner_processor: text
+        depends_on_components: [tags_extractor]
+        soft_dependencies: []
+        wait_on_checkpoints: []
+
+      - component_name: asr_text_proxy_audio_features
+        owner_processor: text
+        depends_on_components: [tags_extractor]
+        soft_dependencies: [asr_extractor]
+        wait_on_checkpoints: []
+
+      - component_name: title_embedder
+        owner_processor: text
+        depends_on_components: [tags_extractor]
+        soft_dependencies: []
+        wait_on_checkpoints: []
+
+      - component_name: description_embedder
+        owner_processor: text
+        depends_on_components: [tags_extractor]
+        soft_dependencies: []
+        wait_on_checkpoints: []
+
   v1:
     nodes: []
   v2:

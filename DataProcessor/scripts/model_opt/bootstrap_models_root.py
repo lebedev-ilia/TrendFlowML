@@ -273,13 +273,13 @@ def main() -> None:
         except Exception as e:
             raise RuntimeError(f"huggingface_hub is required for --bootstrap-text: {e}") from e
 
-        # 1) sentence-transformers/all-MiniLM-L6-v2
-        dst_dir = os.path.join(models_root, "text", "sentence-transformers_all-MiniLM-L6-v2")
+        # 1) sentence-transformers/all-MiniLM-L6-v2 (путь как в dp_models/spec_catalog/.../all-MiniLM-L6-v2.yaml)
+        dst_dir = os.path.join(models_root, "text", "embeddings", "all-MiniLM-L6-v2")
         _mkdir(dst_dir)
         snapshot_download(repo_id="sentence-transformers/all-MiniLM-L6-v2", local_dir=dst_dir, repo_type="model", local_dir_use_symlinks=False)
 
-        # 2) intfloat/multilingual-e5-large
-        dst_dir = os.path.join(models_root, "text", "intfloat_multilingual-e5-large")
+        # 2) intfloat/multilingual-e5-large (путь как в dp_models/spec_catalog/text/intfloat_multilingual-e5-large.yaml)
+        dst_dir = os.path.join(models_root, "text", "embeddings", "intfloat_multilingual-e5-large")
         _mkdir(dst_dir)
         snapshot_download(repo_id="intfloat/multilingual-e5-large", local_dir=dst_dir, repo_type="model", local_dir_use_symlinks=False)
 

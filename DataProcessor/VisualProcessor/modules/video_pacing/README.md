@@ -1,5 +1,8 @@
 # `video_pacing` (Visual module, Tier‑0 baseline)
 
+- **Контракт NPZ, melt/QA, валидатор:** [docs/FEATURE_DESCRIPTION.md](docs/FEATURE_DESCRIPTION.md)
+- **Валидатор:** `utils/validate_video_pacing.py` (`--struct`, `--qa`, `--ranges` или батч `--results-base`)
+
 Модуль считает **признаки темпа/монтажа** (shot pacing) и связанные метрики движения/семантических/цветовых изменений **строго на sampled кадрах** от Segmenter.
 
 ## Входы
@@ -25,6 +28,8 @@
 Пишется через `BaseModule.save_results()` в:
 - `result_store/<platform_id>/<video_id>/<run_id>/video_pacing/video_pacing_features.npz` (**фиксированное имя**)
 
+- **Сводка полей, meta → CSV, melt/QA:** `docs/FEATURE_DESCRIPTION.md`
+
 ### Ключи NPZ
 - **`frame_indices`**: `(N,) int32` — union-domain индексы кадров модуля.
 - **`times_s`**: `(N,) float32` — `union_timestamps_sec[frame_indices]` (source-of-truth).
@@ -32,9 +37,10 @@
 - **`motion_norm_per_sec_mean`**: `(N,) float32` — motion curve aligned to `frame_indices` (from `core_optical_flow`).
 - **`semantic_change_rate_per_sec`**: `(N,) float32` — semantic change rate (/s) aligned to `frame_indices` (from `core_clip`).
 - **`color_change_rate_per_sec`**: `(N,) float32` — color change rate (/s) aligned to `frame_indices` (cheap LAB proxy on downscaled frames).
-- **`features`**: `object(dict)` — словарь агрегированных признаков (см. ниже).
+- **`feature_names`**: `(F,) object` — имена агрегированных model-facing scalar фич (фиксированный порядок).
+- **`feature_values`**: `(F,) float32` — значения scalar фич (bool как 0/1).
 - **`meta`**: `object(dict)` — canonical meta от `BaseModule` (run identity keys, schema/producer versions, models_used/model_signature, status/empty_reason и т.д.).
-  - `meta.schema_version = "video_pacing_npz_v2"`
+  - `meta.schema_version = "video_pacing_npz_v3"`
 
 ## No-fallback / empty semantics
 
@@ -59,7 +65,7 @@
   - `enable_periodicity`: включить autocorr periodicity features (может быть шумно)
   - `enable_bursts`: включить burst features (quick cuts / semantic / color bursts)
 
-## Фичи (`features`)
+## Фичи (model-facing scalars, `feature_names/feature_values`)
 
 Примечание: часть фич считается “шумной” и по умолчанию выключена (см. флаги `enable_*` выше).
 
@@ -198,7 +204,7 @@ Render-context может быть использован:
 
 **HTML debug страница** (опционально):
 - Путь: `result_store/.../video_pacing/_render/render.html`
-- Содержит интерактивные графики (Chart.js):
+- Содержит offline SVG графики (без CDN):
   - Timeline: кривые motion, semantic change rate, color change rate по времени с отмеченными shot boundaries
   - Key Features: таблица с ключевыми признаками (shots_count, shot_duration_mean, cuts_per_10s, motion metrics, semantic/color change rates)
   - Distributions: статистики по метрикам (motion, semantic_change, color_change)

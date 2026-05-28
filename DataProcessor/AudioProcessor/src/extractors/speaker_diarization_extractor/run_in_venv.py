@@ -8,16 +8,23 @@ import os
 import json
 import argparse
 import numpy as np
+import logging
 from pathlib import Path
+
+# Настройка логирования для видимости прогресса
+logging.basicConfig(
+    level=logging.INFO,
+    format='%(asctime)s %(levelname)s %(message)s',
+    datefmt='%Y-%m-%d %H:%M:%S'
+)
 
 # Добавляем пути для импорта
 ap_root = Path(__file__).resolve().parent.parent.parent.parent
 repo_root = ap_root.parent
 
-# AudioProcessor/src imports
-src_path = ap_root / "src"
-if str(src_path) not in sys.path:
-    sys.path.insert(0, str(src_path))
+# AudioProcessor imports (нужно добавить AudioProcessor, чтобы src был доступен как модуль)
+if str(ap_root) not in sys.path:
+    sys.path.insert(0, str(ap_root))
 
 # Repo root imports (dp_models, Segmenter helpers, etc.)
 if str(repo_root) not in sys.path:
@@ -28,6 +35,9 @@ from src.extractors.speaker_diarization_extractor.main import SpeakerDiarization
 
 
 def main():
+    logger = logging.getLogger(__name__)
+    logger.info("SpeakerDiarization | run_in_venv.py started")
+    
     parser = argparse.ArgumentParser(description="Run speaker_diarization_extractor in isolated venv")
     parser.add_argument("--audio-path", required=True, help="Path to audio file")
     parser.add_argument("--tmp-dir", required=True, help="Temporary directory")
@@ -49,6 +59,7 @@ def main():
     parser.add_argument("--disable-silence-detection", action="store_true", help="Disable silence detection")
     
     args = parser.parse_args()
+    logger.info(f"SpeakerDiarization | Arguments parsed: audio_path={args.audio_path}, device={args.device}")
     
     # Load segments if provided
     segments = []
@@ -64,6 +75,7 @@ def main():
                 segments = segments_data
     
     # Create extractor
+    logger.info("SpeakerDiarization | Creating extractor instance...")
     extractor = SpeakerDiarizationExtractor(
         device=args.device,
         whisper_model_size=args.whisper_model_size,
@@ -81,10 +93,14 @@ def main():
     )
     
     # Run extractor
+    logger.info("SpeakerDiarization | Running extractor...")
     if segments:
+        logger.info(f"SpeakerDiarization | Running with {len(segments)} segments")
         result = extractor.run_segments(args.audio_path, args.tmp_dir, segments)
     else:
+        logger.info("SpeakerDiarization | Running on full audio")
         result = extractor.run(args.audio_path, args.tmp_dir)
+    logger.info(f"SpeakerDiarization | Extractor finished: success={result.success}")
     
     # Serialize result to JSON
     result_dict = {

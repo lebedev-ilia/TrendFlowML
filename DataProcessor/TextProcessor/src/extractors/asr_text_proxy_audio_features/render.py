@@ -363,9 +363,9 @@ def render_asr_text_proxy_audio_features_html(
                     <td>Стандартное отклонение confidence</td>
                 </tr>
                 <tr>
-                    <td>Минимальное значение</td>
+                    <td>Минимальное по блокам</td>
                     <td>{confidence.get("chunked_min", "N/A")}</td>
-                    <td>Минимальная confidence среди всех сегментов</td>
+                    <td>Минимум средних confidence по ~10 чанкам (не min по каждому сегменту)</td>
                 </tr>
                 <tr>
                     <td>Доля низкой уверенности</td>

@@ -29,6 +29,12 @@ import librosa
 from src.core.base_extractor import BaseExtractor, ExtractorResult
 from src.core.audio_utils import AudioUtils
 
+from .utils.resource_profile import (
+    prefix_snapshot,
+    resource_profile_enabled,
+    snapshot_process_resources,
+)
+
 logger = logging.getLogger(__name__)
 
 # Contract version for downstream extractors compatibility validation
@@ -42,7 +48,7 @@ class HPSSExtractor(BaseExtractor):
     """Экстрактор Harmonic-Percussive Source Separation: разложение на гармоническую и перкуссионную компоненты."""
 
     name = "hpss"
-    version = "2.0.0"
+    version = "2.1.1"
     description = "Harmonic-Percussive Source Separation признаки и доли энергии"
     category = "source_separation"
     dependencies = ["librosa", "numpy"]
@@ -63,8 +69,8 @@ class HPSSExtractor(BaseExtractor):
         hpss_kernel_size: int = 31,
         hpss_margin: float = 1.0,
         hpss_power: float = 2.0,
-        # Feature gating flags (per-feature control, default: all False)
-        enable_energy_metrics: bool = False,
+        # Feature gating flags (per-feature control)
+        enable_energy_metrics: bool = True,
         enable_waveforms: bool = False,
         enable_spectral_features: bool = False,
         enable_time_series: bool = False,
@@ -212,8 +218,11 @@ class HPSSExtractor(BaseExtractor):
             (is_valid, error_message)
         """
         try:
-            # Check for NaN/inf
+            # Check for NaN/inf (allow NaN in hpss_*_by_segment for failed segments)
+            allow_nan_keys = {"hpss_harmonic_share_by_segment", "hpss_percussive_share_by_segment"}
             for key, value in features.items():
+                if key in allow_nan_keys:
+                    continue  # NaN allowed for failed segments
                 if isinstance(value, (int, float)):
                     if np.isnan(value) or np.isinf(value):
                         return False, f"hpss | {key} contains NaN or inf: {value}"
@@ -232,13 +241,7 @@ class HPSSExtractor(BaseExtractor):
                 if share_p < 0.0 or share_p > 1.0:
                     return False, f"hpss | percussive_share out of range [0, 1]: {share_p}"
 
-            # Validate consistency: shares should sum to approximately 1.0
-            if "hpss_harmonic_share" in features and "hpss_percussive_share" in features:
-                share_h = features["hpss_harmonic_share"]
-                share_p = features["hpss_percussive_share"]
-                total_share = share_h + share_p
-                if not (0.95 <= total_share <= 1.05):  # Allow small floating point errors
-                    return False, f"hpss | shares sum ({total_share}) not close to 1.0 (harmonic={share_h}, percussive={share_p})"
+            # Shares are relative to separated-component energy, not a probability partition; do not require sum≈1.
 
             # Validate energies
             if "hpss_energy_total" in features:
@@ -504,15 +507,23 @@ class HPSSExtractor(BaseExtractor):
 
     def run(self, input_uri: str, tmp_path: str) -> ExtractorResult:
         """
-        Обработка полного аудио файла (legacy mode, для обратной совместимости).
+        Обработка полного аудио файла (legacy mode).
 
-        Args:
-            input_uri: Путь к аудио файлу
-            tmp_path: Временная директория
-
-        Returns:
-            ExtractorResult с метриками HPSS
+        Audit v3: отключён в audited mode. HPSS использует run_segments (families.hpss).
         """
+        start_time = time.time()
+        error_code = self._classify_error(
+            RuntimeError("hpss | run() disabled in audited mode; use run_segments with families.hpss"),
+            "validation_failed",
+        )
+        return self._create_result(
+            False,
+            error=f"hpss | {error_code}: run() disabled, use run_segments with families.hpss",
+            processing_time=time.time() - start_time,
+        )
+
+    def _run_legacy(self, input_uri: str, tmp_path: str) -> ExtractorResult:
+        """Legacy full-audio HPSS (kept for reference, not used in audited mode)."""
         start_time = time.time()
         try:
             if not self._validate_input(input_uri):
@@ -663,6 +674,9 @@ class HPSSExtractor(BaseExtractor):
             ExtractorResult с агрегированными метриками по сегментам
         """
         start_time = time.time()
+        t_total0 = time.perf_counter()
+        stage_timings_ms: Dict[str, float] = {}
+        hpss_resource_profile: Optional[Dict[str, Any]] = None
         try:
             if not self._validate_input(input_uri):
                 error_code = self._classify_error(ValueError("Invalid input"), "audio_load_failed")
@@ -676,116 +690,179 @@ class HPSSExtractor(BaseExtractor):
 
             total_segments = len(segments)
 
+            if resource_profile_enabled():
+                try:
+                    hpss_resource_profile = {
+                        **prefix_snapshot("at_start", snapshot_process_resources()),
+                    }
+                except Exception:
+                    hpss_resource_profile = None
+
             # Progress reporting: каждые 10%
             progress_report_interval = max(1, total_segments // 10) if total_segments >= 10 else 1
             last_reported_pct = -1
 
-            # Process segments
+            # Strict alignment: segment_start_sec, segment_end_sec, segment_center_sec, segment_mask,
+            # hpss_harmonic_share_by_segment, hpss_percussive_share_by_segment (NaN for failed)
+            segment_start_sec = np.zeros(total_segments, dtype=np.float32)
+            segment_end_sec = np.zeros(total_segments, dtype=np.float32)
+            segment_center_sec = np.zeros(total_segments, dtype=np.float32)
+            segment_mask = np.ones(total_segments, dtype=bool)
+            hpss_harmonic_share_by_segment = np.full(total_segments, np.nan, dtype=np.float32)
+            hpss_percussive_share_by_segment = np.full(total_segments, np.nan, dtype=np.float32)
+            segment_durations = np.zeros(total_segments, dtype=np.float32)
+
             all_harmonic_share: List[float] = []
             all_percussive_share: List[float] = []
             all_balance_score: List[float] = []
             all_separation_quality: List[float] = []
-            segment_centers: List[float] = []
-            segment_durations: List[float] = []
+            all_energy_total: List[float] = []
+            all_energy_h: List[float] = []
+            all_energy_p: List[float] = []
+            all_h_stab: List[float] = []
+            all_p_stab: List[float] = []
+            _spectral_keys = (
+                "hpss_harmonic_centroid_mean",
+                "hpss_harmonic_centroid_std",
+                "hpss_harmonic_bandwidth_mean",
+                "hpss_harmonic_bandwidth_std",
+                "hpss_harmonic_rolloff_mean",
+                "hpss_harmonic_rolloff_std",
+                "hpss_percussive_centroid_mean",
+                "hpss_percussive_centroid_std",
+                "hpss_percussive_bandwidth_mean",
+                "hpss_percussive_bandwidth_std",
+                "hpss_percussive_rolloff_mean",
+                "hpss_percussive_rolloff_std",
+            )
+            all_spectral: Dict[str, List[float]] = {k: [] for k in _spectral_keys}
 
             seg_p = max(1, int(segment_parallelism or 1))
             inflight = int(max_inflight) if max_inflight is not None else seg_p
             inflight = max(1, int(inflight))
 
-            def _process_segment(i: int, seg: dict) -> tuple[int, float, Dict[str, Any], float]:
-                """Обработать один сегмент."""
+            def _process_segment(i: int, seg: dict) -> tuple[int, float, float, float, bool, Optional[Dict[str, Any]], float]:
+                """Обработать один сегмент. При ошибке: success=False, seg_features=None."""
                 ss = int(seg.get("start_sample", 0))
                 es = int(seg.get("end_sample", 0))
                 center_sec = float(seg.get("center_sec", 0.0))
                 start_sec = float(seg.get("start_sec", 0.0))
                 end_sec = float(seg.get("end_sec", 0.0))
                 duration = end_sec - start_sec
+                try:
+                    waveform_t, sr = self.audio_utils.load_audio_segment(
+                        input_uri,
+                        start_sample=ss,
+                        end_sample=es,
+                        target_sr=self.sample_rate,
+                        mix_to_mono=self.average_channels,
+                    )
+                    waveform_np = self.audio_utils.to_numpy(waveform_t)
+                    if waveform_np.ndim == 2:
+                        waveform_np = np.mean(waveform_np, axis=0) if self.average_channels else waveform_np[0]
+                    waveform_np = self._normalize_audio(waveform_np)
+                    H, P, S_complex, S_mag = self._compute_hpss(waveform_np, int(sr))
+                    seg_features = self._compute_hpss_metrics(H, P, S_mag)
+                    if self.enable_spectral_features:
+                        spectral_features = self._compute_spectral_features(H, P, int(sr))
+                        seg_features.update(spectral_features)
+                    return i, start_sec, end_sec, center_sec, True, seg_features, duration
+                except Exception as e:
+                    logger.warning(f"hpss | Segment {i} failed: {e}")
+                    return i, start_sec, end_sec, center_sec, False, None, duration
 
-                # Load audio segment
-                waveform_t, sr = self.audio_utils.load_audio_segment(
-                    input_uri,
-                    start_sample=ss,
-                    end_sample=es,
-                    target_sr=self.sample_rate,
-                    mix_to_mono=self.average_channels,
-                )
-                waveform_np = self.audio_utils.to_numpy(waveform_t)
-                if waveform_np.ndim == 2:
-                    waveform_np = np.mean(waveform_np, axis=0) if self.average_channels else waveform_np[0]
+            def _fill_from_result(i: int, start_sec: float, end_sec: float, center_sec: float, success: bool, seg_features: Optional[Dict[str, Any]], duration: float) -> None:
+                segment_start_sec[i] = start_sec
+                segment_end_sec[i] = end_sec
+                segment_center_sec[i] = center_sec
+                segment_mask[i] = success
+                segment_durations[i] = duration
+                if success and seg_features and self.enable_energy_metrics:
+                    hpss_harmonic_share_by_segment[i] = seg_features.get("hpss_harmonic_share", np.nan)
+                    hpss_percussive_share_by_segment[i] = seg_features.get("hpss_percussive_share", np.nan)
+                    all_harmonic_share.append(seg_features.get("hpss_harmonic_share", 0.0))
+                    all_percussive_share.append(seg_features.get("hpss_percussive_share", 0.0))
+                    all_balance_score.append(seg_features.get("hpss_balance_score", 0.0))
+                    all_separation_quality.append(seg_features.get("hpss_separation_quality", 0.0))
+                    for key, bucket in (
+                        ("hpss_energy_total", all_energy_total),
+                        ("hpss_energy_harmonic", all_energy_h),
+                        ("hpss_energy_percussive", all_energy_p),
+                        ("hpss_harmonic_stability", all_h_stab),
+                        ("hpss_percussive_stability", all_p_stab),
+                    ):
+                        if key in seg_features and seg_features[key] is not None:
+                            bucket.append(float(seg_features[key]))
+                if success and seg_features and self.enable_spectral_features:
+                    for k in _spectral_keys:
+                        if k in seg_features and seg_features[k] is not None:
+                            all_spectral[k].append(float(seg_features[k]))
 
-                # Normalize audio if enabled
-                waveform_np = self._normalize_audio(waveform_np)
-
-                # Compute HPSS (fail-fast, no-fallback)
-                H, P, S_complex, S_mag = self._compute_hpss(waveform_np, int(sr))
-
-                # Compute metrics
-                seg_features = self._compute_hpss_metrics(H, P, S_mag)
-
-                # Compute spectral features if enabled
-                if self.enable_spectral_features:
-                    spectral_features = self._compute_spectral_features(H, P, int(sr))
-                    seg_features.update(spectral_features)
-
-                return i, center_sec, seg_features, duration
-
-            # Process segments (sequential or parallel)
+            t_seg0 = time.perf_counter()
             if seg_p <= 1:
                 for seg_idx, seg in enumerate(segments):
-                    _, center_sec, seg_features, duration = _process_segment(seg_idx, seg)
-                    if self.enable_energy_metrics:
-                        all_harmonic_share.append(seg_features.get("hpss_harmonic_share", 0.0))
-                        all_percussive_share.append(seg_features.get("hpss_percussive_share", 0.0))
-                        all_balance_score.append(seg_features.get("hpss_balance_score", 0.0))
-                        all_separation_quality.append(seg_features.get("hpss_separation_quality", 0.0))
-                    segment_centers.append(center_sec)
-                    segment_durations.append(duration)
-
-                    # Progress reporting
+                    i, start_sec, end_sec, center_sec, success, seg_features, duration = _process_segment(seg_idx, seg)
+                    _fill_from_result(i, start_sec, end_sec, center_sec, success, seg_features, duration)
                     if self.progress_callback and seg_idx % progress_report_interval == 0:
                         pct = int((seg_idx + 1) * 100 / total_segments)
                         if pct != last_reported_pct:
                             self.progress_callback("hpss", seg_idx + 1, total_segments, f"Processed {seg_idx + 1}/{total_segments} segments")
                             last_reported_pct = pct
             else:
-                # Parallel processing
                 workers = max(1, min(int(seg_p), int(inflight)))
                 with ThreadPoolExecutor(max_workers=workers) as ex:
                     futures = [ex.submit(_process_segment, i, seg) for i, seg in enumerate(segments)]
                     completed = 0
                     for fut in as_completed(futures):
-                        i, center_sec, seg_features, duration = fut.result()
-                        if self.enable_energy_metrics:
-                            all_harmonic_share.append(seg_features.get("hpss_harmonic_share", 0.0))
-                            all_percussive_share.append(seg_features.get("hpss_percussive_share", 0.0))
-                            all_balance_score.append(seg_features.get("hpss_balance_score", 0.0))
-                            all_separation_quality.append(seg_features.get("hpss_separation_quality", 0.0))
-                        segment_centers.append(center_sec)
-                        segment_durations.append(duration)
+                        i, start_sec, end_sec, center_sec, success, seg_features, duration = fut.result()
+                        _fill_from_result(i, start_sec, end_sec, center_sec, success, seg_features, duration)
                         completed += 1
-
-                        # Progress reporting
                         if self.progress_callback and completed % progress_report_interval == 0:
                             pct = int(completed * 100 / total_segments)
                             if pct != last_reported_pct:
                                 self.progress_callback("hpss", completed, total_segments, f"Processed {completed}/{total_segments} segments")
                                 last_reported_pct = pct
+            stage_timings_ms["process_segments_ms"] = (time.perf_counter() - t_seg0) * 1000.0
 
-            # Aggregate metrics across all segments
             features: Dict[str, Any] = {}
 
+            t_agg0 = time.perf_counter()
             if self.enable_energy_metrics and all_harmonic_share:
-                features["hpss_harmonic_share"] = float(np.mean(all_harmonic_share))
-                features["hpss_percussive_share"] = float(np.mean(all_percussive_share))
+                mean_h = float(np.mean(all_harmonic_share))
+                mean_p = float(np.mean(all_percussive_share))
+                features["hpss_harmonic_share"] = mean_h
+                features["hpss_percussive_share"] = mean_p
                 features["hpss_balance_score"] = float(np.mean(all_balance_score))
                 features["hpss_separation_quality"] = float(np.mean(all_separation_quality))
                 features["hpss_harmonic_share_mean"] = float(np.mean(all_harmonic_share))
                 features["hpss_harmonic_share_std"] = float(np.std(all_harmonic_share))
                 features["hpss_percussive_share_mean"] = float(np.mean(all_percussive_share))
                 features["hpss_percussive_share_std"] = float(np.std(all_percussive_share))
+                if mean_h > 0.6:
+                    features["hpss_dominance"] = "harmonic"
+                elif mean_p > 0.6:
+                    features["hpss_dominance"] = "percussive"
+                else:
+                    features["hpss_dominance"] = "mixed"
 
-            # Add metadata
-            total_duration = sum(segment_durations)
+            if self.enable_energy_metrics:
+                if all_energy_total:
+                    features["hpss_energy_total"] = float(np.mean(all_energy_total))
+                if all_energy_h:
+                    features["hpss_energy_harmonic"] = float(np.mean(all_energy_h))
+                if all_energy_p:
+                    features["hpss_energy_percussive"] = float(np.mean(all_energy_p))
+                if all_h_stab:
+                    features["hpss_harmonic_stability"] = float(np.mean(all_h_stab))
+                if all_p_stab:
+                    features["hpss_percussive_stability"] = float(np.mean(all_p_stab))
+            if self.enable_spectral_features:
+                for k, vals in all_spectral.items():
+                    if vals:
+                        features[k] = float(np.mean(vals))
+            stage_timings_ms["aggregate_ms"] = (time.perf_counter() - t_agg0) * 1000.0
+
+            total_duration = float(np.sum(segment_durations))
             features["sample_rate"] = int(self.sample_rate)
             features["n_fft"] = int(self.n_fft)
             features["hop_length"] = int(self.hop_length)
@@ -798,25 +875,38 @@ class HPSSExtractor(BaseExtractor):
             features["segments_count"] = int(total_segments)
             features["hpss_contract_version"] = HPSS_CONTRACT_VERSION
 
-            # Add _features_enabled for feature gating
             features_enabled = []
             if self.enable_energy_metrics:
                 features_enabled.append("energy_metrics")
-            if self.enable_waveforms:
-                features_enabled.append("waveforms")
             if self.enable_spectral_features:
                 features_enabled.append("spectral_features")
-            if self.enable_time_series:
-                features_enabled.append("time_series")
+            # run_segments: waveforms and frame-level share series are not produced (per-window HPSS only).
             features["_features_enabled"] = features_enabled
 
-            # Add segment-level data (always available when using run_segments)
-            # These are needed for understanding segment structure, not just for time series
-            features["segment_centers_sec"] = segment_centers
-            features["segment_durations_sec"] = segment_durations
+            features["segment_start_sec"] = segment_start_sec
+            features["segment_end_sec"] = segment_end_sec
+            features["segment_center_sec"] = segment_center_sec
+            features["segment_mask"] = segment_mask
+            features["hpss_harmonic_share_by_segment"] = hpss_harmonic_share_by_segment
+            features["hpss_percussive_share_by_segment"] = hpss_percussive_share_by_segment
+
+            stage_timings_ms["total_ms"] = (time.perf_counter() - t_total0) * 1000.0
+            features["stage_timings_ms"] = stage_timings_ms
+            features["hpss_resource_profile"] = hpss_resource_profile
+
+            if hpss_resource_profile is not None:
+                try:
+                    features["hpss_resource_profile"] = {
+                        **(hpss_resource_profile or {}),
+                        **prefix_snapshot("at_end", snapshot_process_resources()),
+                    }
+                except Exception:
+                    pass
 
             # Validate output
+            t_val0 = time.perf_counter()
             is_valid, error_msg = self._validate_output(features)
+            stage_timings_ms["validate_ms"] = (time.perf_counter() - t_val0) * 1000.0
             if not is_valid:
                 error_code = self._classify_error(ValueError(error_msg), "validation_failed")
                 return self._create_result(

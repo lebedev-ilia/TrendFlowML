@@ -1,9 +1,10 @@
 from __future__ import annotations
 
 import os
+import json
 import tempfile
 from pathlib import Path
-from typing import Iterable, Optional
+from typing import Iterable, Optional, AsyncIterator
 
 from .base import NotFoundError, ObjectInfo
 
@@ -60,5 +61,83 @@ class FileSystemStorage:
                     os.remove(tmp)
             except Exception:
                 pass
+    
+    def stream_lines(self, key: str) -> Iterable[str]:
+        """
+        Потоковое чтение файла построчно (для JSONL файлов).
+        
+        Не читает весь файл в память, читает построчно.
+        
+        Args:
+            key: Ключ файла
+            
+        Yields:
+            Строки файла
+            
+        Raises:
+            NotFoundError: Если файл не найден
+        """
+        p = self._abs(key)
+        if not os.path.exists(p):
+            raise NotFoundError(f"FS key not found: {key}")
+        
+        with open(p, "r", encoding="utf-8") as f:
+            for line in f:
+                if line.strip():
+                    yield line.strip()
+    
+    async def stream_jsonl(self, key: str) -> AsyncIterator[dict]:
+        """
+        Async streaming чтение JSONL файла построчно.
+        
+        Не читает весь файл в память, читает построчно и парсит JSON.
+        
+        Args:
+            key: Ключ файла
+            
+        Yields:
+            Словари с распарсенными JSON объектами
+            
+        Raises:
+            NotFoundError: Если файл не найден
+        """
+        p = self._abs(key)
+        if not os.path.exists(p):
+            raise NotFoundError(f"FS key not found: {key}")
+        
+        with open(p, "r", encoding="utf-8") as f:
+            for line in f:
+                line = line.strip()
+                if not line:
+                    continue
+                try:
+                    yield json.loads(line)
+                except json.JSONDecodeError:
+                    # Пропустить невалидные строки
+                    continue
+    
+    def generate_presigned_url(
+        self,
+        key: str,
+        expiration: int = 3600,
+        http_method: str = "GET"
+    ) -> str:
+        """
+        Генерация presigned URL для прямого доступа к файлу.
+        
+        Для FileSystemStorage возвращает относительный путь (не настоящий presigned URL).
+        В production должен использоваться S3Storage с настоящими presigned URL.
+        
+        Args:
+            key: Ключ файла
+            expiration: Время жизни URL в секундах (игнорируется для FS)
+            http_method: HTTP метод для URL (игнорируется для FS)
+            
+        Returns:
+            Относительный путь к файлу
+        """
+        # Для FileSystemStorage просто возвращаем путь
+        # В production это должно быть заменено на настоящий presigned URL через S3
+        return f"/storage/{key}"
 
 

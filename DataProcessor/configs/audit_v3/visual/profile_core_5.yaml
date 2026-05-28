@@ -1,0 +1,4 @@
+visual:
+  cfg_path: "DataProcessor/configs/audit_v3/visual_core_5_only.yaml"
+
+

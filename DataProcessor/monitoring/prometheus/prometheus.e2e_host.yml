@@ -1,0 +1,27 @@
+# Рабочая копия для override: отредактируйте порты под ваш E2E (см. prometheus.e2e_host.example.yml).
+
+global:
+  scrape_interval: 15s
+  evaluation_interval: 15s
+  external_labels:
+    cluster: 'dataprocessor-e2e'
+    environment: 'dev'
+
+scrape_configs:
+  - job_name: 'dataprocessor-api-e2e-host'
+    scrape_interval: 10s
+    metrics_path: '/api/v1/metrics'
+    static_configs:
+      - targets:
+          - 'host.docker.internal:8002'
+
+  - job_name: 'dataprocessor-worker-e2e-host'
+    scrape_interval: 10s
+    metrics_path: '/metrics'
+    static_configs:
+      - targets:
+          - 'host.docker.internal:8003'
+
+  - job_name: 'prometheus'
+    static_configs:
+      - targets: ['localhost:9090']

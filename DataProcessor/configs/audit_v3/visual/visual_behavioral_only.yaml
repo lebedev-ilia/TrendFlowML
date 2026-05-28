@@ -1,0 +1,69 @@
+core_providers:
+  core_clip: false
+  core_depth_midas: false
+  core_optical_flow: false
+  core_object_detections: true
+  ocr_extractor: false
+  core_face_landmarks: true
+  content_domain: false
+  franchise_recognition: false
+  brand_semantics: false
+  car_semantics: false
+  face_identity: false
+  place_semantics: false
+
+modules:
+  cut_detection: false
+  scene_classification: false
+  video_pacing: false
+  uniqueness: false
+  shot_quality: false
+  story_structure: false
+  detalize_face: false
+  emotion_face: false
+  behavioral: true
+  optical_flow: false
+  action_recognition: false
+  color_light: false
+  frames_composition: false
+  high_level_semantic: false
+  micro_emotion: false
+  similarity_metrics: false
+  text_scoring: false
+
+global:
+  triton_http_url: "http://localhost:8000"
+
+core_object_detections:
+  runtime: "ultralytics"
+  model: "visual/yolo/yolo11x_41_best.pt"
+  batch_size: 16
+  device: "cuda"
+  box_threshold: 0.6
+  iou_threshold: 0.3
+  triton_preprocess_preset: "yolo11x_640"
+  render:
+    enable_render: true
+    enable_html_render: true
+
+core_face_landmarks:
+  # Baseline (audit): FaceMesh is required and gated by person-mask from core_object_detections.
+  use_pose: true
+  use_hands: true
+  use_face_mesh: true
+  use_person_mask: true
+  person_window_radius: 0
+  enable_async: true
+  enable_parallel: false
+  enable_temporal_filter: true
+  temporal_filter_min_cutoff: 1.0
+  temporal_filter_beta: 0.0
+  render:
+    enable_render: true
+    enable_html_render: true
+
+behavioral:
+  render:
+    enable_render: true
+    enable_html_render: true
+

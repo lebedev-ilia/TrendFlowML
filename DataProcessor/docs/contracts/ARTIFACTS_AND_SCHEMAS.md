@@ -64,33 +64,36 @@
 ### 4.1 Принятые schema_version (baseline v0, текущий набор)
 
 Core providers (VisualProcessor):
-- `core_clip`: `core_clip_npz_v1`
-- `core_depth_midas`: `core_depth_midas_npz_v1`
-- `core_object_detections`: `core_object_detections_npz_v1`
-- `core_optical_flow`: `core_optical_flow_npz_v1`
-- `core_face_landmarks`: `core_face_landmarks_npz_v1`
-- `content_domain`: `content_domain_npz_v1`
-- `franchise_recognition`: `franchise_recognition_npz_v1`
-- `ocr_extractor`: `ocr_extractor_npz_v1`
+- `core_clip`: `core_clip_npz_v2`
+- `core_depth_midas`: `core_depth_midas_npz_v3`
+- `core_object_detections`: `core_object_detections_npz_v2`
+- `core_optical_flow`: `core_optical_flow_npz_v3`
+- `core_face_landmarks`: `core_face_landmarks_npz_v2`
+- `brand_semantics`: `brand_semantics_npz_v2`
+- `car_semantics`: `car_semantics_npz_v2`
+- `content_domain`: `content_domain_npz_v2`
+- `franchise_recognition`: `franchise_recognition_npz_v2`
+- `ocr_extractor`: `ocr_extractor_npz_v2`
 
 Visual modules (VisualProcessor, Tier‑0 baseline):
 - `cut_detection`: `cut_detection_npz_v1`
-- `scene_classification`: `scene_classification_npz_v1`
-- `video_pacing`: `video_pacing_npz_v2`
-- `uniqueness`: `uniqueness_npz_v2`
-- `shot_quality`: `shot_quality_npz_v1`
-- `action_recognition`: `action_recognition_npz_v1`
+- `cut_detection` (model-facing): `cut_detection_model_facing_npz_v1`
+- `scene_classification`: `scene_classification_npz_v2`
+- `video_pacing`: `video_pacing_npz_v3`
+- `uniqueness`: `uniqueness_npz_v4`
+- `shot_quality`: `shot_quality_npz_v3`
+- `action_recognition`: `action_recognition_npz_v2`
 - `behavioral`: `behavioral_npz_v1`
-- `color_light`: `color_light_npz_v1`
+- `color_light`: `color_light_npz_v2`
 - `frames_composition`: `frames_composition_npz_v1`
-- `high_level_semantic`: `high_level_semantic_npz_v1`
-- `micro_emotion`: `micro_emotion_npz_v1`
-- `optical_flow`: `optical_flow_npz_v1`
-- `similarity_metrics`: `similarity_metrics_npz_v1`
-- `text_scoring`: `text_scoring_npz_v1`
-- `story_structure`: `story_structure_npz_v1`
-- `detalize_face`: `detalize_face_npz_v1`
-- `emotion_face`: `emotion_face_npz_v1`
+- `high_level_semantic`: `high_level_semantic_npz_v2`
+- `micro_emotion`: `micro_emotion_npz_v3`
+- `optical_flow`: `optical_flow_npz_v3`
+- `similarity_metrics`: `similarity_metrics_npz_v3`
+- `text_scoring`: `text_scoring_npz_v2`
+- `story_structure`: `story_structure_npz_v3`
+- `detalize_face`: `detalize_face_npz_v3`
+- `emotion_face`: `emotion_face_npz_v3`
 
 Audio:
 - `clap_extractor` / `tempo_extractor` / `loudness_extractor`: `audio_npz_v1`
@@ -136,20 +139,40 @@ Text:
 
 ## 6) Схемы: human + machine
 
-Полуфинал:
-- `SCHEMA.md` рядом с модулем (human-friendly)
-- машинная схема в `VisualProcessor/schemas/*.json` (единый реестр)
+**FINAL (Audit v3, production-ready)**:
+
+- **Human schema**: `SCHEMA.md` рядом с компонентом (human-friendly; single source-of-truth для чтения человеком).
+  - Должна описывать ключи NPZ, dtype/shape, tiers (`model_facing|analytics|debug`), required/optional и empty/error semantics.
+  - Рекомендуем: генерировать `SCHEMA.md` из machine schema (чтобы не было расхождений).
+- **Machine schema**: единый реестр схем (для VisualProcessor):
+  - `DataProcessor/VisualProcessor/schemas/<schema_version>.json`
+  - ключ шифруется через `meta.schema_version` внутри NPZ.
+  - schema format: `vp_schema_v1` (keys/dtype/shape + tier + required/optional + allow_extra_keys).
+
+Примечание:
+- Для Audio/Text процессоров реестр будет сделан аналогично (по мере rollout), но baseline правило остаётся тем же: **schema_version обязателен** и должен иметь чёткую спецификацию.
+
+См. также формальную спецификацию schema system:
+- `docs/contracts/SCHEMAS_SYSTEM.md`
 
 ## 7) Валидатор схем
 
-Запуск:
-- **runtime**: ловим битые/неполные артефакты сразу в пайплайне
-- **CI**: не даём изменениям схемы незаметно ломать совместимость
+**FINAL (Audit v3)**:
+
+- **runtime**: ловим битые/неполные артефакты сразу в пайплайне (fail-fast для известных схем).
+- **CI**: не даём изменениям схемы незаметно ломать совместимость (валидируем sample artifacts / golden artifacts).
 
 Минимальные проверки:
 - ключи/dtype/shape
 - `frame_indices` отсортированы, уникальны
 - согласованность `meta` (обязательные поля)
+
+Реализация (VisualProcessor, current):
+- Реестр схем: `DataProcessor/VisualProcessor/schemas/*.json` (по `meta.schema_version`)
+- CLI валидатор (dev/CI): `PYTHONPATH=DataProcessor/VisualProcessor python -m schemas.cli <path_or_dir>`
+- Runtime валидатор: `DataProcessor/VisualProcessor/utils/artifact_validator.py::validate_npz(...)`
+  - если схема известна → ошибки по ключам/dtype/shape,
+  - если схема неизвестна → warning (временный режим rollout; для audited компонентов должен быть “known schema”).
 
 ## 8) Audio Tier‑0 (baseline) — per-run NPZ артефакты
 

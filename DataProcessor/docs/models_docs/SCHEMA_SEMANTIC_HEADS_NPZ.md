@@ -39,6 +39,7 @@
 Label space задаётся offline базой и должен быть **стабильным** в пределах `db_digest`.
 
 - `semantic_label_names (A,) str`: строки вида `"id:name"` (id = int)
+- *(optional, recommended for Embedding Service based heads)* `semantic_object_ids (A,) str`: стабильные object ids (например UUID из Embedding Service), aligned с `semantic_label_names`
 - `threshold_per_label_arr (A,) float32`: aligned с `semantic_label_names` (NaN если нет)
 
 Примечание:
@@ -100,24 +101,22 @@ Output:
 
 Upstream:
 - proposals из `core_object_detections/detections.npz`
-- CLIP image embedding через Triton (clip_image)
+- retrieval в Embedding Service (`category="car"`) по bbox crops
 
-Label spaces (несколько):
-- `make_label_names (M,) str`
-- `model_label_names (L,) str`
-- `segment_label_names (S,) str`
-- `body_type_label_names (B,) str`
-- `price_bucket_names (P,) str`
+Текущее состояние (Audit v3 rollout, `car_semantics_npz_v2`):
+- **Единый label-space**:
+  - `semantic_label_names (A,) str`: `"int:name"`
+  - `semantic_object_ids (A,) str`: UUID из Embedding Service (aligned)
+  - `threshold_per_label_arr (A,) float32` (сейчас NaN)
+- **Track/Detection semantics** (semantic-head v1 поля):
+  - `track_*` (T,K), `frame_*` (N,K), `det_*` (N,M,K)
+  - K фиксирован (в rollout: `K=5`)
+- **Taxonomy make/model**:
+  - пока база не содержит нормализованную таксономию, допускается best-effort парсинг из `label name`
+    в `semantic_label_make/model (A,)` как `analytics` (не model_facing).
 
-Per-axis topK (K=3 в v1):
-- `track_make_topk_ids (T,3)`, `track_make_topk_scores (T,3)`
-- `track_model_topk_ids (T,3)`, `track_model_topk_scores (T,3)`
-- `track_segment_topk_ids (T,3)`, `track_segment_topk_scores (T,3)`
-- `track_body_type_topk_ids (T,3)`, `track_body_type_topk_scores (T,3)`
-- `track_price_bucket_topk_ids (T,3)`, `track_price_bucket_topk_scores (T,3)`
-
-Примечание:
-- В cars v1 threshold flags не обязательны (в отличие от brand/place/face), но **NaN/-1** правила всё равно применяются.
+Future (когда соберём нормальную таксономию/базу):
+- multi-axis label spaces (make/model/segment/body_type/price_bucket) могут быть добавлены как отдельная версия схемы (bump `schema_version`).
 
 #### 2.3 `core_place_semantics`
 

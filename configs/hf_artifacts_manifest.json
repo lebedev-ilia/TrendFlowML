@@ -1,0 +1,127 @@
+{
+  "repo_id": "Ilialebedev/trendflow_artifact_0_1",
+  "repo_type": "dataset",
+  "revision": "main",
+  "entries": [
+    {
+      "local": "DataProcessor/benchmarks/summary",
+      "remote": "DataProcessor/benchmarks/summary",
+      "kind": "dir",
+      "required": false
+    },
+    {
+      "local": "DataProcessor/embedding_service/faiss_indices",
+      "remote": "DataProcessor/embedding_service/faiss_indices",
+      "kind": "dir",
+      "required": false
+    },
+    {
+      "local": "DataProcessor/faiss_indices",
+      "remote": "DataProcessor/faiss_indices",
+      "kind": "dir",
+      "required": false
+    },
+    {
+      "local": "DataProcessor/Segmenter/data",
+      "remote": "DataProcessor/Segmenter/data",
+      "kind": "dir",
+      "required": false
+    },
+    {
+      "local": "DataProcessor/state/youtube",
+      "remote": "DataProcessor/state/youtube",
+      "kind": "dir",
+      "required": false
+    },
+    {
+      "local": "DataProcessor/triton/models",
+      "remote": "DataProcessor/triton/models",
+      "kind": "dir",
+      "required": false
+    },
+    {
+      "local": "DataProcessor/VisualProcessor/core/model_process/core_identity/brand_semantics/known_brands",
+      "remote": "DataProcessor/VisualProcessor/core/model_process/core_identity/brand_semantics/known_brands",
+      "kind": "dir",
+      "required": false
+    },
+    {
+      "local": "DataProcessor/VisualProcessor/core/model_process/core_identity/brand_semantics/known_brands_auto",
+      "remote": "DataProcessor/VisualProcessor/core/model_process/core_identity/brand_semantics/known_brands_auto",
+      "kind": "dir",
+      "required": false
+    },
+    {
+      "local": "DataProcessor/VisualProcessor/core/model_process/core_identity/car_semantics/known_cars",
+      "remote": "DataProcessor/VisualProcessor/core/model_process/core_identity/car_semantics/known_cars",
+      "kind": "dir",
+      "required": false
+    },
+    {
+      "local": "DataProcessor/VisualProcessor/core/model_process/core_identity/content_domain/known_domains",
+      "remote": "DataProcessor/VisualProcessor/core/model_process/core_identity/content_domain/known_domains",
+      "kind": "dir",
+      "required": false
+    },
+    {
+      "local": "DataProcessor/VisualProcessor/core/model_process/core_identity/face_identity/known_people",
+      "remote": "DataProcessor/VisualProcessor/core/model_process/core_identity/face_identity/known_people",
+      "kind": "dir",
+      "required": false
+    },
+    {
+      "local": "DataProcessor/VisualProcessor/modules/micro_emotion/OpenFace",
+      "remote": "DataProcessor/VisualProcessor/modules/micro_emotion/OpenFace",
+      "kind": "dir",
+      "required": false
+    },
+    {
+      "local": "DataProcessor/VisualProcessor/state",
+      "remote": "DataProcessor/VisualProcessor/state",
+      "kind": "dir",
+      "required": false
+    },
+    {
+      "local": "DataProcessor/VisualProcessor/result_store",
+      "remote": "DataProcessor/VisualProcessor/result_store",
+      "kind": "dir",
+      "required": false
+    },
+    {
+      "local": "storage/embedding_faiss",
+      "remote": "storage/embedding_faiss",
+      "kind": "dir",
+      "required": false
+    },
+    {
+      "local": "bundled_models",
+      "remote": "bundled_models",
+      "kind": "dir",
+      "required": false
+    },
+    {
+      "local": "emonet",
+      "remote": "emonet",
+      "kind": "dir",
+      "required": false
+    },
+    {
+      "local": "wav2vec2_checkpoint",
+      "remote": "wav2vec2_checkpoint",
+      "kind": "dir",
+      "required": false
+    },
+    {
+      "local": "dp_output",
+      "remote": "dp_output",
+      "kind": "dir",
+      "required": false
+    },
+    {
+      "local": "dp_results",
+      "remote": "dp_results",
+      "kind": "dir",
+      "required": false
+    }
+  ]
+}

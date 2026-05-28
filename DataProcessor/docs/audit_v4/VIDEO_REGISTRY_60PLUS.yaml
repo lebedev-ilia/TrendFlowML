@@ -1,0 +1,111 @@
+# Реестр видео для батча 60+ (заготовка Audit v4)
+#
+# Статус: INCOMPLETE — заполнено 5 записей из набора B ([RUN_LOG.md](RUN_LOG.md)).
+# Владелец реестра: Илья (чеклист п. 0.1), дополнить до target_video_count (сейчас 70), проставить теги осей.
+#
+# Текст / транскрипт (чеклист 2.13–2.15):
+#   Один реестр видео; текстовые требования кодируются тегами (transcript, metadata_richness, notes).
+#   «≥2 чанка whisper», youtube_auto, длинный текст — вручную при отборе или уточнить после пилота по NPZ/документу.
+#
+# Segmenter / разные N (чеклист 2.10):
+#   У разных модулей одного run разная длина оси кадров/сегментов — норма. Тег segmenter_N в записях ниже —
+#   про стратификацию реестра (длительность, плотность опорных кадров), не единый скаляр для всех NPZ.
+#   Фактические N снимать из metadata.json / форм NPZ после прогона. См. monitoring/README.md §«Разные N».
+#
+# Критерий отбора — action_recognition (мульти-клип на трек):
+#   В реестре должно быть ≥3 видео, где после E2E в action_recognition_features.npz есть хотя бы один трек
+#   с metric__num_clips ≥ 2 (см. PLAN_PREP §8.3, COVERAGE_MATRIX_60PLUS.md, BATCH_60PLUS_WAIVERS W3).
+#   Удобная ось: editing_pacing + faces (длинные планы с людьми, реакции, смены кадра — не один сплошной person-блок).
+#
+# Версионирование (чеклист п. 3.7): после финализации выполнить
+#   shasum -a256 VIDEO_REGISTRY_60PLUS.yaml
+# и записать hash + дату в [CHECKLIST_LARGE_VIDEO_BATCH_60PLUS.md](CHECKLIST_LARGE_VIDEO_BATCH_60PLUS.md).
+#
+# Проверка структуры (локально):
+#   python DataProcessor/docs/audit_v4/scripts/validate_video_registry_60plus.py
+# Перед Go (число записей ≥ target_video_count):
+#   python .../validate_video_registry_60plus.py --strict-count
+
+schema_version: video_registry_60plus_v1
+registry_status: incomplete
+target_video_count: 70
+current_video_count: 5
+platform_default: youtube
+
+# Заполнить перед Go:
+config_hash: null
+git_commit_intended: null
+
+# Источник первых пяти: diversity B (mock e2e), полные run_id как в RUN_LOG (Visual/Text блоки).
+videos:
+  - video_id: "-Q6fnPIybEI"
+    run_id: "e2bc964f-1983-4075-a523-1a6cd0cf0759"
+    notes: "Набор B; часто совпадает с опорным A по video_id"
+    tags:
+      duration: todo
+      speech_music: todo
+      editing_pacing: todo
+      faces: todo
+      on_screen_text: todo
+      language: todo
+      metadata_richness: todo
+      transcript: todo
+      segmenter_N: todo
+
+  - video_id: "-15jH8mtfJw"
+    run_id: "30e1183d-0068-46ee-9b04-ae4f693a9bb2"
+    notes: "Набор B (RUN_LOG)"
+    tags:
+      duration: todo
+      speech_music: todo
+      editing_pacing: todo
+      faces: todo
+      on_screen_text: todo
+      language: todo
+      metadata_richness: todo
+      transcript: todo
+      segmenter_N: todo
+
+  - video_id: "-5EYUqIlyJU"
+    run_id: "b9761f4a-2227-4b0e-b780-2d2725234c53"
+    notes: "Набор B (RUN_LOG)"
+    tags:
+      duration: todo
+      speech_music: todo
+      editing_pacing: todo
+      faces: todo
+      on_screen_text: todo
+      language: todo
+      metadata_richness: todo
+      transcript: todo
+      segmenter_N: todo
+
+  - video_id: "-7Ei8e05x30"
+    run_id: "45c451ad-4b6a-4845-a71b-4245ec579f45"
+    notes: "Набор B (RUN_LOG)"
+    tags:
+      duration: todo
+      speech_music: todo
+      editing_pacing: todo
+      faces: todo
+      on_screen_text: todo
+      language: todo
+      metadata_richness: todo
+      transcript: todo
+      segmenter_N: todo
+
+  - video_id: "-Ga4edhrfog"
+    run_id: "e2dc8851-6c51-43c0-9757-3c0fed803348"
+    notes: "Набор B (RUN_LOG); micro_emotion PCA error на этом run — см. RUN_LOG / WAIVERS"
+    tags:
+      duration: todo
+      speech_music: todo
+      editing_pacing: todo
+      faces: todo
+      on_screen_text: todo
+      language: todo
+      metadata_richness: todo
+      transcript: todo
+      segmenter_N: todo
+
+# Добавить минимум ещё 55 объектов `- video_id: ...` с run_id (или плейсхолдер run_id: null до прогона).

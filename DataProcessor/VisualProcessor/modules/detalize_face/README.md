@@ -25,6 +25,12 @@
 
 Модуль `detalize_face` предоставляет комплексную систему для анализа лиц в видео. В отличие от базового `core_face_landmarks`, который только извлекает координаты ключевых точек, этот модуль вычисляет производные метрики и признаки для различных аспектов лица.
 
+**Версия (producer_version)**: 2.0.2  
+**schema_version**: `detalize_face_npz_v3`  
+**Schemas**:
+- Human: `DataProcessor/VisualProcessor/modules/detalize_face/SCHEMA.md`
+- Machine: `DataProcessor/VisualProcessor/schemas/detalize_face_npz_v3.json`
+
 ### Основные возможности
 
 - ✅ **Модульная архитектура**: 7 специализированных модулей для разных типов фичей
@@ -157,10 +163,12 @@ python main.py \
 - `--frames-dir` (обязательный): Директория с кадрами (должна содержать `metadata.json`)
 - `--rs-path` (обязательный): Путь к хранилищу результатов (ResultsStore)
 - `--modules` (опционально): Список модулей через запятую (по умолчанию - все модули)
-- `--max-faces` (по умолчанию: 4): Максимальное количество лиц на кадр
-- `--min-detection-confidence` (по умолчанию: 0.7): Минимальная уверенность детекции
+- `--max-faces` (по умолчанию: 4 в CLI, 10 в классе): Максимальное количество лиц на кадр
+- `--refine-landmarks` (по умолчанию: включено): Использовать уточненные landmarks (468 точек), если доступны
+- `--min-detection-confidence` (по умолчанию: 0.7): Минимальная уверенность детекции лица
+- `--min-tracking-confidence` (по умолчанию: 0.7): Минимальная уверенность трекинга лица
 - `--visualize`: Включить визуализацию результатов
-- `--visualize-dir`: Директория для сохранения визуализаций
+- `--visualize-dir` (по умолчанию: `./face_visualizations`): Директория для сохранения визуализаций
 - `--show-landmarks`: Показывать landmarks на визуализации
 - `--log-level` (по умолчанию: INFO): Уровень логирования
 
@@ -230,18 +238,25 @@ module.run(frames_dir="/path/to/frames", config={})
 ```python
 {
     "summary": {
-        "total_frames": int,
+        "axis_frames": int,
+        "frames_with_faces_total": int,
+        "frames_with_faces_processed": int,
         "processed_frames": int,
-        "frames_with_faces": int,
         "total_faces": int,
         "primary_faces": int,
-        "avg_faces_per_frame": float,
+        "avg_faces_per_processed_face_frame": float,
         "stage_timings_ms": dict,
     },
     "frame_indices": np.ndarray,
     "times_s": np.ndarray,
     # model-facing time-series (aligned to frame_indices)
+    "face_present": np.ndarray,   # bool (N,)
+    "processed_mask": np.ndarray, # bool (N,)
+    "primary_valid": np.ndarray,  # bool (N,)
     "face_count": np.ndarray,
+    "primary_tracking_id": np.ndarray,      # int32 (N,), -1 if missing
+    "primary_compact_features": np.ndarray, # float32 (N,40), 0 if missing
+    # optional heuristic curves (only if write_primary_curves=True)
     "primary_gaze_at_camera_prob": np.ndarray,
     "primary_blink_rate": np.ndarray,
     "primary_attention_score": np.ndarray,
@@ -314,11 +329,16 @@ compact = extract_compact_features(face_feature)
 
 ## Sampling requirements
 
-- Компонент **не генерирует** sampling сам.
-- Использует **только** кадры, где `core_face_landmarks` обнаружил лица.
-- **Важно**: Компонент обрабатывает **все** кадры с лицами из `core_face_landmarks`, игнорируя выборку Segmenter для этого модуля. Это обеспечивает полное покрытие всех кадров с обнаруженными лицами.
-- Источник истины по времени: `times_s` из `core_face_landmarks` (`union_timestamps_sec[frame_indices]`).
-- Если `core_face_landmarks` не дал ни одного кадра с лицами → `status="empty"`, `empty_reason="no_faces_in_video"`.
+- **Axis**: выход выровнен по `metadata[detalize_face].frame_indices` (Segmenter contract; union-domain).
+  - Fallback (legacy): если ключа нет, используем `metadata[core_face_landmarks].frame_indices` как axis (с warning), чтобы сохранить выравнивание с sampling group лица.
+- **Compute gating**: фичи реально считаются только для кадров, где `core_face_landmarks` обнаружил лица (`face_present=true`).
+- **Internal sampling (опционально)**: если face-кадров слишком много, можно ограничить вычисления uniform‑выборкой среди face-кадров:
+  - `max_face_frames=<K>` (в конструкторе/конфиге)
+  - `face_frames_sampling="uniform"`
+  - тогда `processed_mask` будет `false` на части face-кадров, а `primary_*` (если включены) будут `NaN`.
+- Источник истины по времени: `union_timestamps_sec` из `metadata.json` (no-fallback).
+- Если лиц нет для всех axis кадров → `status="empty"`, `empty_reason="no_faces_in_video"`.
+- В `meta.module_sampling_policy_version` фиксируется: `segmenter_axis_v1`, а политика внутренней выборки — в `meta.face_frames_sampling_policy_version`.
 
 ## Models
 
@@ -327,6 +347,22 @@ compact = extract_compact_features(face_feature)
 - **`models_used`**: пустой список (компонент не запускает модели напрямую)
 - **Зависимость от моделей**: косвенная через `core_face_landmarks` (MediaPipe FaceMesh)
 - **Вычисления**: все модули выполняют геометрические вычисления на landmarks без использования нейросетей
+
+## Quality Status & Refinements (Audit v3)
+
+Ключевые изменения/нововведения, зафиксированные в ходе аудита:
+
+- **v2 → v3 schema bump** (`detalize_face_npz_v3`, `producer_version=2.0.2`):
+  - output строго выровнен по Segmenter axis (`metadata[detalize_face].frame_indices`), с fallback на `metadata[core_face_landmarks].frame_indices` для legacy метаданных;
+  - добавлены model-facing маски `face_present`, `processed_mask`, `primary_valid` для корректного обучения/инференса;
+  - добавлены model-facing `primary_compact_features (N,40)` и `primary_tracking_id`;
+  - добавлен model-facing `aggregated` (tabular/baseline head friendly статистики по compact-векторам).
+- **Heuristic policy**:
+  - `primary_*` кривые (gaze/blink/attention/quality/…) считаются **эвристиками** и выключены по умолчанию (`write_primary_curves=false`).
+- **Internal sampling среди face-кадров**:
+  - допускается cap `max_face_frames` с uniform выборкой среди face-кадров; `processed_mask` отражает, где реально были вычисления.
+- **Offline render**:
+  - HTML рендер работает offline (без CDN) и показывает маски + sanity-check по compact-вектору.
 
 ## Parallelization
 
@@ -416,11 +452,12 @@ Render-context может быть использован:
 
 **HTML debug страница** (опционально):
 - Путь: `result_store/.../detalize_face/_render/render.html`
-- Содержит интерактивные графики (Chart.js):
-  - Timeline: метрики лица (gaze, blink, attention, quality, speech) по времени
-  - Distributions: статистики по метрикам
-  - Faces aggregates: информация о каждом отслеженном лице
-  - Summary metrics: ключевые показатели в удобном формате
+- **Offline** mini-dashboard (без CDN): SVG‑таймлайны по ключевым метрикам + таблицы распределений + список треков.
+- Содержит блоки:
+  - **Key facts**: `schema_version`, `producer_version`, `status`, `empty_reason`, `meta.stage_timings_ms`
+  - **Timeline charts**: `face_count`, `primary_*` метрики (SVG)
+  - **Top / Anti-top**: примеры кадров с max `primary_attention_score` и min `primary_quality_proxy_score`
+  - **Distributions** и **tracked faces**
 
 **Конфигурация** (в `global_config.yaml`):
 ```yaml
@@ -442,7 +479,7 @@ detalize_face:
 | Параметр | Тип | По умолчанию | Описание |
 |----------|-----|--------------|----------|
 | `modules` | `List[str]` | `None` (все) | Список модулей для загрузки |
-| `max_faces` | `int` | `4` | Максимальное количество лиц на кадр |
+| `max_faces` | `int` | `10` (CLI: `4`) | Максимальное количество лиц на кадр |
 | `refine_landmarks` | `bool` | `True` | Использовать уточненные landmarks (468 точек) |
 | `min_detection_confidence` | `float` | `0.7` | Минимальная уверенность детекции |
 | `min_tracking_confidence` | `float` | `0.7` | Минимальная уверенность трекинга |

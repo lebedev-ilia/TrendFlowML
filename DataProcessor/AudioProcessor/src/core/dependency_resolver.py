@@ -216,6 +216,23 @@ def resolve_extractor_dependencies(
                 else:
                     warnings.append(msg + "Consider adding them to --extractors for optimization.")
 
+    # Добавляем опциональные зависимости в dynamic_dependencies для правильного порядка выполнения
+    # Это гарантирует, что даже опциональные зависимости будут выполняться в правильном порядке
+    # Важно: делаем это ДО топологической сортировки, чтобы зависимости учитывались
+    for extractor in sorted(resolved):  # Сортируем для детерминированного порядка
+        optional_deps = OPTIONAL_EXTRACTOR_DEPENDENCIES.get(extractor, [])
+        if optional_deps:
+            # Добавляем опциональные зависимости, если они присутствуют в resolved
+            existing_optional = [dep for dep in optional_deps if dep in resolved]
+            if existing_optional:
+                if extractor not in dynamic_dependencies:
+                    dynamic_dependencies[extractor] = []
+                # Добавляем только те опциональные зависимости, которые уже есть в списке
+                for dep in existing_optional:
+                    if dep not in dynamic_dependencies[extractor]:
+                        dynamic_dependencies[extractor].append(dep)
+                        logger.debug(f"Dependency resolver: Added optional dependency '{dep}' -> '{extractor}' for ordering")
+
     # Топологическая сортировка (Kahn's algorithm)
     # Используем dynamic_dependencies для правильного порядка выполнения
     ordered = _topological_sort_extractors(list(resolved), dynamic_dependencies)

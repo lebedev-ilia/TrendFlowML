@@ -1,0 +1,63 @@
+# CI smoke for VisualProcessor/DataProcessor scripts.
+# Purpose: catch obvious breakages without GPU/Triton.
+
+name: VisualProcessor Smoke
+
+on:
+  push:
+    branches: [main, master]
+    paths:
+      - 'DataProcessor/VisualProcessor/**'
+      - 'DataProcessor/scripts/**'
+      - '.github/workflows/visualprocessor-smoke.yml'
+  pull_request:
+    branches: [main, master]
+    paths:
+      - 'DataProcessor/VisualProcessor/**'
+      - 'DataProcessor/scripts/**'
+      - '.github/workflows/visualprocessor-smoke.yml'
+
+defaults:
+  run:
+    working-directory: .
+
+jobs:
+  smoke:
+    name: Smoke checks (no GPU)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+
+      - name: Python compile (scripts)
+        run: |
+          python -m py_compile DataProcessor/scripts/preflight_triton.py
+          python -m py_compile DataProcessor/scripts/validate_run_manifest.py
+          python -m py_compile DataProcessor/scripts/summarize_run_manifest.py
+          python -m py_compile DataProcessor/scripts/capacity_report.py
+          python -m py_compile DataProcessor/scripts/sync_dp_results_to_storage.py
+
+      - name: Validate VisualProcessor schemas JSON
+        run: |
+          python - <<'PY'
+          import glob, json, sys
+          paths = glob.glob('DataProcessor/VisualProcessor/schemas/*.json')
+          assert paths, "no schemas found"
+          for p in paths:
+            with open(p, 'r', encoding='utf-8') as f:
+              json.load(f)
+          print(f"OK: {len(paths)} schemas")
+          PY
+
+      - name: Bash syntax checks (key scripts)
+        run: |
+          bash -n DataProcessor/scripts/run_missing_visual_tests.sh
+          bash -n DataProcessor/VisualProcessor/modules/action_recognition/scripts/run_tests.sh
+          bash -n DataProcessor/VisualProcessor/modules/action_recognition/scripts/wait_and_analyze.sh
+          bash -n DataProcessor/VisualProcessor/modules/shot_quality/scripts/run_tests.sh
+          bash -n DataProcessor/VisualProcessor/modules/shot_quality/scripts/run_missing_tests.sh
+

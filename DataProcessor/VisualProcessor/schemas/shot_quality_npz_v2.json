@@ -1,0 +1,59 @@
+{
+  "schema_system_version": "vp_schema_v1",
+  "schema_version": "shot_quality_npz_v2",
+  "producer": "shot_quality",
+  "artifact_kind": "npz",
+  "allow_extra_keys": false,
+  "meta": {
+    "required_keys": [
+      "producer",
+      "producer_version",
+      "schema_version",
+      "created_at",
+      "platform_id",
+      "video_id",
+      "run_id",
+      "config_hash",
+      "sampling_policy_version",
+      "dataprocessor_version",
+      "status",
+      "empty_reason",
+      "models_used",
+      "model_signature",
+      "stage_timings_ms"
+    ],
+    "optional_keys": [
+      "total_frames",
+      "processed_frames",
+      "frames_dir",
+      "analysis_fps",
+      "analysis_width",
+      "analysis_height",
+      "ui_payload",
+      "impl_meta"
+    ]
+  },
+  "fields": {
+    "frame_indices": { "required": true, "tier": "model_facing", "dtype": "int32", "shape": ["N"] },
+    "times_s": { "required": true, "tier": "model_facing", "dtype": "float32", "shape": ["N"] },
+
+    "feature_names": { "required": true, "tier": "model_facing", "dtype": "object", "shape": ["F"] },
+    "frame_features": { "required": true, "tier": "model_facing", "dtype": "float32", "shape": ["N", "F"] },
+    "frame_feature_present_ratio": { "required": true, "tier": "model_facing", "dtype": "float32", "shape": ["F"] },
+
+    "quality_probs": { "required": true, "tier": "model_facing", "dtype": "float16", "shape": ["N", "P"] },
+
+    "shot_ids": { "required": true, "tier": "analytics", "dtype": "int32", "shape": ["N"] },
+    "shot_start_frame": { "required": true, "tier": "analytics", "dtype": "int32", "shape": ["S"] },
+    "shot_end_frame": { "required": true, "tier": "analytics", "dtype": "int32", "shape": ["S"] },
+    "shot_frame_count": { "required": true, "tier": "analytics", "dtype": "int32", "shape": ["S"] },
+    "shot_features_mean": { "required": true, "tier": "analytics", "dtype": "float32", "shape": ["S", "F"] },
+    "shot_features_std": { "required": true, "tier": "analytics", "dtype": "float32", "shape": ["S", "F"] },
+    "shot_features_min": { "required": true, "tier": "analytics", "dtype": "float32", "shape": ["S", "F"] },
+    "shot_features_max": { "required": true, "tier": "analytics", "dtype": "float32", "shape": ["S", "F"] },
+
+    "meta": { "required": true, "tier": "debug", "dtype": "object", "shape": [] }
+  }
+}
+
+

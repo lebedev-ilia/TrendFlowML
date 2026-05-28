@@ -14,7 +14,7 @@ from typing import Optional, List
 
 sys.path.append(os.path.dirname(os.path.dirname(os.path.dirname(__file__))))
 
-from modules.behavioral.behavior_analyzer import BehaviorAnalyzer
+from modules.behavioral.utils.behavior_analyzer import BehaviorAnalyzer
 from utils.logger import get_logger
 
 MODULE_NAME = "behavioral"

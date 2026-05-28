@@ -35,14 +35,14 @@ def save_speech_analysis_npz(
     if not isinstance(features_enabled, list):
         features_enabled = []
     
-    # Always add ASR metrics if feature is enabled, even if values are 0 or None
+    # Audit v3: missing → NaN (no zero-placeholders)
     if "asr_metrics" in features_enabled:
-        add("asr_segments_count", payload.get("asr_segments_count") or 0)
-        add("asr_token_total", payload.get("asr_token_total") or 0.0)
-        add("asr_token_mean", payload.get("asr_token_mean") or 0.0)
-        add("asr_token_std", payload.get("asr_token_std") or 0.0)
-        add("asr_token_density_per_sec", payload.get("asr_token_density_per_sec") or 0.0)
-        add("asr_speech_rate_wpm", payload.get("asr_speech_rate_wpm") or 0.0)
+        add("asr_segments_count", payload.get("asr_segments_count"))
+        add("asr_token_total", payload.get("asr_token_total"))
+        add("asr_token_mean", payload.get("asr_token_mean"))
+        add("asr_token_std", payload.get("asr_token_std"))
+        add("asr_token_density_per_sec", payload.get("asr_token_density_per_sec"))
+        add("asr_speech_rate_wpm", payload.get("asr_speech_rate_wpm"))
     
     if "diarization_metrics" in features_enabled:
         add("speaker_count", payload.get("speaker_count"))
@@ -84,6 +84,8 @@ def save_speech_analysis_npz(
                 **({"error": error} if error else {}),
                 "empty_reason": empty_reason,
                 "speech_analysis_contract_version": payload.get("speech_analysis_contract_version"),
+                "stage_timings_ms": payload.get("stage_timings_ms"),
+                "speech_analysis_resource_profile": payload.get("speech_analysis_resource_profile"),
                 "features_enabled": features_enabled,
             },
         ),

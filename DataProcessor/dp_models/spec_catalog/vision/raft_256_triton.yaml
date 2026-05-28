@@ -9,7 +9,8 @@ weights_digest: provided_by_deploy
 local_artifacts: []
 runtime_params:
   triton_http_url: "${TRITON_HTTP_URL}"
-  triton_timeout_sec: 60.0
+  # JSON /infer payloads for batched UINT8 frames are large; allow headroom for serialize + server work.
+  triton_timeout_sec: 300.0
   triton_model_name: "raft_256"
   triton_model_version: "1"
   triton_input0_name: "INPUT0__0"

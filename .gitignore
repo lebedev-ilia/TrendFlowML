@@ -1,4 +1,5 @@
 .venv/
+.hf_sync_venv/
 .global_venv/
 .data_venv/
 .ap_venv/
@@ -6,17 +7,21 @@
 .speaker_diarization_venv/
 .emb_venv/
 .vp_venv/
+.tp_venv/
 .core_face_landmarks_venv/
 .action_recognition_venv/
+.fetcher_venv/
 
 speechbrain/
 
 .tmp/
+backend/.e2e/
 
 .env
 
 __pycache__/
 cache/
+.cache/
 
 DataProcessor/benchmarks/summary/
 DataProcessor/embedding_service/faiss_indices/
@@ -27,15 +32,22 @@ DataProcessor/Segmenter/data/
 DataProcessor/state/youtube/
 DataProcessor/triton/models*
 DataProcessor/VisualProcessor/core/model_process/core_identity/brand_semantics/known_brands/
+DataProcessor/VisualProcessor/core/model_process/core_identity/brand_semantics/known_brands_auto/
 DataProcessor/VisualProcessor/core/model_process/core_identity/car_semantics/known_cars/
 DataProcessor/VisualProcessor/core/model_process/core_identity/content_domain/known_domains/
 DataProcessor/VisualProcessor/core/model_process/core_identity/face_identity/known_people/
 DataProcessor/VisualProcessor/modules/micro_emotion/OpenFace/
 DataProcessor/VisualProcessor/state/
+DataProcessor/VisualProcessor/result_store/
+storage/embedding_faiss/
 
 example/
 
 bundled_models*
+emonet
+wav2vec2_checkpoint
 
 dp_output/
 dp_results/
+
+*.png

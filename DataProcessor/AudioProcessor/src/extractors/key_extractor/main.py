@@ -30,6 +30,12 @@ import librosa
 from src.core.base_extractor import BaseExtractor, ExtractorResult
 from src.core.audio_utils import AudioUtils
 
+from .utils.resource_profile import (
+    prefix_snapshot,
+    resource_profile_enabled,
+    snapshot_process_resources,
+)
+
 logger = logging.getLogger(__name__)
 
 # Contract version for downstream extractors compatibility validation
@@ -44,12 +50,20 @@ CONFIDENCE_HIGH = 0.7
 CONFIDENCE_MEDIUM = 0.5
 CONFIDENCE_LOW = 0.3
 
+# key_id: 0-23 (maj_C=0, min_C=1, maj_C#=2, ..., min_B=23); -1 = failed
+def _key_name_mode_to_id(key_name: str, key_mode: str) -> int:
+    if key_name not in VALID_KEYS or key_mode not in VALID_MODES:
+        return -1
+    key_idx = VALID_KEYS.index(key_name)
+    mode_offset = 0 if key_mode == "major" else 1
+    return key_idx * 2 + mode_offset
+
 
 class KeyExtractor(BaseExtractor):
     """Экстрактор тональности (ключ + мажор/минор) с поддержкой segment-based обработки."""
 
     name = "key"
-    version = "2.0.0"
+    version = "2.1.1"
     description = "Определение ключа (тональности) через шаблоны Krumhansl на хроме"
     category = "music_theory"
     dependencies = ["librosa", "numpy"]
@@ -67,7 +81,7 @@ class KeyExtractor(BaseExtractor):
         chroma_type: str = "cqt",
         use_beat_sync: bool = False,
         top_k: int = 3,
-        key_method: str = "auto",  # "essentia" | "librosa" | "auto"
+        key_method: str = "librosa",  # "essentia" | "librosa" | "auto" (Audit v3: default librosa)
         key_confidence_threshold: float = 0.3,
         # Feature gating flags (per-feature control, default: all False except basic)
         enable_detailed_scores: bool = False,
@@ -313,109 +327,18 @@ class KeyExtractor(BaseExtractor):
 
     def run(self, input_uri: str, tmp_path: str) -> ExtractorResult:
         """
-        Определение тональности для всего аудио файла.
-
-        Returns:
-            ExtractorResult с результатами определения тональности
+        Audit v3: отключён. Key использует только run_segments (families.key).
         """
         start_time = time.time()
-        try:
-            if not self._validate_input(input_uri):
-                error_code = self._classify_error(ValueError("Invalid input"), "audio_load_failed")
-                return self._create_result(
-                    success=False,
-                    error=f"key | Некорректный входной файл (error_code={error_code})",
-                    processing_time=time.time() - start_time,
-                )
-
-            # Load audio
-            y_t, sr = self.audio_utils.load_audio(
-                input_uri,
-                target_sr=self.sample_rate,
-                mix_to_mono=True,
-            )
-            y = self.audio_utils.to_numpy(y_t)
-            if y.ndim == 2:
-                y = np.mean(y, axis=0)
-            y = y.astype(np.float32)
-
-            if y.size == 0:
-                raise ValueError("key | Empty audio (no-fallback)")
-
-            # Normalize audio if enabled
-            if self.enable_audio_normalization:
-                y = self._normalize_audio(y)
-
-            # Detect key
-            result = None
-            if self.key_method == "essentia":
-                try:
-                    result = self._detect_key_essentia(y)
-                except Exception:
-                    result = self._detect_key_librosa(y, sr)
-            elif self.key_method == "librosa":
-                result = self._detect_key_librosa(y, sr)
-            else:  # auto
-                try:
-                    result = self._detect_key_essentia(y)
-                except Exception:
-                    result = self._detect_key_librosa(y, sr)
-
-            if not result:
-                raise ValueError("key | Key detection failed (no-fallback)")
-
-            # Build payload
-            payload: Dict[str, Any] = {
-                "key_name": result["key_name"],
-                "key_mode": result["key_mode"],
-                "key_confidence": result["key_confidence"],
-                "method": result["method"],
-                "sample_rate": self.sample_rate,
-                "hop_length": self.hop_length,
-                "device_used": self.device,
-            }
-
-            # Add confidence metadata
-            self._add_confidence_metadata(payload)
-
-            # Add detailed scores if enabled
-            if self.enable_detailed_scores and "key_scores" in result:
-                payload["key_scores"] = result["key_scores"]
-
-            # Add top_k if enabled
-            if self.enable_top_k and "key_scores" in payload:
-                scores = np.array(payload["key_scores"])
-                order = np.argsort(scores)[::-1]
-                top_k_list = []
-                for idx in order[: self.top_k]:
-                    k_name = VALID_KEYS[(idx // 2) % 12]
-                    k_mode = "major" if (idx % 2) == 0 else "minor"
-                    top_k_list.append({"key": k_name, "mode": k_mode, "score": float(scores[idx])})
-                payload["key_top_k"] = top_k_list
-
-            # Track enabled features for meta
-            enabled_features = []
-            if self.enable_detailed_scores:
-                enabled_features.append("detailed_scores")
-            if self.enable_top_k:
-                enabled_features.append("top_k")
-
-            payload["key_contract_version"] = KEY_CONTRACT_VERSION
-            payload["_features_enabled"] = enabled_features
-
-            # Validate output
-            self._validate_output(payload)
-
-            dt = time.time() - start_time
-            self._log_extraction_success(input_uri, dt)
-            return self._create_result(True, payload=payload, processing_time=dt)
-
-        except Exception as e:
-            dt = time.time() - start_time
-            error_code = self._classify_error(e, "key_detection_failed")
-            error_msg = f"key | {str(e)} (error_code={error_code})"
-            self._log_extraction_error(input_uri, error_msg, dt)
-            return self._create_result(False, error=error_msg, processing_time=dt)
+        error_code = self._classify_error(
+            RuntimeError("key | run() disabled in audited mode; use run_segments with families.key"),
+            "validation_failed",
+        )
+        return self._create_result(
+            success=False,
+            error=f"key | {error_code}: run() disabled, use run_segments with families.key",
+            processing_time=time.time() - start_time,
+        )
 
     def run_segments(
         self,
@@ -444,6 +367,9 @@ class KeyExtractor(BaseExtractor):
             ExtractorResult с результатами определения тональности по сегментам
         """
         start_time = time.time()
+        t_total0 = time.perf_counter()
+        stage_timings_ms: Dict[str, float] = {}
+        key_resource_profile: Optional[Dict[str, Any]] = None
         try:
             if not self._validate_input(input_uri):
                 error_code = self._classify_error(ValueError("Invalid input"), "audio_load_failed")
@@ -457,219 +383,207 @@ class KeyExtractor(BaseExtractor):
 
             total_segments = len(segments)
 
-            # Progress reporting: каждые 10%
+            if resource_profile_enabled():
+                try:
+                    key_resource_profile = {
+                        **prefix_snapshot("at_start", snapshot_process_resources()),
+                    }
+                except Exception:
+                    key_resource_profile = None
+
+            # Strict alignment (Audit v3): pre-allocate arrays, no skipping
+            segment_start_sec = np.zeros(total_segments, dtype=np.float32)
+            segment_end_sec = np.zeros(total_segments, dtype=np.float32)
+            segment_center_sec = np.zeros(total_segments, dtype=np.float32)
+            segment_mask = np.zeros(total_segments, dtype=bool)
+            key_id_by_segment = np.full(total_segments, -1, dtype=np.int32)
+            key_confidence_by_segment = np.full(total_segments, np.nan, dtype=np.float32)
+            key_names_seq: List[str] = [""] * total_segments
+            key_modes_seq: List[str] = [""] * total_segments
+
+            key_scores_all: List[List[float]] = []
+            methods_used: List[str] = []
+            chroma_reused = shared_features is not None and "chroma" in (shared_features or {})
+
             progress_report_interval = max(1, total_segments // 10) if total_segments >= 10 else 1
             last_reported_pct = -1
 
-            # Process segments
-            key_names: List[str] = []
-            key_modes: List[str] = []
-            key_confidences: List[float] = []
-            key_scores_all: List[List[float]] = []
-            key_top_k_all: List[List[Dict[str, Any]]] = []
-            segment_centers: List[float] = []
-            segment_durations: List[float] = []
-            methods_used: List[str] = []
-
-            self._report_progress("load_segments", 0, total_segments, "Loading segments")
-
+            t_seg0 = time.perf_counter()
+            load_audio_ms_total = 0.0
+            detect_key_ms_total = 0.0
             for seg_idx, seg in enumerate(segments):
-                # Progress reporting
-                current_pct = (seg_idx * 100) // total_segments
-                if current_pct >= last_reported_pct + 10:
-                    self._report_progress("process_segments", seg_idx, total_segments, f"Processing segment {seg_idx + 1}/{total_segments}")
-                    last_reported_pct = current_pct
-
-                # Extract segment info
+                start_sec = float(seg.get("start_sec", 0.0))
+                end_sec = float(seg.get("end_sec", 0.0))
+                center_sec = float(seg.get("center_sec", 0.0))
+                duration_sec = end_sec - start_sec
                 start_sample = int(seg.get("start_sample", 0))
                 end_sample = int(seg.get("end_sample", 0))
-                center_sec = float(seg.get("center_sec", 0.0))
-                duration_sec = float(seg.get("end_sec", 0.0) - seg.get("start_sec", 0.0))
 
-                # Load segment audio
+                segment_start_sec[seg_idx] = start_sec
+                segment_end_sec[seg_idx] = end_sec
+                segment_center_sec[seg_idx] = center_sec
+
+                success = False
                 try:
-                    y_t, sr = self.audio_utils.load_audio_segment(
-                        input_uri,
-                        start_sample=start_sample,
-                        end_sample=end_sample,
-                        target_sr=self.sample_rate,
-                        mix_to_mono=True,
-                    )
-                    y = self.audio_utils.to_numpy(y_t)
-                    if y.ndim == 2:
-                        y = np.mean(y, axis=0)
-                    y = y.astype(np.float32)
+                    if duration_sec < 0.5 or start_sec >= end_sec:
+                        logger.debug(f"key | Segment {seg_idx}: too short ({duration_sec:.2f}s)")
+                    else:
+                        t_load0 = time.perf_counter()
+                        y_t, sr = self.audio_utils.load_audio_segment(
+                            input_uri,
+                            start_sample=start_sample,
+                            end_sample=end_sample,
+                            target_sr=self.sample_rate,
+                            mix_to_mono=True,
+                        )
+                        y = self.audio_utils.to_numpy(y_t)
+                        if y.ndim == 2:
+                            y = np.mean(y, axis=0)
+                        y = y.astype(np.float32)
+                        load_audio_ms_total += (time.perf_counter() - t_load0) * 1000.0
 
-                    if y.size == 0 or duration_sec < 0.5:
-                        # Skip very short segments
-                        logger.debug(f"key | Skipping segment {seg_idx}: too short ({duration_sec:.2f}s)")
-                        continue
-
-                    # Normalize audio if enabled
-                    if self.enable_audio_normalization:
-                        y = self._normalize_audio(y)
-
-                    # Detect key for segment
-                    result = None
-                    if self.key_method == "essentia":
-                        try:
-                            result = self._detect_key_essentia(y)
-                        except Exception:
-                            result = self._detect_key_librosa(y, sr, shared_features)
-                    elif self.key_method == "librosa":
-                        result = self._detect_key_librosa(y, sr, shared_features)
-                    else:  # auto
-                        try:
-                            result = self._detect_key_essentia(y)
-                        except Exception:
-                            result = self._detect_key_librosa(y, sr, shared_features)
-
-                    if not result:
-                        logger.warning(f"key | Key detection failed for segment {seg_idx}")
-                        continue
-
-                    # Store results
-                    key_names.append(result["key_name"])
-                    key_modes.append(result["key_mode"])
-                    key_confidences.append(result["key_confidence"])
-                    methods_used.append(result["method"])
-                    segment_centers.append(center_sec)
-                    segment_durations.append(duration_sec)
-
-                    # Store detailed scores if enabled
-                    if self.enable_detailed_scores and "key_scores" in result:
-                        key_scores_all.append(result["key_scores"])
-
-                    # Store top_k if enabled
-                    if self.enable_top_k and "key_top_k" in result:
-                        key_top_k_all.append(result["key_top_k"])
-
+                        if y.size > 0:
+                            if self.enable_audio_normalization:
+                                y = self._normalize_audio(y)
+                            result = None
+                            t_det0 = time.perf_counter()
+                            if self.key_method == "essentia":
+                                try:
+                                    result = self._detect_key_essentia(y)
+                                except Exception:
+                                    result = self._detect_key_librosa(y, sr, shared_features)
+                            elif self.key_method == "librosa":
+                                result = self._detect_key_librosa(y, sr, shared_features)
+                            else:
+                                try:
+                                    result = self._detect_key_essentia(y)
+                                except Exception:
+                                    result = self._detect_key_librosa(y, sr, shared_features)
+                            detect_key_ms_total += (time.perf_counter() - t_det0) * 1000.0
+                            if result:
+                                kid = _key_name_mode_to_id(result["key_name"], result["key_mode"])
+                                segment_mask[seg_idx] = True
+                                key_id_by_segment[seg_idx] = kid
+                                key_confidence_by_segment[seg_idx] = result["key_confidence"]
+                                key_names_seq[seg_idx] = result["key_name"]
+                                key_modes_seq[seg_idx] = result["key_mode"]
+                                methods_used.append(result["method"])
+                                if self.enable_detailed_scores and "key_scores" in result:
+                                    key_scores_all.append(result["key_scores"])
+                                success = True
                 except Exception as e:
-                    logger.warning(f"key | Error processing segment {seg_idx}: {e}")
-                    continue
+                    logger.warning(f"key | Segment {seg_idx} failed: {e}")
 
-            # Final progress report
-            self._report_progress("complete", total_segments, total_segments, "Complete")
+                if (seg_idx + 1) % progress_report_interval == 0 and last_reported_pct < (seg_idx + 1) * 100 // total_segments:
+                    self._report_progress("process_segments", seg_idx + 1, total_segments, f"Processed {seg_idx + 1}/{total_segments}")
+                    last_reported_pct = (seg_idx + 1) * 100 // total_segments
 
-            if not key_names:
-                raise ValueError("key | No valid segments processed (no-fallback)")
+            stage_timings_ms["process_segments_ms"] = (time.perf_counter() - t_seg0) * 1000.0
+            stage_timings_ms["load_audio_ms_total"] = float(load_audio_ms_total)
+            stage_timings_ms["detect_key_ms_total"] = float(detect_key_ms_total)
 
-            # Find dominant key (most frequent)
-            key_counts: Dict[str, int] = {}
-            for key_name, key_mode in zip(key_names, key_modes):
-                key_str = f"{key_name}_{key_mode}"
-                key_counts[key_str] = key_counts.get(key_str, 0) + 1
+            t_post0 = time.perf_counter()
+            valid_mask = segment_mask
+            n_valid = int(np.sum(valid_mask))
+            valid_key_names = [key_names_seq[i] for i in range(total_segments) if valid_mask[i]]
+            valid_key_modes = [key_modes_seq[i] for i in range(total_segments) if valid_mask[i]]
+            valid_confidences = key_confidence_by_segment[valid_mask]
+            valid_durations = np.array([segment_end_sec[i] - segment_start_sec[i] for i in range(total_segments) if valid_mask[i]], dtype=np.float32)
 
-            dominant_key_str = max(key_counts.items(), key=lambda x: x[1])[0]
-            dominant_key_name, dominant_key_mode = dominant_key_str.split("_", 1)
+            if n_valid > 0:
+                key_counts: Dict[str, int] = {}
+                for kn, km in zip(valid_key_names, valid_key_modes):
+                    kstr = f"{kn}_{km}"
+                    key_counts[kstr] = key_counts.get(kstr, 0) + 1
+                dominant_key_str = max(key_counts.items(), key=lambda x: x[1])[0]
+                dominant_key_name, dominant_key_mode = dominant_key_str.split("_", 1)
+                avg_confidence = float(np.mean(valid_confidences))
+                total_duration = float(np.sum(valid_durations))
+            else:
+                dominant_key_name, dominant_key_mode = "C", "major"
+                avg_confidence = 0.0
+                total_duration = float(np.sum(segment_end_sec - segment_start_sec))
 
-            # Average confidence
-            avg_confidence = float(np.mean(key_confidences))
-
-            # Calculate total duration from segments
-            total_duration = sum(segment_durations) if segment_durations else 0.0
-
-            # Build payload
             payload: Dict[str, Any] = {
                 "key_name": dominant_key_name,
                 "key_mode": dominant_key_mode,
+                "key_id": _key_name_mode_to_id(dominant_key_name, dominant_key_mode) if n_valid > 0 else -1,
                 "key_confidence": avg_confidence,
-                "method": "librosa" if "librosa" in methods_used else methods_used[0] if methods_used else "unknown",
+                "method": "librosa" if "librosa" in methods_used else (methods_used[0] if methods_used else "librosa"),
                 "sample_rate": self.sample_rate,
                 "hop_length": self.hop_length,
                 "duration": total_duration,
                 "device_used": self.device,
+                "segments_count": total_segments,
+                "chroma_reused": chroma_reused,
+                "stage_timings_ms": stage_timings_ms,
+                "key_resource_profile": key_resource_profile,
+                "segment_start_sec": segment_start_sec,
+                "segment_end_sec": segment_end_sec,
+                "segment_center_sec": segment_center_sec,
+                "segment_mask": segment_mask,
+                "key_id_by_segment": key_id_by_segment,
+                "key_confidence_by_segment": key_confidence_by_segment,
             }
 
-            # Add confidence metadata
             self._add_confidence_metadata(payload)
 
-            # Add segment-level data (always available when using run_segments)
-            # These are needed for understanding segment structure, not just for time series
-            payload["segment_centers_sec"] = segment_centers
-            payload["segment_durations_sec"] = segment_durations
-
-            # Add time series if enabled
             if self.enable_time_series:
-                payload["key_names_sequence"] = key_names
-                payload["key_modes_sequence"] = key_modes
-                payload["key_confidences_sequence"] = key_confidences
+                payload["key_names_sequence"] = key_names_seq
+                payload["key_modes_sequence"] = key_modes_seq
+                payload["key_confidences_sequence"] = key_confidence_by_segment
 
-            # Add key changes detection if enabled
-            # Note: key_names and key_modes are always available from segment processing
-            if self.enable_key_changes:
+            if self.enable_key_changes and n_valid > 1:
                 transitions = []
-                for i in range(1, len(key_names)):
-                    if key_names[i] != key_names[i - 1] or key_modes[i] != key_modes[i - 1]:
-                        transitions.append({
-                            "transition_index": i,
-                            "from_key": f"{key_names[i-1]}_{key_modes[i-1]}",
-                            "to_key": f"{key_names[i]}_{key_modes[i]}",
-                            "transition_time_sec": segment_centers[i] if i < len(segment_centers) else 0.0,
-                        })
+                for i in range(1, total_segments):
+                    if valid_mask[i] and valid_mask[i - 1]:
+                        if key_names_seq[i] != key_names_seq[i - 1] or key_modes_seq[i] != key_modes_seq[i - 1]:
+                            transitions.append({
+                                "transition_index": i,
+                                "from_key": f"{key_names_seq[i-1]}_{key_modes_seq[i-1]}",
+                                "to_key": f"{key_names_seq[i]}_{key_modes_seq[i]}",
+                                "transition_time_sec": segment_center_sec[i],
+                            })
                 payload["key_transitions"] = transitions
                 payload["key_transitions_count"] = len(transitions)
-                total_time_span = segment_centers[-1] - segment_centers[0] if len(segment_centers) > 1 else max(sum(segment_durations), 1e-6)
-                payload["key_transitions_rate"] = len(transitions) / total_time_span if total_time_span > 0 else 0.0
+                total_span = segment_center_sec[-1] - segment_center_sec[0] if total_segments > 1 else max(total_duration, 1e-6)
+                payload["key_transitions_rate"] = len(transitions) / total_span if total_span > 0 else 0.0
 
-            # Add stability metrics if enabled
-            # Note: key_names, key_modes, key_confidences, and segment_durations are always available
-            if self.enable_stability_metrics:
-                # Key stability score (proportion of time in dominant key)
-                total_duration = sum(segment_durations) if segment_durations else 0.0
+            if self.enable_stability_metrics and n_valid > 0:
                 dominant_duration = sum(
-                    dur for key_name, key_mode, dur in zip(key_names, key_modes, segment_durations)
-                    if key_name == dominant_key_name and key_mode == dominant_key_mode
-                ) if key_names and segment_durations else 0.0
+                    valid_durations[j] for j in range(len(valid_key_names))
+                    if valid_key_names[j] == dominant_key_name and valid_key_modes[j] == dominant_key_mode
+                )
                 payload["key_stability_score"] = dominant_duration / total_duration if total_duration > 0 else 0.0
-
-                # Confidence statistics
-                if key_confidences:
-                    payload["key_confidence_mean"] = float(np.mean(key_confidences))
-                    payload["key_confidence_std"] = float(np.std(key_confidences))
-                    payload["key_confidence_min"] = float(np.min(key_confidences))
-                    payload["key_confidence_max"] = float(np.max(key_confidences))
-                else:
-                    payload["key_confidence_mean"] = avg_confidence
-                    payload["key_confidence_std"] = 0.0
-                    payload["key_confidence_min"] = avg_confidence
-                    payload["key_confidence_max"] = avg_confidence
-
-                # Key distribution
+                payload["key_confidence_mean"] = float(np.mean(valid_confidences))
+                payload["key_confidence_std"] = float(np.std(valid_confidences))
+                payload["key_confidence_min"] = float(np.min(valid_confidences))
+                payload["key_confidence_max"] = float(np.max(valid_confidences))
                 key_distribution: Dict[str, float] = {}
-                if key_names and segment_durations:
-                    for key_name, key_mode, dur in zip(key_names, key_modes, segment_durations):
-                        key_str = f"{key_name}_{key_mode}"
-                        key_distribution[key_str] = key_distribution.get(key_str, 0.0) + dur
+                for j in range(len(valid_key_names)):
+                    kstr = f"{valid_key_names[j]}_{valid_key_modes[j]}"
+                    key_distribution[kstr] = key_distribution.get(kstr, 0.0) + float(valid_durations[j])
                 total_dur = sum(key_distribution.values())
                 if total_dur > 0:
                     key_distribution = {k: v / total_dur for k, v in key_distribution.items()}
                 payload["key_distribution"] = key_distribution
                 payload["key_diversity"] = len(key_distribution)
-
-                # Quality metric (based on confidence and stability)
                 payload["key_detection_quality"] = avg_confidence * payload["key_stability_score"]
 
-            # Add detailed scores if enabled (aggregate from segments)
             if self.enable_detailed_scores and key_scores_all:
-                # Average scores across segments
-                avg_scores = np.mean([np.array(scores) for scores in key_scores_all], axis=0)
+                avg_scores = np.mean([np.array(s) for s in key_scores_all], axis=0)
                 payload["key_scores"] = [float(x) for x in avg_scores.tolist()]
 
-            # Add top_k if enabled (from dominant key)
-            if self.enable_top_k:
-                # Use scores from dominant key detection
-                if "key_scores" in payload:
-                    scores = np.array(payload["key_scores"])
-                    order = np.argsort(scores)[::-1]
-                    top_k_list = []
-                    for idx in order[: self.top_k]:
-                        k_name = VALID_KEYS[(idx // 2) % 12]
-                        k_mode = "major" if (idx % 2) == 0 else "minor"
-                        top_k_list.append({"key": k_name, "mode": k_mode, "score": float(scores[idx])})
-                    payload["key_top_k"] = top_k_list
+            if self.enable_top_k and "key_scores" in payload:
+                scores = np.array(payload["key_scores"])
+                order = np.argsort(scores)[::-1]
+                top_k_list = []
+                for idx in order[: self.top_k]:
+                    k_name = VALID_KEYS[(idx // 2) % 12]
+                    k_mode = "major" if (idx % 2) == 0 else "minor"
+                    top_k_list.append({"key": k_name, "mode": k_mode, "score": float(scores[idx])})
+                payload["key_top_k"] = top_k_list
 
-            # Track enabled features for meta
             enabled_features = []
             if self.enable_detailed_scores:
                 enabled_features.append("detailed_scores")
@@ -681,24 +595,22 @@ class KeyExtractor(BaseExtractor):
                 enabled_features.append("key_changes")
             if self.enable_stability_metrics:
                 enabled_features.append("stability_metrics")
-
-            logger.info(f"key | run_segments: enabled_features={enabled_features}")
-            logger.info(f"key | run_segments: enable_time_series={self.enable_time_series}, key_names count={len(key_names)}")
-            logger.info(f"key | run_segments: enable_top_k={self.enable_top_k}, enable_key_changes={self.enable_key_changes}, enable_stability_metrics={self.enable_stability_metrics}")
-            
-            if self.enable_time_series:
-                logger.info(f"key | run_segments: time_series data - segment_centers={len(segment_centers)}, key_names={len(key_names)}, key_modes={len(key_modes)}, key_confidences={len(key_confidences)}")
-            if self.enable_key_changes:
-                transitions = payload.get("key_transitions", [])
-                logger.info(f"key | run_segments: key_changes data - transitions={len(transitions)}")
-            if self.enable_stability_metrics:
-                logger.info(f"key | run_segments: stability_metrics data - stability_score={payload.get('key_stability_score', 0.0)}, diversity={payload.get('key_diversity', 0)}")
-
             payload["key_contract_version"] = KEY_CONTRACT_VERSION
             payload["_features_enabled"] = enabled_features
 
-            # Validate output
             self._validate_output(payload)
+
+            stage_timings_ms["postprocess_ms"] = (time.perf_counter() - t_post0) * 1000.0
+            stage_timings_ms["total_ms"] = (time.perf_counter() - t_total0) * 1000.0
+
+            if key_resource_profile is not None:
+                try:
+                    payload["key_resource_profile"] = {
+                        **(key_resource_profile or {}),
+                        **prefix_snapshot("at_end", snapshot_process_resources()),
+                    }
+                except Exception:
+                    pass
 
             dt = time.time() - start_time
             self._log_extraction_success(input_uri, dt)

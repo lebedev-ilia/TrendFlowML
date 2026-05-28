@@ -8,10 +8,22 @@ import os
 import sys
 from typing import Optional, List, Dict, Any
 
-sys.path.append(os.path.dirname(os.path.dirname(os.path.dirname(__file__))))
+_vp_root = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+if _vp_root not in sys.path:
+    sys.path.insert(0, _vp_root)
+elif sys.path[0] != _vp_root:
+    try:
+        sys.path.remove(_vp_root)
+    except ValueError:
+        pass
+    sys.path.insert(0, _vp_root)
+_repo_root = os.path.dirname(_vp_root)
+if _repo_root not in sys.path:
+    sys.path.append(_repo_root)
 
-from modules.uniqueness.uniqueness import UniquenessBaselineModule
-from utils.logger import get_logger
+# Import after sys.path is set
+from modules.uniqueness.utils.uniqueness import UniquenessBaselineModule  # noqa: E402
+from utils.logger import get_logger  # noqa: E402
 
 MODULE_NAME = "uniqueness"
 logger = get_logger(MODULE_NAME)

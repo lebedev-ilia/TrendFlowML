@@ -1,0 +1,31 @@
+version: "1.0.0"
+
+global:
+  platform_id: "youtube"
+  sampling_policy_version: "v1"
+  dataprocessor_version: "dev"
+
+processors:
+  audio:
+    enabled: true
+    required: false
+    device: "auto"
+    scheduler:
+      segment_parallelism: 1
+      max_inflight: 1
+      clap_batch_size: 1
+    batch_processing:
+      enabled: false
+    extractors:
+      clap:
+        enabled: true
+      tempo:
+        enabled: true
+      loudness:
+        enabled: true
+  text:
+    enabled: false
+    required: false
+  visual:
+    enabled: false
+    required: false

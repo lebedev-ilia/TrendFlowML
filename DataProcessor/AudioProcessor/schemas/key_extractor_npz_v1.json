@@ -1,0 +1,71 @@
+{
+  "schema_system_version": "vp_schema_v1",
+  "schema_version": "key_extractor_npz_v1",
+  "producer": "key_extractor",
+  "artifact_kind": "npz",
+  "allow_extra_keys": false,
+  "meta": {
+    "required_keys": [
+      "producer",
+      "producer_version",
+      "schema_version",
+      "created_at",
+      "platform_id",
+      "video_id",
+      "run_id",
+      "config_hash",
+      "sampling_policy_version",
+      "dataprocessor_version",
+      "status",
+      "empty_reason",
+      "stage_timings_ms"
+    ],
+    "optional_keys": [
+      "error",
+      "key_contract_version",
+      "features_enabled",
+      "key_name",
+      "key_mode",
+      "key_id",
+      "key_method",
+      "key_confidence_category",
+      "key_confidence_reason",
+      "key_low_confidence_warning",
+      "chroma_reused",
+      "sample_rate",
+      "hop_length",
+      "duration_sec",
+      "segments_count",
+      "key_top_k",
+      "key_transitions",
+      "key_transitions_count",
+      "key_transitions_rate",
+      "key_stability_score",
+      "key_confidence_mean",
+      "key_confidence_std",
+      "key_confidence_min",
+      "key_confidence_max",
+      "key_distribution",
+      "key_diversity",
+      "key_detection_quality"
+    ]
+  },
+  "fields": {
+    "feature_names": { "required": true, "tier": "model_facing", "dtype": "object", "shape": ["F"] },
+    "feature_values": { "required": true, "tier": "model_facing", "dtype": "float32", "shape": ["F"] },
+
+    "segment_start_sec": { "required": true, "tier": "analytics", "dtype": "float32", "shape": ["N"] },
+    "segment_end_sec": { "required": true, "tier": "analytics", "dtype": "float32", "shape": ["N"] },
+    "segment_center_sec": { "required": true, "tier": "analytics", "dtype": "float32", "shape": ["N"] },
+    "segment_mask": { "required": true, "tier": "analytics", "dtype": "bool", "shape": ["N"] },
+
+    "key_id_by_segment": { "required": true, "tier": "model_facing", "dtype": "int32", "shape": ["N"] },
+    "key_confidence_by_segment": { "required": true, "tier": "model_facing", "dtype": "float32", "shape": ["N"] },
+
+    "key_scores": { "required": false, "tier": "analytics", "dtype": "float32", "shape": [24] },
+    "key_names_sequence": { "required": false, "tier": "analytics", "dtype": "object", "shape": ["N"] },
+    "key_modes_sequence": { "required": false, "tier": "analytics", "dtype": "object", "shape": ["N"] },
+
+    "meta": { "required": true, "tier": "debug", "dtype": "object", "shape": [] }
+  }
+}

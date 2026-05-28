@@ -234,7 +234,7 @@
 - `SemanticTopicExtractor` (зависит от TranscriptChunkEmbedder)
 
 **Уровень 4 (зависят от уровня 3)**:
-- `EmbeddingStatsExtractor` (зависит от всех эмбеддингов)
+- `EmbeddingStatsExtractor` (зависит от `TranscriptChunkEmbedder`; topics — опционально через `semantics_topics_keyphrases`)
 - `CosineMetricsExtractor` (зависит от всех эмбеддингов)
 - `TitleEmbeddingClusterEntropyExtractor` (зависит от TitleEmbedder)
 - `TitleToHashtagCosineExtractor` (зависит от TitleEmbedder, HashtagEmbedder)
@@ -546,7 +546,7 @@ class DependencyGraphBuilder:
         "QAEmbeddingPairsExtractor": ["TranscriptChunkEmbedder"],
         "EmbeddingPairTopKExtractor": ["TitleEmbedder", "DescriptionEmbedder"],
         "SemanticTopicExtractor": ["TranscriptChunkEmbedder"],
-        "EmbeddingStatsExtractor": ["TitleEmbedder", "DescriptionEmbedder", "TranscriptChunkEmbedder"],
+        "EmbeddingStatsExtractor": ["TranscriptChunkEmbedder"],
         "CosineMetricsExtractor": ["TitleEmbedder", "DescriptionEmbedder", "TranscriptAggregatorExtractor", "CommentsEmbedder"],
         "TitleEmbeddingClusterEntropyExtractor": ["TitleEmbedder"],
         "TitleToHashtagCosineExtractor": ["TitleEmbedder", "HashtagEmbedder"],

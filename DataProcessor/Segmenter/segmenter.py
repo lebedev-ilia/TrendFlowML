@@ -162,6 +162,32 @@ def _enforce_dependency_sampling_alignment(
     This makes downstream "core provider coverage" contracts reliable.
     """
     deps = _load_component_graph_deps(logger=logger)
+    # Дополнительные жёсткие зависимости, не зашитые (или не обновлённые) в component_graph.yaml,
+    # но критичные для VisualProcessor:
+    # - high_level_semantic использует и cut_detection, и core_clip → его кадры должны быть
+    #   подмножеством обоих;
+    # - cut_detection потребляет CLIP‑эмбеддинги косвенно через high_level_semantic контракт →
+    #   его кадры должны быть подмножеством core_clip.
+    if deps is None:
+        deps = {}
+    if not isinstance(deps, dict):
+        deps = {}
+    # high_level_semantic ⊆ cut_detection, core_clip
+    extra_hls = ["cut_detection", "core_clip"]
+    base_hls = list(deps.get("high_level_semantic", []))
+    for d in extra_hls:
+        if d not in base_hls:
+            base_hls.append(d)
+    if base_hls:
+        deps["high_level_semantic"] = base_hls
+    # cut_detection ⊆ core_clip
+    extra_cut = ["core_clip"]
+    base_cut = list(deps.get("cut_detection", []))
+    for d in extra_cut:
+        if d not in base_cut:
+            base_cut.append(d)
+    if base_cut:
+        deps["cut_detection"] = base_cut
     if not deps:
         return per_component_source
 
@@ -221,7 +247,7 @@ def _apply_primary_visual_sampling_group(
     """
     out = {k: [int(x) for x in v] for k, v in per_component_source.items()}
 
-    # Primary shared group (Tier-0 cores) + module that enforces equality with those cores.
+    # Primary shared group (Tier-0 cores) + modules that enforce strict equality with those cores.
     # Note: modules like `uniqueness` / `story_structure` must remain small (they do NxN / heavy ops),
     # so they are NOT part of the primary equality group and should instead be subsets of core_clip (via deps).
     primary_group = [
@@ -231,6 +257,10 @@ def _apply_primary_visual_sampling_group(
         "core_face_landmarks",
         "core_optical_flow",
         "shot_quality",
+        # `frames_composition` жёстко требует совпадения frame_indices
+        # c core_object_detections/core_face_landmarks/core_depth_midas (no-fallback),
+        # поэтому включаем его в общий primary sampling group.
+        "frames_composition",
     ]
 
     sizes = [len(out[c]) for c in primary_group if c in out and out.get(c)]
@@ -324,6 +354,26 @@ def _apply_primary_visual_sampling_group(
             logger,
             f"[Segmenter] core_optical_flow reuse policy: set cut_detection.frame_indices_source = "
             f"core_optical_flow (N={len(out['cut_detection'])})",
+        )
+
+    # Baseline: high_level_semantic requires EXACT equality of frame_indices with cut_detection.
+    # This is a no-fallback contract enforced by high_level_semantic module.
+    if "high_level_semantic" in out and "cut_detection" in out and out.get("cut_detection"):
+        out["high_level_semantic"] = list(out["cut_detection"])
+        _log(
+            logger,
+            f"[Segmenter] high_level_semantic strict equality policy: set high_level_semantic.frame_indices_source = "
+            f"cut_detection (N={len(out['high_level_semantic'])})",
+        )
+
+    # Baseline: similarity_metrics requires EXACT equality of frame_indices with core_clip.
+    # This is a no-fallback contract enforced by similarity_metrics module (strict axis policy).
+    if "similarity_metrics" in out and "core_clip" in out and out.get("core_clip"):
+        out["similarity_metrics"] = list(out["core_clip"])
+        _log(
+            logger,
+            f"[Segmenter] similarity_metrics strict equality policy: set similarity_metrics.frame_indices_source = "
+            f"core_clip (N={len(out['similarity_metrics'])})",
         )
 
     return out
@@ -711,9 +761,74 @@ def extract_audio(
     _require_executable("ffmpeg")
     _require_executable("ffprobe")
 
+    # Check if audio exists and validate it matches the current video
+    should_extract = True
     if os.path.exists(audio_path) and not overwrite:
-        _log(logger, f"[extract_audio] audio already exists: {audio_path}")
-    else:
+        # Validate that existing audio matches current video duration
+        # Get video duration first
+        video_duration = None
+        cmd_vid_dur = ["ffprobe", "-v", "error", "-show_entries", "format=duration", 
+                       "-of", "default=noprint_wrappers=1:nokey=1", video_path]
+        code, out, err = _run_cmd(cmd_vid_dur)
+        if code == 0 and out.strip():
+            try:
+                video_duration = float(out.strip())
+            except Exception:
+                video_duration = None
+        
+        # Get existing audio duration
+        existing_audio_duration = None
+        cmd_aud_dur = ["ffprobe", "-v", "error", "-show_entries", "format=duration",
+                       "-of", "default=noprint_wrappers=1:nokey=1", audio_path]
+        code, out, err = _run_cmd(cmd_aud_dur)
+        if code == 0 and out.strip():
+            try:
+                existing_audio_duration = float(out.strip())
+            except Exception:
+                existing_audio_duration = None
+        
+        # If both durations are available, check if they match (within 1 second tolerance)
+        if video_duration is not None and existing_audio_duration is not None:
+            drift = abs(video_duration - existing_audio_duration)
+            if drift <= 1.0:
+                _log(logger, f"[extract_audio] audio already exists and matches video duration: {audio_path} (video={video_duration:.3f}s, audio={existing_audio_duration:.3f}s)")
+                should_extract = False
+            else:
+                _log(logger, f"[extract_audio] existing audio duration mismatch (video={video_duration:.3f}s, audio={existing_audio_duration:.3f}s, drift={drift:.3f}s), re-extracting...")
+                should_extract = True
+        else:
+            # If we can't determine durations, assume audio is valid (legacy behavior)
+            _log(logger, f"[extract_audio] audio already exists: {audio_path} (duration validation skipped)")
+            should_extract = False
+    
+    if should_extract:
+        # Preflight: if the input video has NO audio stream, treat this as a valid empty case.
+        # This should NOT crash the whole run; downstream AudioProcessor will emit empty outputs.
+        cmd_has_audio = [
+            "ffprobe",
+            "-v",
+            "error",
+            "-select_streams",
+            "a:0",
+            "-show_entries",
+            "stream=codec_type",
+            "-of",
+            "default=noprint_wrappers=1:nokey=1",
+            video_path,
+        ]
+        code, out, err = _run_cmd(cmd_has_audio)
+        if code == 0 and not out.strip():
+            audio_meta = {
+                "audio_path": None,
+                "duration_sec": 0.0,
+                "sample_rate": int(target_sr),
+                "total_samples": 0,
+                "audio_present": False,
+                "empty_reason": "audio_missing_or_extract_failed",
+            }
+            _log(logger, f"[extract_audio] no audio stream detected -> {audio_meta}")
+            return audio_meta
+
         cmd = [
             "ffmpeg", "-y", "-i", video_path,
             "-vn",
@@ -773,7 +888,9 @@ def extract_audio(
         "audio_path": os.path.abspath(audio_path),
         "duration_sec": duration,
         "sample_rate": sample_rate,
-        "total_samples": total_samples
+        "total_samples": total_samples,
+        "audio_present": True,
+        "empty_reason": None,
     }
 
     _log(logger, f"[extract_audio] saved audio metadata -> {audio_meta}")
@@ -786,6 +903,11 @@ def _write_audio_segments_json(
     vid: str,
     frames_meta: Dict[str, Any],
     audio_meta: Dict[str, Any],
+    # Audit v3: policy knobs for ASR windows (semantic vs proxy)
+    asr_sampling_profile: str = "semantic",  # "semantic" | "proxy"
+    asr_window_sec_override: float | None = None,
+    asr_stride_sec_override: float | None = None,
+    asr_max_windows: int | None = None,
     logger=None,
 ) -> str:
     """
@@ -809,6 +931,7 @@ def _write_audio_segments_json(
     times_rel = (uts - t0).astype(np.float32)
     video_duration_sec = float(max(times_rel[-1], 0.0))
 
+    audio_present = bool(audio_meta.get("audio_present", True)) and bool(audio_meta.get("audio_path"))
     dur = audio_meta.get("duration_sec")
     sr = audio_meta.get("sample_rate")
     total_samples = audio_meta.get("total_samples")
@@ -822,14 +945,49 @@ def _write_audio_segments_json(
         total_samples = int(math.floor(audio_duration_sec * sr_i))
     total_samples_i = int(total_samples)
 
+    # Valid empty: no audio stream. We still write segments.json as a contract file,
+    # but do not enforce duration mismatch policy and do not produce segments.
+    if not audio_present:
+        payload = {
+            "schema_version": "audio_segments_v1",
+            "anchor_component": "no_audio",
+            "time_axis_origin_sec": float(t0),
+            "video_duration_sec": float(video_duration_sec),
+            "audio_duration_sec": float(audio_duration_sec),
+            "sample_rate": int(sr_i),
+            "total_samples": int(total_samples_i),
+            "families": {},
+            "created_at": _utc_iso_now(),
+            "audio_present": False,
+            "empty_reason": str(audio_meta.get("empty_reason") or "audio_missing_or_extract_failed"),
+        }
+        with open(out_path, "w", encoding="utf-8") as f:
+            json.dump(payload, f, indent=2, ensure_ascii=False)
+        _log(logger, f"[Segmenter] wrote audio segments (no-audio) -> {out_path}")
+        return out_path
+
     # Strict mismatch policy (user decision): error if drift is too large.
     drift = float(abs(audio_duration_sec - video_duration_sec))
     # Allow small container drift, but fail-fast for anything meaningful.
     drift_tol_sec = 1.0
     if drift > drift_tol_sec:
+        # More informative error message with suggestions
+        audio_shorter = audio_duration_sec < video_duration_sec
+        suggestion = ""
+        if audio_shorter:
+            suggestion = (
+                f" Audio is {drift:.1f}s shorter than video. "
+                "Possible causes: (1) audio track ends before video, (2) multiple audio tracks, "
+                "(3) audio extraction issue. Check video with: ffprobe -v error -show_entries stream=codec_type,duration -of json <video>"
+            )
+        else:
+            suggestion = (
+                f" Audio is {drift:.1f}s longer than video. "
+                "Possible causes: (1) video container issue, (2) audio extraction issue."
+            )
         raise RuntimeError(
             f"[Segmenter] audio/video duration mismatch (no-fallback): "
-            f"audio_duration_sec={audio_duration_sec:.3f} video_duration_sec={video_duration_sec:.3f} drift={drift:.3f}s"
+            f"audio_duration_sec={audio_duration_sec:.3f} video_duration_sec={video_duration_sec:.3f} drift={drift:.3f}s.{suggestion}"
         )
 
     # Anchors: prefer core_clip sampling (stable, bounded), otherwise uniform over union time-axis.
@@ -1227,8 +1385,22 @@ def _write_audio_segments_json(
             )
             i += 1
         return segs
-    asr_window_sec = 30.0
-    asr_stride_sec = 25.0
+    # ASR windows: policy-controlled (Audit v3)
+    prof = str(asr_sampling_profile or "semantic").strip().lower()
+    if prof not in ("semantic", "proxy"):
+        prof = "semantic"
+    if prof == "proxy":
+        asr_window_sec = 10.0
+        asr_stride_sec = 5.0
+    else:
+        asr_window_sec = 30.0
+        asr_stride_sec = 25.0
+    if asr_window_sec_override is not None:
+        asr_window_sec = float(asr_window_sec_override)
+    if asr_stride_sec_override is not None:
+        asr_stride_sec = float(asr_stride_sec_override)
+    if asr_window_sec <= 0.0 or asr_stride_sec <= 0.0:
+        raise RuntimeError(f"[Segmenter] invalid ASR window/stride: window_sec={asr_window_sec} stride_sec={asr_stride_sec}")
     diar_window_sec = 2.0
     diar_stride_sec = 2.0
     emotion_window_sec = 4.0
@@ -1279,9 +1451,15 @@ def _write_audio_segments_json(
                 "segments": _sliding_windows(tempo_window_sec, tempo_stride_sec),
             },
             "asr": {
+                "profile": str(prof),
                 "window_sec": float(asr_window_sec),
                 "stride_sec": float(asr_stride_sec),
-                "segments": _sliding_windows(asr_window_sec, asr_stride_sec),
+                "max_windows": (int(asr_max_windows) if asr_max_windows is not None else None),
+                "segments": (
+                    _sliding_windows(asr_window_sec, asr_stride_sec)
+                    if asr_max_windows is None
+                    else list(_sliding_windows(asr_window_sec, asr_stride_sec))[: int(max(0, int(asr_max_windows)))]
+                ),
             },
             "diarization": {
                 "window_sec": float(diar_window_sec),
@@ -1595,6 +1773,11 @@ class Segmenter:
         analysis_height: Optional[int] = None,
         analysis_fps: Optional[float] = None,
         run_meta: Optional[Dict[str, Any]] = None,
+        # Audit v3: ASR window policy knobs (families.asr)
+        asr_sampling_profile: str = "semantic",
+        asr_window_sec: Optional[float] = None,
+        asr_stride_sec: Optional[float] = None,
+        asr_max_windows: Optional[int] = None,
     ) -> Dict[str, Any]:
         """
         Выполняет:
@@ -1677,6 +1860,18 @@ class Segmenter:
 
         union_source_indices: List[int] = sorted({i for v in per_component_source.values() for i in v})
 
+        # 2.6) Fallback: if no video extractors are enabled but audio processing is needed,
+        # generate minimal frame indices to ensure union_timestamps_sec is available for audio segment generation.
+        if not union_source_indices and total_frames_source > 0:
+            # _write_audio_segments_json requires at least 2 timestamps
+            if total_frames_source >= 2:
+                # Get start and end frames to establish time bounds
+                union_source_indices = [0, total_frames_source - 1]
+            else:
+                # Single frame video - will get 1 timestamp (may fail in _write_audio_segments_json, but that's expected)
+                union_source_indices = [0]
+            _log(self.logger, f"[Segmenter.run] no video extractors enabled; generating minimal frame indices ({len(union_source_indices)} frames) for timestamp generation")
+
         # 3) Extract only union frames
         frames_meta = process_video_union(
             vid=vid,
@@ -1749,6 +1944,10 @@ class Segmenter:
             vid=vid,
             frames_meta=frames_meta,
             audio_meta=audio_meta,
+            asr_sampling_profile=str(asr_sampling_profile),
+            asr_window_sec_override=(float(asr_window_sec) if asr_window_sec is not None else None),
+            asr_stride_sec_override=(float(asr_stride_sec) if asr_stride_sec is not None else None),
+            asr_max_windows=(int(asr_max_windows) if asr_max_windows is not None else None),
             logger=self.logger,
         )
         audio_meta_path = os.path.join(self.out_dir, vid, "audio", "metadata.json")
@@ -1782,6 +1981,11 @@ if __name__ == "__main__":
     parser.add_argument("--sampling-policy-version", type=str, default="v1")
     parser.add_argument("--config-hash", type=str, default=None, help="Optional config hash propagated by DataProcessor")
     parser.add_argument("--dataprocessor-version", type=str, default=None, help="Optional DataProcessor version propagated by orchestrator")
+    # Audio sampling policy knobs (Audit v3): ASR windows
+    parser.add_argument("--asr-sampling-profile", type=str, default="semantic", choices=["semantic", "proxy"], help="ASR windows profile for families.asr")
+    parser.add_argument("--asr-window-sec", type=float, default=None, help="Override ASR window_sec for families.asr (seconds)")
+    parser.add_argument("--asr-stride-sec", type=float, default=None, help="Override ASR stride_sec for families.asr (seconds)")
+    parser.add_argument("--asr-max-windows", type=int, default=None, help="Optional cap for number of ASR windows")
     args = parser.parse_args()
 
     seg = Segmenter(out_dir=args.output, chunk_size=int(args.chunk_size), logger=None)
@@ -1809,7 +2013,7 @@ if __name__ == "__main__":
                 with open(args.visual_cfg_path, "r", encoding="utf-8") as f:
                     src = f.read()
             if not src:
-                src = f"segmenter:{args.video_path}:{args.analysis_width}:{args.analysis_height}:{args.analysis_fps}"
+                src = f"segmenter:{args.video_path}:{args.analysis_width}:{args.analysis_height}:{args.analysis_fps}:{args.asr_sampling_profile}:{args.asr_window_sec}:{args.asr_stride_sec}:{args.asr_max_windows}"
             _cfg_hash = hashlib.sha256(src.encode("utf-8")).hexdigest()[:16]
         except Exception:
             _cfg_hash = uuid.uuid4().hex[:16]
@@ -1831,6 +2035,10 @@ if __name__ == "__main__":
             analysis_height=args.analysis_height,
             analysis_fps=args.analysis_fps,
             run_meta=run_meta,
+            asr_sampling_profile=str(args.asr_sampling_profile),
+            asr_window_sec=float(args.asr_window_sec) if args.asr_window_sec is not None else None,
+            asr_stride_sec=float(args.asr_stride_sec) if args.asr_stride_sec is not None else None,
+            asr_max_windows=int(args.asr_max_windows) if args.asr_max_windows is not None else None,
         )
     except SegmenterSkip as e:
         _log(None, f"[Segmenter] SKIP: {e}")

@@ -88,8 +88,12 @@ processors:
 ## Приоритет настроек
 
 1. **Глобальный конфиг** (`--global-config`) — основной источник настроек
-2. **Profile** (`--profile-path`) — может переопределить enabled/required для процессоров
+2. **Profile** (`--profile-path`) — может переопределить enabled/required для процессоров и путь к visual cfg (`profile.visual.cfg_path`)
 3. **CLI аргументы** — используются как fallback, если глобальный конфиг не указан
+
+Примечание (Audit v3 / dev):
+- Если profile задаёт `visual.cfg_path`, этот конфиг используется **и Segmenter, и VisualProcessor** (core_providers/modules + component params).
+- Примеры минимальных профилей для Audit v3 лежат в `DataProcessor/configs/audit_v3/` (например, прогон одного компонента VisualProcessor).
 
 ## Валидация
 

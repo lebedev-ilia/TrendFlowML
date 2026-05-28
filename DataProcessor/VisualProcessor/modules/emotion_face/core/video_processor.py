@@ -16,10 +16,15 @@ import json
 from pathlib import Path
 from typing import Dict, Any, List, Optional
 
-# Добавляем путь для импорта BaseModule
+# VisualProcessor root (for modules.* and utils.frame_manager)
 _MODULE_PATH = os.path.dirname(os.path.dirname(os.path.dirname(os.path.dirname(__file__))))
 if _MODULE_PATH not in sys.path:
     sys.path.append(_MODULE_PATH)
+
+# emotion_face/utils contains _utils.py; append (not insert) so VisualProcessor/utils wins for "utils.*".
+_UTILS_DIR = os.path.abspath(os.path.join(os.path.dirname(__file__), "..", "utils"))
+if _UTILS_DIR not in sys.path:
+    sys.path.append(_UTILS_DIR)
 
 from modules.base_module import BaseModule
 from utils.frame_manager import FrameManager
@@ -28,6 +33,19 @@ from utils.video_context import VideoContext
 from core.processing_config import (
     ProcessingParams, ProcessingMetrics
 )
+
+def safe_array_check(arr):
+    """
+    Безопасная проверка пустых массивов NumPy.
+    Используется для избежания ошибки "The truth value of an empty array is ambiguous".
+    """
+    if arr is None:
+        return False
+    if isinstance(arr, np.ndarray):
+        return arr.size > 0
+    if isinstance(arr, (list, tuple)):
+        return len(arr) > 0
+    return bool(arr)
 from core.memory_manager import memory_context, cleanup_memory
 from core.retry_strategy import RetryStrategy, QualityMetrics
 from core.validation import ValidationLogic, ValidationCriteria
@@ -209,8 +227,10 @@ class VideoEmotionProcessor:
 
         if emo_path == "None" or emo_path is None:
             import os
+            # dp_models/emonet/pretrained/emonet_8.pth
             p = os.path.dirname(os.path.dirname(__file__))
-            emo_path = f"{p}/models/emonet/pretrained/emonet_8.pth"
+            data_processor_root = os.path.abspath(os.path.join(p, "..", "..", "..", ".."))
+            emo_path = os.path.join(data_processor_root, "dp_models", "emonet", "pretrained", "emonet_8.pth")
         
         self.model = self.load_emonet(path=emo_path)
         
@@ -319,7 +339,31 @@ class VideoEmotionProcessor:
             return [], {}, {}, {}
 
     def load_emonet(self, path: str, n_expression: int = 8):
-        from models.emonet.emonet.models.emonet import EmoNet
+        import importlib.util
+        # dp_models/emonet/emonet/models/emonet.py
+        # Find DataProcessor root: core/video_processor.py -> emotion_face -> modules -> VisualProcessor -> DataProcessor
+        current_file = os.path.abspath(__file__)
+        if "DataProcessor" in current_file:
+            parts = current_file.split("DataProcessor")
+            if len(parts) > 1:
+                dp_root = os.path.join(parts[0], "DataProcessor")
+                emonet_py = os.path.join(dp_root, "dp_models", "emonet", "emonet", "models", "emonet.py")
+            else:
+                raise RuntimeError("Could not determine DataProcessor root from file path")
+        else:
+            raise RuntimeError("Could not find DataProcessor in file path")
+        
+        if not os.path.isfile(emonet_py):
+            raise RuntimeError(f"EmoNet source file not found: {emonet_py}")
+        spec = importlib.util.spec_from_file_location("_dp_vendor_emonet", emonet_py)
+        if spec is None or spec.loader is None:
+            raise RuntimeError("Failed to create import spec for EmoNet")
+        mod = importlib.util.module_from_spec(spec)
+        spec.loader.exec_module(mod)
+        EmoNet = getattr(mod, "EmoNet", None)
+        if EmoNet is None:
+            raise RuntimeError("EmoNet class not found in vendored emonet.py")
+        
         state = torch.load(path, map_location="cpu")
         if isinstance(state, dict):
             state = {k.replace("module.", ""): v for k, v in state.items()}
@@ -874,6 +918,34 @@ class VideoEmotionProcessor:
         }
 
 
+def _resolve_bundled_emonet_checkpoint() -> Optional[str]:
+    """
+    Prefer ModelManager; when it cannot resolve EmoNet (missing dp_models on path, wrong DP_MODELS_ROOT,
+    etc.), use the same bundled layout as spec ``emonet_8_inprocess``.
+    """
+    candidates: List[str] = []
+    env_root = str(os.environ.get("DP_MODELS_ROOT") or "").strip()
+    if env_root:
+        er = os.path.abspath(env_root)
+        base = os.path.basename(er)
+        if base == "bundled_models":
+            candidates.append(os.path.join(er, "visual", "emonet", "emonet_8.pth"))
+        candidates.append(os.path.join(er, "bundled_models", "visual", "emonet", "emonet_8.pth"))
+    current_file = os.path.abspath(__file__)
+    if "DataProcessor" in current_file:
+        dp_root = os.path.join(current_file.split("DataProcessor")[0], "DataProcessor")
+        candidates.extend(
+            [
+                os.path.join(dp_root, "dp_models", "bundled_models", "visual", "emonet", "emonet_8.pth"),
+                os.path.join(dp_root, "dp_models", "emonet", "pretrained", "emonet_8.pth"),
+            ]
+        )
+    for p in candidates:
+        if p and os.path.isfile(p):
+            return p
+    return None
+
+
 class EmotionFaceModule(BaseModule):
     """
     Модуль для анализа эмоций на лицах в видео.
@@ -887,7 +959,8 @@ class EmotionFaceModule(BaseModule):
 
     MODULE_NAME = "emotion_face"
     ARTIFACT_FILENAME = "emotion_face.npz"
-    SCHEMA_VERSION = "emotion_face_npz_v1"
+    SCHEMA_VERSION = "emotion_face_npz_v3"
+    VERSION = "2.0.2"
     
     @property
     def supports_batch(self) -> bool:
@@ -974,6 +1047,16 @@ class EmotionFaceModule(BaseModule):
         self.emonet_model_spec = str(emonet_model_spec or "").strip() or None
         self.device = device
 
+        # Validation / quality thresholds (stored for reproducibility + meta config highlights).
+        self.min_frames_ratio = float(min_frames_ratio)
+        self.min_keyframes = int(min_keyframes)
+        self.min_transitions = int(min_transitions)
+        self.min_diversity_threshold = float(min_diversity_threshold)
+        self.quality_threshold = float(quality_threshold)
+        self.transition_threshold = float(transition_threshold)
+        self.max_gap_seconds = float(max_gap_seconds)
+        self.target_length = int(target_length)
+
         self.face_frame_stride = int(face_frame_stride)
         self.max_frames = int(max_frames)
         self.max_faces_per_frame = int(max_faces_per_frame)
@@ -1046,7 +1129,30 @@ class EmotionFaceModule(BaseModule):
         Legacy loader for EmoNet weights (discouraged).
         Prefer ModelManager spec `emonet_model_spec`.
         """
-        from models.emonet.emonet.models.emonet import EmoNet
+        import importlib.util
+        # dp_models/emonet/emonet/models/emonet.py
+        # Find DataProcessor root: core/video_processor.py -> emotion_face -> modules -> VisualProcessor -> DataProcessor
+        current_file = os.path.abspath(__file__)
+        if "DataProcessor" in current_file:
+            parts = current_file.split("DataProcessor")
+            if len(parts) > 1:
+                dp_root = os.path.join(parts[0], "DataProcessor")
+                emonet_py = os.path.join(dp_root, "dp_models", "emonet", "emonet", "models", "emonet.py")
+            else:
+                raise RuntimeError("Could not determine DataProcessor root from file path")
+        else:
+            raise RuntimeError("Could not find DataProcessor in file path")
+        
+        if not os.path.isfile(emonet_py):
+            raise RuntimeError(f"EmoNet source file not found: {emonet_py}")
+        spec = importlib.util.spec_from_file_location("_dp_vendor_emonet", emonet_py)
+        if spec is None or spec.loader is None:
+            raise RuntimeError("Failed to create import spec for EmoNet")
+        mod = importlib.util.module_from_spec(spec)
+        spec.loader.exec_module(mod)
+        EmoNet = getattr(mod, "EmoNet", None)
+        if EmoNet is None:
+            raise RuntimeError("EmoNet class not found in vendored emonet.py")
 
         state = torch.load(str(emo_path), map_location="cpu")
         if isinstance(state, dict):
@@ -1107,53 +1213,33 @@ class EmotionFaceModule(BaseModule):
         if not isinstance(fi_to_pos, dict):
             raise RuntimeError("emotion_face | missing injected _fi_to_pos mapping (no-fallback)")
 
-        # Load model (ModelManager preferred; legacy fallback only if explicit emo_path is provided).
+        # Load model: ModelManager first; then explicit emo_path; then bundled dp_models checkpoint.
         model = self._emonet_model
         if model is None:
-            # Try fallback paths
-            fallback_paths = []
-            if self.emo_path:
-                fallback_paths.append(str(self.emo_path))
-            
-            # Try DP_MODELS_ROOT paths (check both with and without bundled_models)
-            dp_models_root = os.environ.get("DP_MODELS_ROOT")
-            if dp_models_root:
-                # Path 1: DP_MODELS_ROOT/bundled_models/visual/emonet/emonet_8.pth
-                path1 = os.path.join(dp_models_root, "bundled_models", "visual", "emonet", "emonet_8.pth")
-                fallback_paths.append(path1)
-                # Path 2: DP_MODELS_ROOT/visual/emonet/emonet_8.pth (if DP_MODELS_ROOT already includes bundled_models)
-                path2 = os.path.join(dp_models_root, "visual", "emonet", "emonet_8.pth")
-                fallback_paths.append(path2)
-            
-            # Try absolute path based on DataProcessor root
-            # Try to find DataProcessor root by going up from current file
-            current_file = os.path.abspath(__file__)
-            if "DataProcessor" in current_file:
-                parts = current_file.split("DataProcessor")
-                if len(parts) > 1:
-                    dp_root = os.path.join(parts[0], "DataProcessor")
-                    abs_path = os.path.join(dp_root, "dp_models", "bundled_models", "visual", "emonet", "emonet_8.pth")
-                    fallback_paths.append(abs_path)
-            
-            # Try default module path
-            p = os.path.dirname(os.path.dirname(__file__))
-            fallback_paths.append(os.path.join(p, "models", "emonet", "pretrained", "emonet_8.pth"))
-            
-            # Try to find model in any fallback path
-            model_path = None
-            for path in fallback_paths:
-                if path and os.path.exists(path):
-                    model_path = path
-                    break
-            
-            if not model_path:
+            ckpt = str(self.emo_path).strip() if self.emo_path else ""
+            if self.emo_path and ckpt and not os.path.isfile(ckpt):
+                raise RuntimeError(f"emotion_face | emo_path does not exist: {ckpt}")
+            if not ckpt:
+                ckpt = _resolve_bundled_emonet_checkpoint() or ""
+            if ckpt and os.path.isfile(ckpt):
+                if self.emo_path:
+                    self.logger.warning(
+                        "emotion_face | loading EmoNet from explicit emo_path (override): %s",
+                        ckpt,
+                    )
+                else:
+                    self.logger.info(
+                        "emotion_face | loading EmoNet from bundled/local weights (ModelManager unavailable): %s",
+                        ckpt,
+                    )
+                model = self._load_emonet_from_path(emo_path=str(ckpt), device=str(self.device or "cuda"))
+                self._emonet_model = model
+            else:
                 raise RuntimeError(
-                    f"emotion_face | EmoNet model is not available (ModelManager failed and no fallback path found). "
-                    f"Tried: {fallback_paths}"
+                    "emotion_face | EmoNet weights not found. "
+                    "Ensure `dp_models/bundled_models/visual/emonet/emonet_8.pth` exists and DP_MODELS_ROOT is set, "
+                    "or pass --emo-path."
                 )
-            
-            self.logger.info(f"emotion_face | Loading EmoNet from fallback path: {model_path}")
-            model = self._load_emonet_from_path(emo_path=model_path, device=str(self.device or "cuda"))
 
         # Pre-allocate per-frame/per-face outputs
         max_faces = max(1, int(self.max_faces_per_frame))
@@ -1293,10 +1379,11 @@ class EmotionFaceModule(BaseModule):
         }
 
         # Minimal aggregates for downstream/UI
+        # Используем safe_array_check для проверки пустых массивов перед вызовом .any()
         features = {
-            "valence_mean": float(np.nanmean(valence)) if np.isfinite(valence).any() else np.nan,
-            "arousal_mean": float(np.nanmean(arousal)) if np.isfinite(arousal).any() else np.nan,
-            "intensity_mean": float(np.nanmean(intensity)) if np.isfinite(intensity).any() else np.nan,
+            "valence_mean": float(np.nanmean(valence)) if safe_array_check(valence) and np.isfinite(valence).any() else np.nan,
+            "arousal_mean": float(np.nanmean(arousal)) if safe_array_check(arousal) and np.isfinite(arousal).any() else np.nan,
+            "intensity_mean": float(np.nanmean(intensity)) if safe_array_check(intensity) and np.isfinite(intensity).any() else np.nan,
         }
 
         summary = {
@@ -1342,14 +1429,15 @@ class EmotionFaceModule(BaseModule):
         advanced_features = user_data.get("advanced_features", {})
         
         # Подготавливаем sequence_features для VisualTransformer
+        # Используем safe_array_check для проверки пустых массивов вместо булевой проверки
         sequence_features = {
-            "emotion_sequence": np.array(emotions, dtype=object) if emotions else np.array([], dtype=object),
-            "valence_sequence": np.array(valence, dtype=np.float32) if valence else np.array([], dtype=np.float32),
-            "arousal_sequence": np.array(arousal, dtype=np.float32) if arousal else np.array([], dtype=np.float32),
-            "emotion_confidence": np.array(emotion_confidence, dtype=np.float32) if emotion_confidence else np.array([], dtype=np.float32),
-            "dominant_emotion": np.array(dominant_emotion, dtype=object) if dominant_emotion else np.array([], dtype=object),
-            "intensity": np.array(intensity, dtype=np.float32) if intensity else np.array([], dtype=np.float32),
-            "frame_indices": np.array(indices, dtype=np.int32) if indices else np.array([], dtype=np.int32),
+            "emotion_sequence": np.array(emotions, dtype=object) if safe_array_check(emotions) else np.array([], dtype=object),
+            "valence_sequence": np.array(valence, dtype=np.float32) if safe_array_check(valence) else np.array([], dtype=np.float32),
+            "arousal_sequence": np.array(arousal, dtype=np.float32) if safe_array_check(arousal) else np.array([], dtype=np.float32),
+            "emotion_confidence": np.array(emotion_confidence, dtype=np.float32) if safe_array_check(emotion_confidence) else np.array([], dtype=np.float32),
+            "dominant_emotion": np.array(dominant_emotion, dtype=object) if safe_array_check(dominant_emotion) else np.array([], dtype=object),
+            "intensity": np.array(intensity, dtype=np.float32) if safe_array_check(intensity) else np.array([], dtype=np.float32),
+            "frame_indices": np.array(indices, dtype=np.int32) if safe_array_check(indices) else np.array([], dtype=np.int32),
         }
         
         # Подготавливаем агрегированные фичи
@@ -1409,23 +1497,36 @@ class EmotionFaceModule(BaseModule):
         }
         
         # Формируем итоговый результат
+        # keyframes должен быть сохранен как object array (список словарей), а не как обычный массив
+        keyframes_list = user_data.get("keyframes", [])
+        if keyframes_list:
+            # Создаем object array для списка словарей
+            keyframes_arr = np.empty(len(keyframes_list), dtype=object)
+            for i, kf in enumerate(keyframes_list):
+                keyframes_arr[i] = kf
+        else:
+            keyframes_arr = np.asarray([], dtype=object)
+        
         formatted_result = {
             "features": features,
             "sequence_features": sequence_features,
             "summary": summary,
             "advanced_features": advanced_features,
-            "keyframes": user_data.get("keyframes", []),
+            "keyframes": keyframes_arr,
         }
         
         return formatted_result
     
     def _empty_result(self) -> Dict[str, Any]:
         """Возвращает пустой результат (baseline contract: numeric arrays, no dtype=object for model-facing data)."""
+        max_faces = max(1, int(getattr(self, "max_faces_per_frame", 2)))
         return {
             "features": {},
             "sequence_features": {
                 "frame_indices": np.asarray([], dtype=np.int32),
                 "times_s": np.asarray([], dtype=np.float32),
+                "face_present": np.asarray([], dtype=bool),
+                "processed_mask": np.asarray([], dtype=bool),
                 "valence": np.asarray([], dtype=np.float32),
                 "arousal": np.asarray([], dtype=np.float32),
                 "intensity": np.asarray([], dtype=np.float32),
@@ -1433,25 +1534,39 @@ class EmotionFaceModule(BaseModule):
                 "emotion_probs": np.asarray([], dtype=np.float32).reshape(0, 8),
                 "dominant_emotion_id": np.asarray([], dtype=np.int8),
                 "face_count": np.asarray([], dtype=np.int16),
-                "valence_faces": np.asarray([], dtype=np.float32).reshape(0, 1),
-                "arousal_faces": np.asarray([], dtype=np.float32).reshape(0, 1),
-                "emotion_confidence_faces": np.asarray([], dtype=np.float32).reshape(0, 1),
-                "emotion_probs_faces": np.asarray([], dtype=np.float32).reshape(0, 1, 8),
+                "valence_faces": np.asarray([], dtype=np.float32).reshape(0, max_faces),
+                "arousal_faces": np.asarray([], dtype=np.float32).reshape(0, max_faces),
+                "emotion_confidence_faces": np.asarray([], dtype=np.float32).reshape(0, max_faces),
+                "emotion_probs_faces": np.asarray([], dtype=np.float32).reshape(0, max_faces, 8),
             },
             "frame_indices": np.asarray([], dtype=np.int32),
             "times_s": np.asarray([], dtype=np.float32),
+            "face_present": np.asarray([], dtype=bool),
+            "processed_mask": np.asarray([], dtype=bool),
+            "face_count": np.asarray([], dtype=np.int16),
+            "valence": np.asarray([], dtype=np.float32),
+            "arousal": np.asarray([], dtype=np.float32),
+            "intensity": np.asarray([], dtype=np.float32),
+            "emotion_confidence": np.asarray([], dtype=np.float32),
+            "emotion_probs": np.asarray([], dtype=np.float32).reshape(0, 8),
+            "dominant_emotion_id": np.asarray([], dtype=np.int8),
             "summary": {
                 "sequence_length": 0,
                 "stage_timings_ms": {},
             },
             "advanced_features": {},
-            "keyframes": [],
+            "keyframes": np.asarray([], dtype=object),
         }
 
     def _build_ui_payload(self, results: Dict[str, Any]) -> Dict[str, Any]:
         seq = results.get("sequence_features", {}) or {}
         summary = results.get("summary", {}) or {}
-        keyframes = results.get("keyframes", []) or []
+        # Используем safe_array_check для проверки keyframes (может быть NumPy массивом)
+        keyframes_raw = results.get("keyframes", [])
+        if isinstance(keyframes_raw, np.ndarray):
+            keyframes = keyframes_raw.tolist() if safe_array_check(keyframes_raw) else []
+        else:
+            keyframes = keyframes_raw if keyframes_raw else []
 
         frame_indices = seq.get("frame_indices", np.asarray([], dtype=np.int32))
         times_s = seq.get("times_s", np.asarray([], dtype=np.float32))
@@ -1509,6 +1624,30 @@ class EmotionFaceModule(BaseModule):
         stage_timings: Dict[str, float] = {}
         t0 = time.perf_counter()
 
+        def _resource_profile_snapshot() -> Dict[str, Any]:
+            """
+            Best-effort, env-gated resource snapshot for Audit 4.2.
+            """
+            if str(os.environ.get("VP_RESOURCE_PROFILE", "")).strip().lower() not in ("1", "true", "yes", "on"):
+                return {}
+            snap: Dict[str, Any] = {}
+            try:
+                import psutil  # type: ignore
+
+                snap["rss_mb"] = float(psutil.Process(os.getpid()).memory_info().rss) / (1024.0 * 1024.0)
+            except Exception:
+                pass
+            try:
+                if torch.cuda.is_available() and str(self.device).startswith("cuda"):
+                    snap["cuda_max_allocated_mb"] = float(torch.cuda.max_memory_allocated()) / (1024.0 * 1024.0)
+                    snap["cuda_max_reserved_mb"] = float(torch.cuda.max_memory_reserved()) / (1024.0 * 1024.0)
+                    snap["cuda_device"] = int(torch.cuda.current_device())
+            except Exception:
+                pass
+            return snap
+
+        resource_profile_before = _resource_profile_snapshot()
+
         frame_manager = None
         try:
             if self.rs_path is not None:
@@ -1536,18 +1675,63 @@ class EmotionFaceModule(BaseModule):
             if self.rs_path is not None:
                 _emit_progress(rs_path=str(self.rs_path), platform_id=platform_id, video_id=video_id, run_id=run_id, done=1, total=1, stage="load_deps")
 
-            # --- select_frames (stride over face frames) ---
+            # --- axis/select_frames ---
             t_stage = time.perf_counter()
-            if frames_with_face.size == 0:
+            # Axis for output alignment (Segmenter contract).
+            # Preferred: metadata[emotion_face].frame_indices, fallback: core_face_landmarks.frame_indices
+            axis_frame_indices = self.get_frame_indices(metadata, fallback_to_all=False)
+            axis_source = "emotion_face"
+            # Используем len() для проверки пустого списка/массива
+            if not axis_frame_indices or (isinstance(axis_frame_indices, (list, tuple)) and len(axis_frame_indices) == 0) or (isinstance(axis_frame_indices, np.ndarray) and axis_frame_indices.size == 0):
+                axis_frame_indices = face_fi.astype(np.int32).tolist()
+                axis_source = "core_face_landmarks"
+                self.logger.warning(
+                    "emotion_face | missing metadata[emotion_face].frame_indices; "
+                    "falling back to core_face_landmarks.frame_indices for axis alignment"
+                )
+            axis_fi = np.asarray(axis_frame_indices, dtype=np.int32).reshape(-1)
+            if axis_fi.size == 0:
+                raise RuntimeError("emotion_face | axis frame_indices is empty (no-fallback)")
+            if np.any(axis_fi < 0) or np.any(axis_fi >= int(uts_arr.shape[0])):
+                raise RuntimeError("emotion_face | axis frame_indices out of range for union_timestamps_sec (no-fallback)")
+
+            # Check alignment: axis should be covered by core_face_landmarks frame_indices.
+            # If not fully covered, issue a warning and continue (frames without faces will have face_present=False).
+            face_set = set(int(x) for x in face_fi.tolist())
+            missing = [int(x) for x in axis_fi.tolist() if int(x) not in face_set]
+            if missing:
+                self.logger.warning(
+                    f"emotion_face | axis frame_indices partially covered by core_face_landmarks.frame_indices. "
+                    f"Missing {len(missing)} indices (example: {missing[:5]}). "
+                    f"Module will proceed, but these frames will have face_present=False and processed_mask=False."
+                )
+
+            # Build face_present axis mask (any face)
+            # For frames not in core_face_landmarks, set face_present=False
+            fi_to_pos = {int(x): int(i) for i, x in enumerate(face_fi.tolist())}
+            axis_face_present = np.asarray(
+                [
+                    bool(any_face[fi_to_pos[int(fi)]]) if int(fi) in fi_to_pos else False
+                    for fi in axis_fi.tolist()
+                ],
+                dtype=bool,
+            ).reshape(-1)
+
+            # Internal sampling among face frames on the axis (stride + cap)
+            axis_face_frames = axis_fi[axis_face_present]
+
+            if axis_face_frames.size == 0:
                 results = self._empty_result()
                 status = "empty"
                 empty_reason = "no_faces_in_video"
                 selected_fi = np.asarray([], dtype=np.int32)
             else:
                 stride = max(1, int(self.face_frame_stride))
-                selected_fi = frames_with_face[::stride].astype(np.int32)
+                selected_fi = axis_face_frames[::stride].astype(np.int32)
                 if int(self.max_frames) > 0 and selected_fi.size > int(self.max_frames):
                     selected_fi = selected_fi[: int(self.max_frames)]
+                if selected_fi.size == 0:
+                    raise RuntimeError("emotion_face | internal sampling produced empty selection (invalid config)")
                 status = "ok"
                 empty_reason = None
                 results = None
@@ -1568,10 +1752,7 @@ class EmotionFaceModule(BaseModule):
             # --- process_frames ---
             frame_manager = self.create_frame_manager(frames_dir, metadata)
             if results is None:
-                if np.any(selected_fi < 0) or np.any(selected_fi >= int(uts_arr.shape[0])):
-                    raise RuntimeError("emotion_face | selected frame_indices out of range for union_timestamps_sec")
-                times_s = uts_arr[selected_fi].astype(np.float32)
-                fi_to_pos = {int(x): int(i) for i, x in enumerate(face_fi.tolist())}
+                times_s_proc = uts_arr[selected_fi].astype(np.float32)
                 injected = {
                     "frame_indices": face_fi,
                     "face_present": face_present,
@@ -1594,19 +1775,99 @@ class EmotionFaceModule(BaseModule):
                 )
                 stage_timings["process_frames"] = (time.perf_counter() - t_stage) * 1000.0
 
-                # Attach strict times_s
-                seq = results.get("sequence_features", {}) or {}
-                seq["times_s"] = times_s
-                results["sequence_features"] = seq
-                results["frame_indices"] = selected_fi
-                results["times_s"] = times_s
+                # Build axis-aligned time-series for models (full axis with masks).
+                times_s_axis = uts_arr[axis_fi].astype(np.float32)
+                selected_set = set(int(x) for x in selected_fi.tolist())
+                processed_mask = np.asarray([int(fi) in selected_set for fi in axis_fi.tolist()], dtype=bool)
+
+                # Initialize axis arrays (NaN for floats; -1 for ids).
+                N = int(axis_fi.size)
+                valence = np.full((N,), np.nan, dtype=np.float32)
+                arousal = np.full((N,), np.nan, dtype=np.float32)
+                intensity = np.full((N,), np.nan, dtype=np.float32)
+                emotion_confidence = np.full((N,), np.nan, dtype=np.float32)
+                emotion_probs = np.full((N, 8), np.nan, dtype=np.float32)
+                dominant_emotion_id = np.full((N,), -1, dtype=np.int8)
+
+                max_faces = max(1, int(self.max_faces_per_frame))
+                valence_faces = np.full((N, max_faces), np.nan, dtype=np.float32)
+                arousal_faces = np.full((N, max_faces), np.nan, dtype=np.float32)
+                emotion_confidence_faces = np.full((N, max_faces), np.nan, dtype=np.float32)
+                emotion_probs_faces = np.full((N, max_faces, 8), np.nan, dtype=np.float32)
+
+                # Face count from core_face_landmarks (any faces), not capped by max_faces_per_frame.
+                axis_face_count = np.asarray(
+                    [int(np.sum(face_present[fi_to_pos[int(fi)]])) if int(fi) in fi_to_pos else 0 for fi in axis_fi.tolist()],
+                    dtype=np.int16,
+                ).reshape(-1)
+
+                # Map processed outputs into the axis arrays.
+                seq_proc = results.get("sequence_features", {}) or {}
+                fi_proc = np.asarray(seq_proc.get("frame_indices"), dtype=np.int32).reshape(-1)
+                pos_axis = {int(fi): int(i) for i, fi in enumerate(axis_fi.tolist())}
+                for j in range(int(fi_proc.size)):
+                    g = int(fi_proc[j])
+                    i = pos_axis.get(g)
+                    if i is None:
+                        continue
+                    try:
+                        valence[i] = float(np.asarray(seq_proc.get("valence"), dtype=np.float32).reshape(-1)[j])
+                        arousal[i] = float(np.asarray(seq_proc.get("arousal"), dtype=np.float32).reshape(-1)[j])
+                        intensity[i] = float(np.asarray(seq_proc.get("intensity"), dtype=np.float32).reshape(-1)[j])
+                        emotion_confidence[i] = float(np.asarray(seq_proc.get("emotion_confidence"), dtype=np.float32).reshape(-1)[j])
+                        emotion_probs[i, :] = np.asarray(seq_proc.get("emotion_probs"), dtype=np.float32).reshape(-1, 8)[j, :]
+                        dominant_emotion_id[i] = np.asarray(seq_proc.get("dominant_emotion_id"), dtype=np.int8).reshape(-1)[j]
+                        # per-face arrays
+                        valence_faces[i, :] = np.asarray(seq_proc.get("valence_faces"), dtype=np.float32).reshape(-1, max_faces)[j, :]
+                        arousal_faces[i, :] = np.asarray(seq_proc.get("arousal_faces"), dtype=np.float32).reshape(-1, max_faces)[j, :]
+                        emotion_confidence_faces[i, :] = np.asarray(seq_proc.get("emotion_confidence_faces"), dtype=np.float32).reshape(-1, max_faces)[j, :]
+                        emotion_probs_faces[i, :, :] = np.asarray(seq_proc.get("emotion_probs_faces"), dtype=np.float32).reshape(-1, max_faces, 8)[j, :, :]
+                    except Exception:
+                        continue
+
+                # Replace sequence_features with axis-aligned version (keeps UI + render stable).
+                seq_axis = {
+                    "frame_indices": axis_fi.astype(np.int32),
+                    "times_s": times_s_axis.astype(np.float32),
+                    "face_present": axis_face_present.astype(bool),
+                    "processed_mask": processed_mask.astype(bool),
+                    "face_count": axis_face_count.astype(np.int16),
+                    "valence": valence,
+                    "arousal": arousal,
+                    "intensity": intensity,
+                    "emotion_confidence": emotion_confidence,
+                    "emotion_probs": emotion_probs,
+                    "dominant_emotion_id": dominant_emotion_id,
+                    "valence_faces": valence_faces,
+                    "arousal_faces": arousal_faces,
+                    "emotion_confidence_faces": emotion_confidence_faces,
+                    "emotion_probs_faces": emotion_probs_faces,
+                }
+                results["sequence_features"] = seq_axis
+                results["frame_indices"] = axis_fi.astype(np.int32)
+                results["times_s"] = times_s_axis.astype(np.float32)
+                # v3: duplicate model-facing time-series to top-level for easier consumption.
+                results["face_present"] = axis_face_present.astype(bool)
+                results["processed_mask"] = processed_mask.astype(bool)
+                results["face_count"] = axis_face_count.astype(np.int16)
+                results["valence"] = valence.astype(np.float32)
+                results["arousal"] = arousal.astype(np.float32)
+                results["intensity"] = intensity.astype(np.float32)
+                results["emotion_confidence"] = emotion_confidence.astype(np.float32)
+                results["emotion_probs"] = emotion_probs.astype(np.float32)
+                results["dominant_emotion_id"] = dominant_emotion_id.astype(np.int8)
+                # axis_source должен быть сохранен как object (scalar), а не как строка
+                axis_source_obj = np.empty((), dtype=object)
+                axis_source_obj[()] = axis_source
+                results["axis_source"] = axis_source_obj
 
                 # Keyframes (baseline: enabled; derived from valence/arousal)
                 try:
                     v = np.asarray(seq.get("valence"), dtype=np.float32).reshape(-1)
                     a = np.asarray(seq.get("arousal"), dtype=np.float32).reshape(-1)
                     ts = np.asarray(times_s, dtype=np.float32).reshape(-1)
-                    if v.size >= 3 and a.size == v.size and ts.size == v.size:
+                    # Используем safe_array_check для проверки пустых массивов
+                    if safe_array_check(v) and safe_array_check(a) and safe_array_check(ts) and v.size >= 3 and a.size == v.size and ts.size == v.size:
                         # Convert min-distance in seconds to a frame distance using median dt (no fps).
                         dt = np.diff(ts)
                         dt = dt[np.isfinite(dt) & (dt > 1e-6)]
@@ -1634,10 +1895,18 @@ class EmotionFaceModule(BaseModule):
                                     "arousal": float(info.get("arousal", a[li])),
                                 }
                             )
-                        results["keyframes"] = keyframes
+                        # keyframes должен быть object array для правильного сохранения
+                        if keyframes:
+                            keyframes_arr = np.empty(len(keyframes), dtype=object)
+                            for i, kf in enumerate(keyframes):
+                                keyframes_arr[i] = kf
+                        else:
+                            keyframes_arr = np.asarray([], dtype=object)
+                        results["keyframes"] = keyframes_arr
                 except Exception:
                     # Keyframes are best-effort; do not fail the whole run.
-                    results["keyframes"] = results.get("keyframes", []) or []
+                    if "keyframes" not in results or not isinstance(results.get("keyframes"), np.ndarray):
+                        results["keyframes"] = np.asarray([], dtype=object)
 
             # --- build meta.ui_payload ---
             ui_payload = self._build_ui_payload(results)
@@ -1659,14 +1928,34 @@ class EmotionFaceModule(BaseModule):
                 "empty_reason": empty_reason,
                 "ui_payload": ui_payload,  # will be copied into meta by save_results via boxing
             }
+            if resource_profile_before:
+                save_metadata["resource_profile_before"] = resource_profile_before
+            # Stage timings must live in meta (schema contract).
+            save_metadata["stage_timings_ms"] = {k: float(v) for k, v in stage_timings.items()}
+            save_metadata["module_sampling_policy_version"] = "segmenter_axis_v1" if axis_source == "emotion_face" else "core_face_landmarks_axis_fallback_v1"
+            save_metadata["face_frames_sampling_policy_version"] = f"faces_stride_v1_stride_{max(1, int(self.face_frame_stride))}_cap_{int(self.max_frames)}"
+            # Config highlights for reproducibility (thresholds/calibrations/sampling).
+            save_metadata["face_frame_stride"] = int(self.face_frame_stride)
+            save_metadata["max_frames"] = int(self.max_frames)
+            save_metadata["max_faces_per_frame"] = int(self.max_faces_per_frame)
+            save_metadata["face_bbox_margin"] = float(self.face_bbox_margin)
+            save_metadata["transition_threshold"] = float(self.transition_threshold)
+            save_metadata["max_gap_seconds"] = float(self.max_gap_seconds)
+            save_metadata["quality_threshold"] = float(self.quality_threshold)
+            save_metadata["min_diversity_threshold"] = float(self.min_diversity_threshold)
+            save_metadata["target_length"] = int(self.target_length)
+            save_metadata["min_frames_ratio"] = float(self.min_frames_ratio)
+            save_metadata["min_keyframes"] = int(self.min_keyframes)
+            save_metadata["min_transitions"] = int(self.min_transitions)
+            save_metadata["emonet_model_spec"] = self.emonet_model_spec
+            save_metadata["device"] = str(self.device or "cuda")
+            save_metadata["enable_microexpressions"] = bool(self.enable_microexpressions)
+            save_metadata["enable_emotional_individuality"] = bool(self.enable_emotional_individuality)
+            save_metadata["enable_face_asymmetry"] = bool(self.enable_face_asymmetry)
             try:
                 save_metadata["models_used"] = self.get_models_used(config=config or {}, metadata=metadata or {})
             except Exception:
                 save_metadata["models_used"] = []
-
-            # Add stage timings into summary
-            if isinstance(results.get("summary"), dict):
-                results["summary"]["stage_timings_ms"] = {k: float(v) for k, v in stage_timings.items()}
 
             t_stage = time.perf_counter()
             saved_path = self.save_results(results=results, metadata=save_metadata)

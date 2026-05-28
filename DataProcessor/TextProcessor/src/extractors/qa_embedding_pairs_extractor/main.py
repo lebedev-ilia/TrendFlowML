@@ -16,19 +16,58 @@ from src.core.path_utils import default_artifacts_dir
 from src.core.text_utils import normalize_whitespace
 from src.schemas.models import VideoDocument
 
+# Stable key order for features_flat — must match qa_embedding_pairs_extractor_output_v1.json
+_FEATURES_FLAT_KEYS: Tuple[str, ...] = (
+    "tp_qa_present",
+    "tp_qa_disabled_by_policy",
+    "tp_qa_enabled",
+    "tp_qa_num_questions",
+    "tp_qa_embedding_dim",
+    "tp_qa_q_title",
+    "tp_qa_q_description",
+    "tp_qa_q_transcript",
+    "tp_qa_q_comments",
+    "tp_qa_allow_legacy_transcripts",
+    "tp_qa_transcript_source_policy_asr_only",
+    "tp_qa_transcript_source_policy_asr_then_legacy",
+    "tp_qa_transcript_source_policy_legacy_only",
+    "tp_qa_use_title",
+    "tp_qa_use_description",
+    "tp_qa_use_transcript",
+    "tp_qa_use_comments",
+    "tp_qa_require_min_questions",
+    "tp_qa_max_questions_total",
+    "tp_qa_max_questions_per_source",
+    "tp_qa_max_comments",
+    "tp_qa_max_chars_per_comment",
+    "tp_qa_max_transcript_chars",
+    "tp_qa_min_chars_per_question",
+    "tp_qa_max_question_chars",
+    "tp_qa_dedup_questions",
+    "tp_qa_write_question_hashes_artifact_enabled",
+    "tp_qa_write_question_source_ids_artifact_enabled",
+    "tp_qa_hashes_written",
+    "tp_qa_source_ids_written",
+    "tp_qa_questions_per_min",
+    "tp_qa_questions_per_1k_chars",
+    "tp_qa_mean_cosine_to_centroid",
+    "tp_qa_mean_cosine_to_centroid_present",
+)
+
 
 class QAEmbeddingPairsExtractor(BaseExtractor):
     """
-    Извлекает вопросоподобные фразы из транскрипта и считает их эмбеддинги.
+    Извлекает вопросоподобные фразы из текстовых источников документа и считает их эмбеддинги (матрица N×D).
+    Имя класса историческое: пары Q–A не строятся — см. SCHEMA.md.
     """
 
-    VERSION = "1.1.0"
+    VERSION = "1.3.0"
     DEFAULT_RU_WORDS = ["кто", "что", "где", "когда", "почему", "зачем", "как", "какой", "какая", "какие", "сколько"]
     DEFAULT_EN_WORDS = ["who", "what", "where", "when", "why", "how", "which"]
 
     def __init__(
         self,
-        model_name: str = "sentence-transformers/all-MiniLM-L6-v2",
+        model_name: str = "intfloat/multilingual-e5-large",
         artifacts_dir: str | None = None,
         device: Optional[str] = "cpu",
         fp16: bool = True,
@@ -61,7 +100,7 @@ class QAEmbeddingPairsExtractor(BaseExtractor):
         # extra metrics
         emit_extra_metrics: bool = False,
     ) -> None:
-        self.model_name = model_name
+        self.model_name = str(model_name)
         self.artifacts_dir = Path(artifacts_dir).expanduser().resolve() if artifacts_dir else default_artifacts_dir()
         self.artifacts_dir.mkdir(parents=True, exist_ok=True)
         self.device = str(device or "cpu")
@@ -97,15 +136,33 @@ class QAEmbeddingPairsExtractor(BaseExtractor):
         en = question_words_en if isinstance(question_words_en, list) and question_words_en else list(self.DEFAULT_EN_WORDS)
         self._question_re = self._build_question_regex(ru_words=ru, en_words=en, langs=self.question_langs)
 
-        self._model, self._weights_digest, self._model_version = get_model_with_meta(self.model_name, self.device, self.fp16)
+        init_sys_before = system_snapshot()
+        init_mem_before = process_memory_bytes()
+        self.model, self.weights_digest, self.model_version = get_model_with_meta(
+            model_name=self.model_name, device=self.device, fp16=self.fp16
+        )
+        init_sys_after = system_snapshot()
+        init_mem_after = process_memory_bytes()
+        self._init_metrics: Dict[str, Any] = {
+            "pre_init": init_sys_before,
+            "post_init": init_sys_after,
+            "ram_peak_bytes": max(init_mem_before, init_mem_after),
+        }
 
-    @staticmethod
-    def _safe_join_artifacts_dir(base_dir: Path, relpath: str) -> Path:
-        base = base_dir.expanduser().resolve()
-        cand = (base / relpath).resolve()
-        if not (cand == base or base in cand.parents):
-            raise RuntimeError("qa_embedding_pairs_extractor: relpath escapes artifacts_dir")
-        return cand
+    def _gpu_peak_mb(self, sys_after: Any) -> int:
+        def _g(snap: Any) -> int:
+            try:
+                g = (snap or {}).get("gpu") or {}
+                arr = g.get("gpus") or []
+                return max([int(x.get("memory_used_mb", 0)) for x in arr] or [0])
+            except Exception:
+                return 0
+
+        return max(
+            _g(self._init_metrics.get("pre_init")),
+            _g(self._init_metrics.get("post_init")),
+            _g(sys_after),
+        )
 
     @staticmethod
     def _stable_template(
@@ -121,6 +178,7 @@ class QAEmbeddingPairsExtractor(BaseExtractor):
         max_questions_total: int,
         max_questions_per_source: int,
         max_comments: int,
+        max_chars_per_comment: int,
         max_transcript_chars: int,
         min_chars_per_question: int,
         max_question_chars: int,
@@ -128,12 +186,13 @@ class QAEmbeddingPairsExtractor(BaseExtractor):
         write_question_hashes_artifact: bool,
         write_question_source_ids_artifact: bool,
     ) -> Dict[str, float]:
+        nan = float("nan")
         return {
             "tp_qa_present": 0.0,
             "tp_qa_disabled_by_policy": 0.0,
             "tp_qa_enabled": float(bool(enabled)),
             "tp_qa_num_questions": 0.0,
-            "tp_qa_embedding_dim": float("nan"),
+            "tp_qa_embedding_dim": nan,
             "tp_qa_q_title": 0.0,
             "tp_qa_q_description": 0.0,
             "tp_qa_q_transcript": 0.0,
@@ -150,6 +209,7 @@ class QAEmbeddingPairsExtractor(BaseExtractor):
             "tp_qa_max_questions_total": float(int(max_questions_total)),
             "tp_qa_max_questions_per_source": float(int(max_questions_per_source)),
             "tp_qa_max_comments": float(int(max_comments)),
+            "tp_qa_max_chars_per_comment": float(int(max_chars_per_comment)),
             "tp_qa_max_transcript_chars": float(int(max_transcript_chars)),
             "tp_qa_min_chars_per_question": float(int(min_chars_per_question)),
             "tp_qa_max_question_chars": float(int(max_question_chars)),
@@ -158,10 +218,50 @@ class QAEmbeddingPairsExtractor(BaseExtractor):
             "tp_qa_write_question_source_ids_artifact_enabled": 1.0 if write_question_source_ids_artifact else 0.0,
             "tp_qa_hashes_written": 0.0,
             "tp_qa_source_ids_written": 0.0,
-            "tp_qa_questions_per_min": float("nan"),
-            "tp_qa_questions_per_1k_chars": float("nan"),
-            "tp_qa_mean_cosine_to_centroid": float("nan"),
+            "tp_qa_questions_per_min": nan,
+            "tp_qa_questions_per_1k_chars": nan,
+            "tp_qa_mean_cosine_to_centroid": nan,
             "tp_qa_mean_cosine_to_centroid_present": 0.0,
+        }
+
+    @staticmethod
+    def _pack_features_flat(values: Dict[str, float]) -> Dict[str, float]:
+        out: Dict[str, float] = {}
+        for k in _FEATURES_FLAT_KEYS:
+            if k not in values:
+                raise KeyError(f"qa_embedding_pairs_extractor: missing features_flat key {k!r}")
+            out[k] = float(values[k])
+        return out
+
+    def _build_extract_return(
+        self,
+        *,
+        sys_after: Any,
+        mem_before: int,
+        mem_after: int,
+        total_s: float,
+        features_flat: Dict[str, float],
+        timings_s: Dict[str, Any],
+    ) -> Dict[str, Any]:
+        gpu_peak_mb = self._gpu_peak_mb(sys_after)
+        return {
+            "device": self.device,
+            "version": self.VERSION,
+            "model_name": self.model_name,
+            "model_version": self.model_version,
+            "weights_digest": self.weights_digest,
+            "system": {
+                "pre_init": self._init_metrics.get("pre_init"),
+                "post_init": self._init_metrics.get("post_init"),
+                "post_process": sys_after,
+                "peaks": {
+                    "ram_peak_mb": int(max(self._init_metrics.get("ram_peak_bytes", 0), mem_before, mem_after) / 1024 / 1024),
+                    "gpu_peak_mb": int(gpu_peak_mb),
+                },
+            },
+            "timings_s": timings_s,
+            "result": {"features_flat": self._pack_features_flat(features_flat)},
+            "error": None,
         }
 
     @staticmethod
@@ -227,7 +327,7 @@ class QAEmbeddingPairsExtractor(BaseExtractor):
         for i in range(0, len(sentences), self.batch_size):
             batch = sentences[i : i + self.batch_size]
             with torch.no_grad():
-                raw = self._model.encode(
+                raw = self.model.encode(
                     batch,
                     show_progress_bar=False,
                     convert_to_numpy=True,
@@ -272,6 +372,7 @@ class QAEmbeddingPairsExtractor(BaseExtractor):
             max_questions_total=self.max_questions_total,
             max_questions_per_source=self.max_questions_per_source,
             max_comments=self.max_comments,
+            max_chars_per_comment=self.max_chars_per_comment,
             max_transcript_chars=self.max_transcript_chars,
             min_chars_per_question=self.min_chars_per_question,
             max_question_chars=self.max_question_chars,
@@ -285,23 +386,14 @@ class QAEmbeddingPairsExtractor(BaseExtractor):
             sys_after = system_snapshot()
             mem_after = process_memory_bytes()
             total_s = time.perf_counter() - t0
-            return {
-                "device": self.device,
-                "version": self.VERSION,
-                "model_version": self._model_version,
-                "system": {
-                    "pre_init": sys_before,
-                    "post_init": sys_before,
-                    "post_process": sys_after,
-                    "peaks": {
-                        "ram_peak_mb": int(max(mem_before, mem_after) / 1024 / 1024),
-                        "gpu_peak_mb": 0,
-                    },
-                },
-                "timings_s": {"total": round(total_s, 3)},
-                "result": {"features_flat": features_flat},
-                "error": None,
-            }
+            return self._build_extract_return(
+                sys_after=sys_after,
+                mem_before=mem_before,
+                mem_after=mem_after,
+                total_s=total_s,
+                features_flat=features_flat,
+                timings_s={"total": round(total_s, 3)},
+            )
 
         # Собираем источники: title, description, transcript, comments
         sources: Dict[str, List[str]] = {"title": [], "description": [], "transcript": [], "comments": []}
@@ -402,31 +494,25 @@ class QAEmbeddingPairsExtractor(BaseExtractor):
             mem_after = process_memory_bytes()
             total_s = time.perf_counter() - t0
 
-            # stable schema is already present; fill derived rates
-            dur = getattr(doc, "audio_duration_sec", None)
-            try:
-                dur_f = float(dur) if dur is not None else float("nan")
-            except Exception:
-                dur_f = float("nan")
-            features_flat["tp_qa_questions_per_min"] = float("nan") if not np.isfinite(dur_f) or dur_f <= 0 else 0.0
+            if self.emit_extra_metrics:
+                dur = getattr(doc, "audio_duration_sec", None)
+                try:
+                    dur_f = float(dur) if dur is not None else float("nan")
+                except Exception:
+                    dur_f = float("nan")
+                features_flat["tp_qa_questions_per_min"] = (
+                    float("nan") if not np.isfinite(dur_f) or dur_f <= 0 else 0.0
+                )
+                features_flat["tp_qa_questions_per_1k_chars"] = float("nan")
 
-            return {
-                "device": self.device,
-                "version": self.VERSION,
-                "model_version": self._model_version,
-                "system": {
-                    "pre_init": sys_before,
-                    "post_init": sys_before,
-                    "post_process": sys_after,
-                    "peaks": {
-                        "ram_peak_mb": int(max(mem_before, mem_after) / 1024 / 1024),
-                        "gpu_peak_mb": 0,
-                    },
-                },
-                "timings_s": {"total": round(total_s, 3)},
-                "result": {"features_flat": features_flat},
-                "error": None,
-            }
+            return self._build_extract_return(
+                sys_after=sys_after,
+                mem_before=mem_before,
+                mem_after=mem_after,
+                total_s=total_s,
+                features_flat=features_flat,
+                timings_s={"total": round(total_s, 3)},
+            )
 
         if self.require_min_questions and int(num_q) < int(self.require_min_questions):
             raise RuntimeError(
@@ -488,8 +574,8 @@ class QAEmbeddingPairsExtractor(BaseExtractor):
                 "embedding_dim": int(embs.shape[1]) if embs.size > 0 else 0,
                 "per_source_counts": dict(per_source_counts),
                 "model_name": self.model_name,
-                "model_version": self._model_version,
-                "weights_digest": self._weights_digest,
+                "model_version": self.model_version,
+                "weights_digest": self.weights_digest,
                 "hashes_relpath": hashes_relpath,
                 "source_ids_relpath": sources_relpath,
                 "source_vocab": ["title", "description", "transcript", "comments"],
@@ -511,13 +597,12 @@ class QAEmbeddingPairsExtractor(BaseExtractor):
         features_flat["tp_qa_hashes_written"] = 1.0 if hashes_written else 0.0
         features_flat["tp_qa_source_ids_written"] = 1.0 if source_ids_written else 0.0
 
-        # derived rates (gated by emit_extra_metrics)
-        dur = getattr(doc, "audio_duration_sec", None)
-        try:
-            dur_f = float(dur) if dur is not None else float("nan")
-        except Exception:
-            dur_f = float("nan")
         if self.emit_extra_metrics:
+            dur = getattr(doc, "audio_duration_sec", None)
+            try:
+                dur_f = float(dur) if dur is not None else float("nan")
+            except Exception:
+                dur_f = float("nan")
             features_flat["tp_qa_questions_per_min"] = float("nan") if not np.isfinite(dur_f) or dur_f <= 0 else float(num_q) / (dur_f / 60.0)
             total_chars = sum(len(x) for x in candidate_texts) if candidate_texts else 0
             features_flat["tp_qa_questions_per_1k_chars"] = float("nan") if total_chars <= 0 else float(num_q) / (float(total_chars) / 1000.0)
@@ -530,25 +615,12 @@ class QAEmbeddingPairsExtractor(BaseExtractor):
                     sims = embs @ c.reshape(-1, 1)
                     features_flat["tp_qa_mean_cosine_to_centroid"] = float(np.mean(sims))
                     features_flat["tp_qa_mean_cosine_to_centroid_present"] = 1.0
-            # keep comment truncation config visible
-            features_flat["tp_qa_max_chars_per_comment"] = float(int(self.max_chars_per_comment))
 
-        return {
-            "device": self.device,
-            "version": self.VERSION,
-            "model_version": self._model_version,
-            "system": {
-                "pre_init": sys_before,
-                "post_init": sys_before,
-                "post_process": sys_after,
-                "peaks": {
-                    "ram_peak_mb": int(max(mem_before, mem_after) / 1024 / 1024),
-                    "gpu_peak_mb": 0,
-                },
-            },
-            "timings_s": {"total": round(total_s, 3)},
-            "result": {"features_flat": features_flat},
-            "error": None,
-        }
-
-
+        return self._build_extract_return(
+            sys_after=sys_after,
+            mem_before=mem_before,
+            mem_after=mem_after,
+            total_s=total_s,
+            features_flat=features_flat,
+            timings_s={"total": round(total_s, 3)},
+        )

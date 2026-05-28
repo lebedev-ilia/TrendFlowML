@@ -1,0 +1,41 @@
+{
+  "schema_system_version": "vp_schema_v1",
+  "schema_version": "embedding_shift_indicator_extractor_output_v1",
+  "producer": "embedding_shift_indicator_extractor",
+  "artifact_kind": "extractor_features_flat",
+  "allow_extra_keys": false,
+  "description": "EmbeddingShiftIndicatorExtractor: 27 fixed tp_embshift_* keys; timings NaN when emit_extra_metrics=false; legacy transcript_chunks path supported; canonical transcripts[].chunk_embeddings_relpath does not require transcript_chunks dict.",
+  "meta": {
+    "required_keys": [],
+    "optional_keys": []
+  },
+  "fields": {
+    "tp_embshift_present": { "required": true, "tier": "analytics", "dtype": "float32", "shape": [] },
+    "tp_embshift_disabled_by_policy": { "required": true, "tier": "analytics", "dtype": "float32", "shape": [] },
+    "tp_embshift_enabled": { "required": true, "tier": "analytics", "dtype": "float32", "shape": [] },
+    "tp_embshift_require_transcript_chunks_enabled": { "required": true, "tier": "analytics", "dtype": "float32", "shape": [] },
+    "tp_embshift_require_min_chunks": { "required": true, "tier": "analytics", "dtype": "float32", "shape": [] },
+    "tp_embshift_emit_extra_metrics_enabled": { "required": true, "tier": "analytics", "dtype": "float32", "shape": [] },
+    "tp_embshift_compute_shift_flag_enabled": { "required": true, "tier": "analytics", "dtype": "float32", "shape": [] },
+    "tp_embshift_compute_extra_cosines_enabled": { "required": true, "tier": "analytics", "dtype": "float32", "shape": [] },
+    "tp_embshift_n_chunks": { "required": true, "tier": "analytics", "dtype": "float32", "shape": [] },
+    "tp_embshift_n_window_chunks": { "required": true, "tier": "analytics", "dtype": "float32", "shape": [] },
+    "tp_embshift_dim": { "required": true, "tier": "analytics", "dtype": "float32", "shape": [] },
+    "tp_embshift_cosine_threshold": { "required": true, "tier": "analytics", "dtype": "float32", "shape": [] },
+    "tp_embshift_cosine_begin_end": { "required": true, "tier": "analytics", "dtype": "float32", "shape": [] },
+    "tp_embshift_shift_flag": { "required": true, "tier": "analytics", "dtype": "float32", "shape": [] },
+    "tp_embshift_margin": { "required": true, "tier": "analytics", "dtype": "float32", "shape": [] },
+    "tp_embshift_cosine_first_last": { "required": true, "tier": "analytics", "dtype": "float32", "shape": [] },
+    "tp_embshift_mean_cosine_last_to_start_window": { "required": true, "tier": "analytics", "dtype": "float32", "shape": [] },
+    "tp_embshift_source_used_whisper": { "required": true, "tier": "analytics", "dtype": "float32", "shape": [] },
+    "tp_embshift_source_used_youtube_auto": { "required": true, "tier": "analytics", "dtype": "float32", "shape": [] },
+    "tp_embshift_used_legacy_key_flag": { "required": true, "tier": "analytics", "dtype": "float32", "shape": [] },
+    "tp_embshift_unsafe_relpath_flag": { "required": true, "tier": "analytics", "dtype": "float32", "shape": [] },
+    "tp_embshift_chunk_embed_missing_flag": { "required": true, "tier": "analytics", "dtype": "float32", "shape": [] },
+    "tp_embshift_dim_mismatch_flag": { "required": true, "tier": "analytics", "dtype": "float32", "shape": [] },
+    "tp_embshift_zero_norm_flag": { "required": true, "tier": "analytics", "dtype": "float32", "shape": [] },
+    "tp_embshift_nan_inf_flag": { "required": true, "tier": "analytics", "dtype": "float32", "shape": [] },
+    "tp_embshift_load_ms": { "required": true, "tier": "analytics", "dtype": "float32", "shape": [] },
+    "tp_embshift_compute_ms": { "required": true, "tier": "analytics", "dtype": "float32", "shape": [] }
+  }
+}

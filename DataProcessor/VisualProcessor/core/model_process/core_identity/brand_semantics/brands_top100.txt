@@ -1,0 +1,70 @@
+# Top brand list (5 domains × 20) for `download_logos_wikimedia.py`
+# Format:
+#   brand_path|query
+# brand_path is relative to known_brands/ and may include grouping like `car/ferrari`.
+
+
+# 3) Sport wear / shoes
+sport_wear/under_armour|Under Armour logo
+sport_wear/new_balance|New Balance logo
+sport_wear/reebok|Reebok logo
+sport_wear/asics|ASICS logo
+sport_wear/fila|Fila logo
+sport_wear/the_north_face|The North Face logo
+sport_wear/columbia|Columbia Sportswear logo
+sport_wear/salomon|Salomon logo
+sport_wear/converse|Converse logo
+sport_wear/vans|Vans logo
+sport_wear/skechers|Skechers logo
+sport_wear/champion|Champion logo
+sport_wear/lululemon|Lululemon logo
+sport_wear/patagonia|Patagonia logo
+sport_wear/kappa|Kappa logo
+sport_wear/decathlon|Decathlon logo
+sport_wear/mizuno|Mizuno logo
+
+# 4) Electronics / gadgets
+electronic/apple|Apple logo
+electronic/samsung|Samsung logo
+electronic/sony|Sony logo
+electronic/lg|LG logo
+electronic/huawei|Huawei logo
+electronic/xiaomi|Xiaomi logo
+electronic/google|Google logo
+electronic/microsoft|Microsoft logo
+electronic/lenovo|Lenovo logo
+electronic/dell|Dell logo
+electronic/hp|HP logo
+electronic/intel|Intel logo
+electronic/amd|AMD logo
+electronic/nvidia|NVIDIA logo
+electronic/canon|Canon logo
+electronic/nikon|Nikon logo
+electronic/panasonic|Panasonic logo
+electronic/bose|Bose logo
+electronic/philips|Philips logo
+electronic/jbl|JBL logo
+
+# 5) Food / drinks / FMCG
+food/coca_cola|Coca-Cola logo
+food/pepsi|Pepsi logo
+food/starbucks|Starbucks logo
+food/mcdonalds|McDonald's logo
+food/kfc|KFC logo
+food/nestle|Nestlé logo
+food/heineken|Heineken logo
+food/budweiser|Budweiser logo
+food/red_bull|Red Bull logo
+food/nescafe|Nescafé logo
+food/lays|Lay's logo
+food/kelloggs|Kellogg's logo
+food/subway|Subway logo
+food/dominos|Domino's logo
+food/pizza_hut|Pizza Hut logo
+food/danone|Danone logo
+food/kraft|Kraft logo
+food/oreo|Oreo logo
+food/hersheys|Hershey's logo
+food/sprite|Sprite logo
+
+

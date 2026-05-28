@@ -4,9 +4,13 @@
 
 Определяет семантический кластер для видео на основе его эмбеддингов (заголовка, описания или хештегов). Использует предобученные центроиды кластеров и PCA для снижения размерности. Вычисляет ближайший кластер по косинусному сходству и возвращает его ID, сходство и расстояние.
 
-**Версия**: 1.2.0  
+**Версия**: 1.3.0  
 **Категория**: clustering, classification  
 **GPU**: не требуется (опционально FAISS для ускорения)
+
+**Диапазоны и валидатор среза** (`text_features.npz`): [`docs/FEATURE_DESCRIPTION.md`](docs/FEATURE_DESCRIPTION.md) · [`utils/validate_semantic_cluster_extractor_text_npz.py`](utils/validate_semantic_cluster_extractor_text_npz.py)
+
+**Контракт Audit v3**: [SCHEMA.md](./SCHEMA.md) · machine: [`schemas/semantic_cluster_extractor_output_v1.json`](../../schemas/semantic_cluster_extractor_output_v1.json) · **Audit v4:** [`../../../../docs/audit_v4/components/text_processor/semantic_cluster_extractor_audit_v4.md`](../../../../docs/audit_v4/components/text_processor/semantic_cluster_extractor_audit_v4.md) · L2 stats: `scripts/audit_v4_npz_stats.py` → `storage/audit_v4/semantic_cluster_extractor_l2/`
 
 ### Входы
 
@@ -24,32 +28,13 @@
 
 ### Выходы
 
-Экстрактор возвращает **только scalar фичи** в `result.features_flat` (A-policy).
-
-#### `features_flat` (основные)
-
-- `tp_semclust_present` (0/1)
-- `tp_semclust_id` (float, NaN если `present=0`)
-- `tp_semclust_similarity` (float, NaN если `present=0`)
-- `tp_semclust_distance` (float, NaN если `present=0`)
-- `tp_semclust_fallback_used` (0/1) — выбран не `primary_source`
-- `tp_semclust_dim_mismatch_flag` (0/1)
-- `tp_semclust_backend_faiss` (0/1)
-- input presence (наличие relpath во входе):
-  - `tp_semclust_title_present`
-  - `tp_semclust_description_present`
-  - `tp_semclust_hashtag_present`
-- one-hot источника (какой embedding реально использован):
-  - `tp_semclust_source_title`
-  - `tp_semclust_source_description`
-  - `tp_semclust_source_hashtag`
+**31** фиксированных scalar в `result.features_flat` — см. [SCHEMA.md](./SCHEMA.md). Кратко: зеркала **`require_*` / `use_faiss` / `emit_extra_metrics`**, one-hot **`tp_semclust_config_primary_*`**, **`tp_semclust_*_present`** (успешная загрузка `.npy`), one-hot **`tp_semclust_source_*`**, **`fallback`**, **`backend_faiss`**, флаги **dim / unsafe / embed_missing**, метрики **id/similarity/distance**, блок **extra** (частично **NaN** при **`emit_extra_metrics=False`**).
 
 #### `semantic_cluster_meta` (метаданные, без путей/текста)
 
-- `clusters_spec_name`, `clusters_spec_version`
-- `clusters_weights_digest`
-- `cluster_db_version`
-- `backend` (`faiss_ip` | `numpy_cosine`)
+Всегда (все ветки): `clusters_spec_name`, `clusters_spec_version`, `clusters_weights_digest`, `cluster_db_version`, **`backend`** (`faiss_ip` | `numpy_cosine`).
+
+Верхний уровень ответа: **`model_*`/`weights_digest`** = **`null`**; **`system.pre_init`/`post_init`** из **`__init__`**, **`gpu_peak_mb`**.
 
 #### Метаданные
 
@@ -157,7 +142,13 @@ dist = 1.0 - sim
 - `require_primary_source`: запретить fallback
 - `require_embedding`: сделать отсутствие/несовместимость embedding ошибкой (fail-fast)
 - `use_faiss` / `require_faiss`: политика FAISS backend
-- `emit_extra_metrics`: доп. наблюдаемость (margin/top2, dims, timings)
+- `emit_extra_metrics`: доп. наблюдаемость (margin/top2, dims, timings). При включении добавляет:
+  - `tp_semclust_margin_top2`: разница между сходством с топ-1 и топ-2 кластерами
+  - `tp_semclust_compute_ms`: время вычисления кластера в миллисекундах
+  - `tp_semclust_n_clusters`: количество кластеров в таксономии
+  - `tp_semclust_model_orig_dim`: исходная размерность модели
+  - `tp_semclust_model_reduced_dim`: приведенная размерность после PCA
+  - `tp_semclust_embedding_dim`: размерность входного эмбеддинга
 
 ### Особенности
 

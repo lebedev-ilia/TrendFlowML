@@ -288,69 +288,69 @@ def main_cli():
 
     print(diarization.speaker_diarization)
 
-    # for turn, speaker in diarization.speaker_diarization:
-    #     print(f"{speaker} speaks between t={turn.start:.3f}s and t={turn.end:.3f}s")
+    for turn, speaker in diarization.speaker_diarization:
+        print(f"{speaker} speaks between t={turn.start:.3f}s and t={turn.end:.3f}s")
 
-    # print()
+    print()
 
-    # for turn, speaker in diarization.exclusive_speaker_diarization:
-    #     print(f"{speaker} speaks between t={turn.start:.3f}s and t={turn.end:.3f}s")
+    for turn, speaker in diarization.exclusive_speaker_diarization:
+        print(f"{speaker} speaks between t={turn.start:.3f}s and t={turn.end:.3f}s")
 
-    # # extract segments and embeddings
-    # dia_segments = extract_diarization_segments(diarization.speaker_diarization)
-    # unique_speakers = sorted({lab for _, _, lab in dia_segments})
-    # logger.info("Detected %d segments, %d unique speakers", len(dia_segments), len(unique_speakers))
+    # extract segments and embeddings
+    dia_segments = extract_diarization_segments(diarization.speaker_diarization)
+    unique_speakers = sorted({lab for _, _, lab in dia_segments})
+    logger.info("Detected %d segments, %d unique speakers", len(dia_segments), len(unique_speakers))
 
-    # # (optional) save RTTM
-    # if args.save_rttm:
-    #     rttm_path = os.path.join(outdir, "output.rttm")
-    #     with open(rttm_path, "w", encoding="utf8") as f:
-    #         diarization.speaker_diarization.write_rttm(f)
-    #     logger.info("Saved RTTM -> %s", rttm_path)
+    # (optional) save RTTM
+    if args.save_rttm:
+        rttm_path = os.path.join(outdir, "output.rttm")
+        with open(rttm_path, "w", encoding="utf8") as f:
+            diarization.speaker_diarization.write_rttm(f)
+        logger.info("Saved RTTM -> %s", rttm_path)
 
-    # # whisperx transcribe (file-based)
-    # start_time = time.time()
-    # whisper_result = transcribe_with_whisperx(whisper_model, args.audio)
-    # logger.info("Transcription finished (%.1fs); segments=%d", time.time() - start_time, len(whisper_result.get("segments", [])))
+    # whisperx transcribe (file-based)
+    start_time = time.time()
+    whisper_result = transcribe_with_whisperx(whisper_model, args.audio)
+    logger.info("Transcription finished (%.1fs); segments=%d", time.time() - start_time, len(whisper_result.get("segments", [])))
 
-    # # align words (if requested)
-    # if args.align:
-    #     word_segments = align_words_whisperx(whisper_result.get("segments", []), args.audio, device=device)
-    # else:
-    #     # fallback to uniform split
-    #     word_segments = align_words_whisperx(whisper_result.get("segments", []), args.audio, device=device)
+    # align words (if requested)
+    if args.align:
+        word_segments = align_words_whisperx(whisper_result.get("segments", []), args.audio, device=device)
+    else:
+        # fallback to uniform split
+        word_segments = align_words_whisperx(whisper_result.get("segments", []), args.audio, device=device)
 
-    # # attribute words
-    # attributed_words = assign_speaker_to_words(word_segments, dia_segments)
+    # attribute words
+    attributed_words = assign_speaker_to_words(word_segments, dia_segments)
 
-    # # group turns
-    # turns = group_words_to_turns(attributed_words, max_gap=1.0)
+    # group turns
+    turns = group_words_to_turns(attributed_words, max_gap=1.0)
 
-    # # prepare summary JSON
-    # out = {
-    #     "audio_path": args.audio,
-    #     "duration": float(sum((e - s) for s, e, _ in dia_segments)) if dia_segments else None,
-    #     "sample_rate": sr,
-    #     "speakers": unique_speakers,
-    #     "speaker_segments": [{"start": s, "end": e, "speaker": sp} for s, e, sp in dia_segments],
-    #     "word_segments": word_segments,
-    #     "attributed_words": attributed_words,
-    #     "turns": turns,
-    #     "diarization_contract_version": DIARIZATION_CONTRACT_VERSION,
-    #     "pipeline_model": getattr(pipeline, "__repr__", lambda: str(pipeline))(),
-    #     "whisper_model": f"whisperx-{args.whisper_size}",
-    #     "processing_time_s": time.time() - start_time,
-    # }
+    # prepare summary JSON
+    out = {
+        "audio_path": args.audio,
+        "duration": float(sum((e - s) for s, e, _ in dia_segments)) if dia_segments else None,
+        "sample_rate": sr,
+        "speakers": unique_speakers,
+        "speaker_segments": [{"start": s, "end": e, "speaker": sp} for s, e, sp in dia_segments],
+        "word_segments": word_segments,
+        "attributed_words": attributed_words,
+        "turns": turns,
+        "diarization_contract_version": DIARIZATION_CONTRACT_VERSION,
+        "pipeline_model": getattr(pipeline, "__repr__", lambda: str(pipeline))(),
+        "whisper_model": f"whisperx-{args.whisper_size}",
+        "processing_time_s": time.time() - start_time,
+    }
 
-    # if args.save_json:
-    #     json_path = os.path.join(outdir, "diarization_result.json")
-    #     with open(json_path, "w", encoding="utf8") as f:
-    #         json.dump(out, f, ensure_ascii=False, indent=2)
-    #     logger.info("Saved JSON -> %s", json_path)
-    # else:
-    #     logger.info("Not saving JSON (use --save-json to persist results)")
+    if args.save_json:
+        json_path = os.path.join(outdir, "diarization_result.json")
+        with open(json_path, "w", encoding="utf8") as f:
+            json.dump(out, f, ensure_ascii=False, indent=2)
+        logger.info("Saved JSON -> %s", json_path)
+    else:
+        logger.info("Not saving JSON (use --save-json to persist results)")
 
-    # logger.info("Done.")
+    logger.info("Done.")
 
 
 if __name__ == "__main__":

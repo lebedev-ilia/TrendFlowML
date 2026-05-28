@@ -1,0 +1,2 @@
+# Dependencies for video_pacing module
+# Add module-specific dependencies here

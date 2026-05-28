@@ -4,9 +4,13 @@
 
 Агрегирует эмбеддинги **speaker turns** в per‑speaker агрегаты (mean/max). Компонент предназначен для downstream‑метрик и UI‑индикаторов “multi‑speaker / speaker diversity”, при этом соблюдает A‑policy: no raw, determinism, dp_models.
 
-**Версия**: 1.2.0  
+**Версия**: 1.3.0  
 **Категория**: embedding aggregation, speaker analysis  
 **GPU**: поддерживается (cuda), опционально fp16
+
+**Диапазоны и валидатор среза** (`text_features.npz`): [`docs/FEATURE_DESCRIPTION.md`](docs/FEATURE_DESCRIPTION.md) · [`utils/validate_speaker_turn_embeddings_aggregator_text_npz.py`](utils/validate_speaker_turn_embeddings_aggregator_text_npz.py)
+
+**Контракт `features_flat`**: [SCHEMA.md](SCHEMA.md) · machine: [`../../schemas/speaker_turn_embeddings_aggregator_output_v1.json`](../../schemas/speaker_turn_embeddings_aggregator_output_v1.json) · Audit v3: [`../../../docs/audit_v3/components/speaker_turn_embeddings_aggregator_AUDIT_V3_REPORT.md`](../../../docs/audit_v3/components/speaker_turn_embeddings_aggregator_AUDIT_V3_REPORT.md) · **Audit v4:** [`../../../../docs/audit_v4/components/text_processor/speaker_turn_embeddings_aggregator_audit_v4.md`](../../../../docs/audit_v4/components/text_processor/speaker_turn_embeddings_aggregator_audit_v4.md) · L2 stats: `scripts/audit_v4_npz_stats.py` → `storage/audit_v4/speaker_turn_embeddings_aggregator_l2/`
 
 ### Входы
 
@@ -33,6 +37,20 @@
 - `result.features_flat` (только scalars, A‑policy)
 - `result.speaker_embeddings_meta` (privacy‑safe метаданные модели)
 
+#### `features_flat`
+
+Ровно **17** ключей `tp_spkemb_*` в фиксированном порядке (см. JSON-схему).
+
+**Core + конфиг + режим** (всегда числа, не гейтятся `emit_extra_metrics`):
+
+- Метрики: `tp_spkemb_present`, `tp_spkemb_speakers_total`, `tp_spkemb_speakers_embedded`, `tp_spkemb_turns_total`
+- Конфиг: `tp_spkemb_write_artifacts`, `tp_spkemb_compute_mean`, `tp_spkemb_compute_max`
+- Вход: `tp_spkemb_input_present`, `tp_spkemb_input_mode_diar_asr`, `tp_spkemb_input_mode_legacy_doc_speakers`, `tp_spkemb_asr_present`, `tp_spkemb_diar_present`
+
+**Tuning** (при **`emit_extra_metrics=False`** — все **NaN**, ключи на месте):
+
+`tp_spkemb_batch_size`, `tp_spkemb_max_speakers`, `tp_spkemb_max_turns_per_speaker`, `tp_spkemb_min_chars_per_turn`, `tp_spkemb_max_chars_per_turn`
+
 #### Артефакты (`*.npy`, per-run, без raw/hash)
 
 Если `write_artifacts=True`, для каждого спикера создаются:
@@ -52,8 +70,8 @@ Legacy alias (для back-compat):
 #### Метаданные
 
 - `device`: устройство обработки (`"cpu"` или `"cuda"`)
-- `version`: версия экстрактора
-- `model_version`: версия модели из `dp_models` spec
+- `version`: версия экстрактора (**1.3.0**)
+- `model_name`, `model_version`, `weights_digest`: верхний уровень payload (и дубли в `result.speaker_embeddings_meta`)
 
 #### Системные метрики
 
@@ -117,8 +135,8 @@ max_emb = max_emb / ||max_emb||  # L2 нормализация
 **Для каждого спикера и типа агрегации**:
 
 **Файлы**:
-- `speaker_<speaker_id>_mean_<hash>.npy`: средний эмбеддинг (вектор)
-- `speaker_<speaker_id>_max_<hash>.npy`: максимальный эмбеддинг (вектор)
+- `speaker_<speaker_id>_mean.npy`: средний эмбеддинг (вектор)
+- `speaker_<speaker_id>_max.npy`: максимальный эмбеддинг (вектор)
 
 **Безопасность**:
 - `.meta.json` sidecar не создаётся
@@ -129,30 +147,45 @@ max_emb = max_emb / ||max_emb||  # L2 нормализация
 
 ```python
 {
-    "model_name": "sentence-transformers/all-MiniLM-L6-v2",  # Модель для эмбеддингов
+    "model_name": "intfloat/multilingual-e5-large",          # Audit v3 preflight; через dp_models
     "artifacts_dir": None,                                    # Путь к артефактам (по умолчанию: default_artifacts_dir())
     "device": "cpu",                                          # "cpu" | "cuda"
     "fp16": True,                                             # Использовать float16 на GPU
     "batch_size": 64,                                         # Размер батча
-    "compute_mean": True,
-    "compute_max": True,
-    "write_artifacts": True,
-    "require_input": False,
-    "max_speakers": 16,
-    "max_turns_per_speaker": 64,
-    "min_chars_per_turn": 5,
-    "max_chars_per_turn": 600,
-    "dedup_turn_texts": True,
-    "emit_extra_metrics": False,
+    "compute_mean": True,                                     # Вычислять средний эмбеддинг
+    "compute_max": True,                                      # Вычислять max pooling эмбеддинг
+    "write_artifacts": True,                                  # Сохранять артефакты в файлы
+    "require_input": False,                                   # Требовать наличие входных данных
+    "max_speakers": 16,                                       # Максимальное количество спикеров
+    "max_turns_per_speaker": 64,                              # Максимальное количество реплик на спикера
+    "min_chars_per_turn": 5,                                  # Минимальная длина реплики в символах
+    "max_chars_per_turn": 600,                                # Максимальная длина реплики в символах
+    "dedup_turn_texts": True,                                 # Удалять дубликаты реплик
+    "emit_extra_metrics": False,                              # Выдавать дополнительные метрики
 }
 ```
 
 **Параметры**:
-- `model_name`: название модели sentence-transformers
-- `artifacts_dir`: директория для сохранения артефактов
+- `model_name`: название модели sentence-transformers (резолвится через dp_models)
+- `artifacts_dir`: директория для сохранения артефактов (по умолчанию: `default_artifacts_dir()`)
 - `device`: устройство обработки (cpu или cuda)
 - `fp16`: использование float16 на GPU (уменьшает память, минимальная потеря точности)
 - `batch_size`: размер батча для обработки текстов
+- `compute_mean`: вычислять средний эмбеддинг реплик для каждого спикера
+- `compute_max`: вычислять max pooling эмбеддинг реплик для каждого спикера
+- `write_artifacts`: сохранять артефакты (`.npy` файлы) на диск
+- `require_input`: требовать наличие входных данных (иначе RuntimeError)
+- `max_speakers`: максимальное количество спикеров для обработки
+- `max_turns_per_speaker`: максимальное количество реплик на спикера
+- `min_chars_per_turn`: минимальная длина реплики в символах (более короткие отбрасываются)
+- `max_chars_per_turn`: максимальная длина реплики в символах (более длинные обрезаются)
+- `dedup_turn_texts`: удалять дубликаты реплик (case-insensitive сравнение)
+- `emit_extra_metrics`: выдавать дополнительные метрики в `features_flat`:
+  - `tp_spkemb_batch_size`: размер батча
+  - `tp_spkemb_max_speakers`: максимальное количество спикеров
+  - `tp_spkemb_max_turns_per_speaker`: максимальное количество реплик на спикера
+  - `tp_spkemb_min_chars_per_turn`: минимальная длина реплики
+  - `tp_spkemb_max_chars_per_turn`: максимальная длина реплики
 
 ### Особенности
 

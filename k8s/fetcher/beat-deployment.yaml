@@ -1,0 +1,57 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: fetcher-beat
+  labels:
+    app: fetcher
+    component: beat
+spec:
+  replicas: 1  # Singleton - только один Celery Beat
+  selector:
+    matchLabels:
+      app: fetcher
+      component: beat
+  template:
+    metadata:
+      labels:
+        app: fetcher
+        component: beat
+    spec:
+      containers:
+      - name: beat
+        image: trendflow-fetcher:latest  # Замените на ваш registry
+        imagePullPolicy: Always
+        command: ["celery", "-A", "fetcher.celery_app", "beat", "--loglevel=info"]
+        env:
+        - name: POSTGRES_DSN
+          valueFrom:
+            secretKeyRef:
+              name: fetcher-secrets
+              key: postgres-dsn
+        - name: REDIS_URL
+          valueFrom:
+            secretKeyRef:
+              name: fetcher-secrets
+              key: redis-url
+        - name: LOG_LEVEL
+          valueFrom:
+            configMapKeyRef:
+              name: fetcher-config
+              key: log-level
+        resources:
+          requests:
+            cpu: "100m"      # 0.1 CPU
+            memory: "128Mi"  # 128 MB RAM
+          limits:
+            cpu: "500m"      # Максимум 0.5 CPU
+            memory: "256Mi"  # Максимум 256 MB RAM
+        livenessProbe:
+          exec:
+            command:
+            - /bin/sh
+            - -c
+            - "ps aux | grep '[c]elery.*beat' || exit 1"
+          initialDelaySeconds: 60
+          periodSeconds: 30
+          timeoutSeconds: 10
+

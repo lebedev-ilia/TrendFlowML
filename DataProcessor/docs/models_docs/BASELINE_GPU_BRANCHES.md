@@ -83,7 +83,7 @@ Triton план:
 - Triton модели (onnxruntime backend): `yolo11x_320`, `yolo11x_640`, `yolo11x_960`
 - Input (ONNX): `images` (`FP32`, `[1,3,S,S]`) (после letterbox+norm)
 - Output (ONNX): `output0` (`FP32`, `[1,84,N]`, где N зависит от S)
-- Postprocess: decode + NMS делаем в компоненте; ByteTrack остаётся в `core_object_detections` (stateful).
+- Postprocess: decode + NMS делаем в компоненте; baseline Audit v3: tracking удалён из `core_object_detections` (ByteTrack не используется).
 
 ### CLIP image — `core_clip` (image embeddings)
 
@@ -216,7 +216,7 @@ YOLO11x (10 repeats, batch=1):
 - `.../core_depth_midas/depth.npz`
 - `.../core_optical_flow/flow.npz`
 
-E2E + YOLO (Triton inference + in-process NMS+ByteTrack):
+E2E + YOLO (Triton inference + in-process NMS):
 - профиль: `profiles/pr8_triton_baseline_gpu_yolo_local.yaml`
 - артефакт: `.../core_object_detections/detections.npz`
 

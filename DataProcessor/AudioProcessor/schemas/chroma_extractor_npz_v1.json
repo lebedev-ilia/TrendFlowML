@@ -1,0 +1,65 @@
+{
+  "schema_system_version": "vp_schema_v1",
+  "schema_version": "chroma_extractor_npz_v1",
+  "producer": "chroma_extractor",
+  "artifact_kind": "npz",
+  "allow_extra_keys": false,
+  "meta": {
+    "required_keys": [
+      "producer",
+      "producer_version",
+      "schema_version",
+      "created_at",
+      "platform_id",
+      "video_id",
+      "run_id",
+      "config_hash",
+      "sampling_policy_version",
+      "dataprocessor_version",
+      "status",
+      "empty_reason",
+      "models_used",
+      "model_signature",
+      "stage_timings_ms"
+    ],
+    "optional_keys": [
+      "device_used",
+      "scheduler_knobs",
+      "resource_metrics",
+      "error",
+      "features_enabled",
+      "chroma_contract_version",
+      "chroma_type",
+      "normalize",
+      "tuning_failed",
+      "chroma_time_series_omitted",
+      "sample_rate",
+      "hop_length",
+      "n_fft",
+      "duration_sec",
+      "segments_count"
+    ]
+  },
+  "fields": {
+    "feature_names": { "required": true, "tier": "model_facing", "dtype": "object", "shape": ["F"] },
+    "feature_values": { "required": true, "tier": "model_facing", "dtype": "float32", "shape": ["F"] },
+
+    "chroma_mean": { "required": true, "tier": "model_facing", "dtype": "float32", "shape": [12] },
+    "chroma_entropy": { "required": true, "tier": "model_facing", "dtype": "float32", "shape": [] },
+    "chroma_harmonic_stability": { "required": true, "tier": "model_facing", "dtype": "float32", "shape": [] },
+    "chroma_contrast": { "required": true, "tier": "model_facing", "dtype": "float32", "shape": [] },
+    "chroma_dominant_class": { "required": true, "tier": "analytics", "dtype": "int32", "shape": [] },
+    "chroma_dominant_energy": { "required": true, "tier": "model_facing", "dtype": "float32", "shape": [] },
+    "tuning_estimate": { "required": true, "tier": "analytics", "dtype": "float32", "shape": [] },
+
+    "segment_centers_sec": { "required": false, "tier": "analytics", "dtype": "float32", "shape": ["N"] },
+    "segment_durations_sec": { "required": false, "tier": "analytics", "dtype": "float32", "shape": ["N"] },
+    "segment_mask": { "required": false, "tier": "analytics", "dtype": "bool", "shape": ["N"] },
+    "chroma_mean_by_segment": { "required": false, "tier": "analytics", "dtype": "float32", "shape": ["N", 12] },
+
+    "chroma": { "required": false, "tier": "debug", "dtype": "float32", "shape": [12, "T"] },
+
+    "meta": { "required": true, "tier": "debug", "dtype": "object", "shape": [] }
+  }
+}
+

@@ -1,0 +1,78 @@
+# Nightly/full VisualProcessor checks.
+# Requires a self-hosted runner with GPU + Triton access.
+
+name: VisualProcessor Nightly (GPU)
+
+on:
+  workflow_dispatch:
+  schedule:
+    - cron: '30 2 * * *' # daily 02:30 UTC
+
+defaults:
+  run:
+    working-directory: .
+
+jobs:
+  full:
+    name: Full visual run + gates
+    runs-on: [self-hosted, gpu]
+    timeout-minutes: 720
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Run missing/full visual tests (requires Triton)
+        env:
+          # Set these in runner environment or repo secrets.
+          TRITON_HTTP_URL: ${{ secrets.TRITON_HTTP_URL }}
+          TRITON_ENDPOINT: ${{ secrets.TRITON_ENDPOINT }}
+          REQUIRE_TRITON_PREFLIGHT: "1"
+          TRITON_MODELS_PRESET: "core_low"
+        run: |
+          chmod +x DataProcessor/scripts/run_missing_visual_tests.sh
+          DataProcessor/scripts/run_missing_visual_tests.sh
+
+      - name: Quality gate (all manifests under dp_results)
+        env:
+          # Prefer VP venv python if present on runner (numpy required for NPZ validation).
+          VP_PY: DataProcessor/VisualProcessor/.vp_venv/bin/python
+          RESULTS_ROOT: DataProcessor/dp_results
+        run: |
+          if [ -x "$VP_PY" ]; then PY="$VP_PY"; else PY=""; fi
+          if [ -z "$PY" ]; then
+            echo "ERROR: VP venv python not found at $VP_PY (numpy required)."
+            exit 2
+          fi
+          $PY - <<'PY'
+          import os, subprocess, sys
+          
+          results_root = os.environ.get("RESULTS_ROOT", "DataProcessor/dp_results")
+          py = os.environ.get("VP_PY", "python3")
+          validator = "DataProcessor/scripts/validate_run_manifest.py"
+          
+          manifests = []
+          for root, dirs, files in os.walk(results_root):
+            # Skip archived results
+            if "/archive/" in root.replace("\\", "/"):
+              continue
+            if "manifest.json" in files:
+              manifests.append(os.path.join(root, "manifest.json"))
+          
+          manifests.sort()
+          if not manifests:
+            print(f"ERROR: no manifest.json found under {results_root}")
+            sys.exit(2)
+          
+          fail = 0
+          print(f"Found manifests: {len(manifests)}")
+          for m in manifests:
+            r = subprocess.run(
+              [py, validator, "--manifest", m, "--require-known-schema", "--strict-empty-reason"],
+              stdout=sys.stdout,
+              stderr=sys.stderr,
+            )
+            if r.returncode != 0:
+              fail = 1
+          
+          sys.exit(fail)
+          PY
+

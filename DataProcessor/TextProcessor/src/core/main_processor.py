@@ -16,6 +16,121 @@ from src.core.base_extractor import BaseExtractor
 from src.schemas.models import VideoDocument, video_document_from_dict
 
 
+def _env_flag(name: str) -> bool:
+    v = os.environ.get(name, "").strip().lower()
+    return v in ("1", "true", "yes", "on")
+
+
+def _step_uses_cuda(step_device: Optional[str]) -> bool:
+    if not step_device:
+        return False
+    s = str(step_device).lower()
+    return "cuda" in s or "gpu" in s
+
+
+def _text_processor_memory_after_step(
+    *,
+    step_device: Optional[str],
+    logger: Optional[logging.Logger],
+    sync_model_manager: bool = True,
+) -> None:
+    """
+    Best-effort RAM/VRAM hygiene between extractors.
+
+    sync_model_manager: set False from worker threads (e.g. CPU parallel batch path) to avoid
+    touching CUDA / the process-wide ModelManager off the main thread.
+
+    Env:
+    - DP_TEXT_SKIP_CUDA_EMPTY_CACHE: skip torch.cuda.empty_cache / ipc_collect for this hook
+    - DP_TEXT_EVICT_MM_AFTER_EXTRACTOR: evict all ModelManager LRU entries after every step
+    - DP_TEXT_EVICT_MM_CUDA_AFTER_EXTRACTOR: evict only CUDA-tagged LRU entries after CUDA steps
+    """
+    import gc
+
+    gc.collect()
+    if not sync_model_manager:
+        return
+    cuda_step = _step_uses_cuda(step_device)
+    skip_empty = _env_flag("DP_TEXT_SKIP_CUDA_EMPTY_CACHE")
+
+    if cuda_step and not skip_empty:
+        try:
+            import torch
+
+            if torch.cuda.is_available():
+                torch.cuda.empty_cache()
+                ipc = getattr(torch.cuda, "ipc_collect", None)
+                if callable(ipc):
+                    ipc()
+        except Exception:
+            pass
+
+    evict_all = _env_flag("DP_TEXT_EVICT_MM_AFTER_EXTRACTOR")
+    evict_cuda = _env_flag("DP_TEXT_EVICT_MM_CUDA_AFTER_EXTRACTOR")
+    if evict_all:
+        try:
+            from dp_models import get_global_model_manager  # type: ignore
+
+            n = get_global_model_manager().evict_cached_models(device_prefix=None)
+            if logger and n:
+                logger.debug("TextProcessor: ModelManager evicted %d cached model(s) (all devices)", n)
+        except Exception:
+            pass
+    elif evict_cuda and cuda_step:
+        try:
+            from dp_models import get_global_model_manager  # type: ignore
+
+            n = get_global_model_manager().evict_cached_models(device_prefix="cuda")
+            if logger and n:
+                logger.debug("TextProcessor: ModelManager evicted %d cached CUDA model(s)", n)
+        except Exception:
+            pass
+
+    gc.collect()
+    if cuda_step and not skip_empty:
+        try:
+            import torch
+
+            if torch.cuda.is_available():
+                torch.cuda.empty_cache()
+        except Exception:
+            pass
+
+
+def _text_processor_memory_run_end(logger: Optional[logging.Logger]) -> None:
+    """
+    Called once when MainProcessor.run() finishes (same OS process as other processors).
+
+    Env:
+    - DP_TEXT_EVICT_MM_ON_RUN_END: evict entire ModelManager LRU
+    - DP_TEXT_SKIP_FINAL_CUDA_EMPTY: do not call empty_cache at run end
+    """
+    import gc
+
+    gc.collect()
+    if _env_flag("DP_TEXT_EVICT_MM_ON_RUN_END"):
+        try:
+            from dp_models import get_global_model_manager  # type: ignore
+
+            n = get_global_model_manager().evict_cached_models(device_prefix=None)
+            if logger and n:
+                logger.debug("TextProcessor: ModelManager evicted %d cached model(s) at run end", n)
+        except Exception:
+            pass
+    if _env_flag("DP_TEXT_SKIP_FINAL_CUDA_EMPTY"):
+        return
+    try:
+        import torch
+
+        if torch.cuda.is_available():
+            torch.cuda.empty_cache()
+            ipc = getattr(torch.cuda, "ipc_collect", None)
+            if callable(ipc):
+                ipc()
+    except Exception:
+        pass
+
+
 def _build_dependency_levels(extractor_specs: List[Tuple[str, str, Dict[str, Any]]]) -> List[List[Tuple[str, str, Dict[str, Any]]]]:
     """
     Группирует extractors по уровням зависимостей (топологическая сортировка).
@@ -25,13 +140,13 @@ def _build_dependency_levels(extractor_specs: List[Tuple[str, str, Dict[str, Any
     """
     # Определение зависимостей между extractors (на основе документации и анализа кода)
     DEPENDENCIES: Dict[str, List[str]] = {
-        # Уровень 0: независимые
-        "LexicalStatsExtractor": [],
-        "ASRTextProxyExtractor": [],
+        # Уровень 0: Tags первым — мутация doc (очистка хэштегов) до lexical/ASR proxy и embedder'ов title/description.
         "TagsExtractor": [],
+        "LexicalStatsExtractor": ["TagsExtractor"],
+        "ASRTextProxyExtractor": ["TagsExtractor"],
         # Уровень 1: зависят от уровня 0
-        "TitleEmbedder": ["TagsExtractor"],  # Может использовать hashtags из TagsExtractor
-        "DescriptionEmbedder": [],
+        "TitleEmbedder": ["TagsExtractor"],
+        "DescriptionEmbedder": ["TagsExtractor"],
         "HashtagEmbedder": ["TagsExtractor"],
         "TranscriptChunkEmbedder": [],  # Зависит только от transcripts в doc
         "CommentsEmbedder": [],  # Зависит только от comments в doc
@@ -43,11 +158,11 @@ def _build_dependency_levels(extractor_specs: List[Tuple[str, str, Dict[str, Any
         "EmbeddingPairTopKExtractor": ["TitleEmbedder", "DescriptionEmbedder"],
         "SemanticTopicExtractor": ["TranscriptChunkEmbedder"],
         # Уровень 3: зависят от уровня 2
-        "EmbeddingStatsExtractor": ["TitleEmbedder", "DescriptionEmbedder", "TranscriptChunkEmbedder", "CommentsEmbedder"],
+        "EmbeddingStatsExtractor": ["TranscriptChunkEmbedder"],
         "CosineMetricsExtractor": ["TitleEmbedder", "DescriptionEmbedder", "TranscriptAggregatorExtractor", "CommentsEmbedder"],
         "TitleEmbeddingClusterEntropyExtractor": ["TitleEmbedder"],
         "TitleToHashtagCosineExtractor": ["TitleEmbedder", "HashtagEmbedder"],
-        "SemanticClusterExtractor": ["TitleEmbedder", "DescriptionEmbedder"],
+        "SemanticClusterExtractor": ["TitleEmbedder", "DescriptionEmbedder", "HashtagEmbedder"],
         "TopKSimilarCorpusTitlesExtractor": ["TitleEmbedder"],
         "EmbeddingShiftIndicatorExtractor": ["TranscriptChunkEmbedder"],
         "EmbeddingSourceIdExtractor": ["TitleEmbedder", "DescriptionEmbedder", "TranscriptAggregatorExtractor"],
@@ -99,6 +214,56 @@ def _build_dependency_levels(extractor_specs: List[Tuple[str, str, Dict[str, Any
         levels.append(remaining)
     
     return levels
+
+
+# CPU extractors safe to run concurrently on the same VideoDocument (read-only; no tp_artifacts / doc mutations).
+_PARALLEL_SAFE_CPU_EXTRACTORS = frozenset({"LexicalStatsExtractor", "ASRTextProxyExtractor"})
+
+
+def _effective_extractor_device(device: str, params: Dict[str, Any]) -> str:
+    """
+    Device used for CUDA memory hooks and run_batch GPU vs CPU grouping.
+
+    devices_config keys like cpu2 still map to tuple device \"cpu\", but extractor_params may set device=cuda
+    (e.g. aggregators). Those must be treated as GPU for correct batch routing and cache hygiene.
+    """
+    p_dev = params.get("device") if isinstance(params, dict) else None
+    if p_dev is not None and "cuda" in str(p_dev).lower():
+        return "cuda"
+    if "gpu" in str(p_dev).lower():
+        return "cuda"
+    dk = str(device or "").lower()
+    if dk in ("cuda", "gpu") or "cuda" in dk:
+        return "cuda"
+    return "cpu"
+
+
+def _bundle_specs_lexical_asr_parallel(
+    specs: List[Tuple[str, str, Dict[str, Any]]],
+    enable: bool,
+) -> List[List[Tuple[str, str, Dict[str, Any]]]]:
+    """Group consecutive lexical + ASR proxy extractors for parallel CPU execution."""
+    if not enable or not specs:
+        return [[s] for s in specs]
+    out: List[List[Tuple[str, str, Dict[str, Any]]]] = []
+    i = 0
+    n = len(specs)
+    while i < n:
+        name, device, params = specs[i]
+        if name in _PARALLEL_SAFE_CPU_EXTRACTORS and _effective_extractor_device(str(device), params) == "cpu":
+            group: List[Tuple[str, str, Dict[str, Any]]] = []
+            while i < n:
+                n2, d2, p2 = specs[i]
+                if n2 in _PARALLEL_SAFE_CPU_EXTRACTORS and _effective_extractor_device(str(d2), p2) == "cpu":
+                    group.append(specs[i])
+                    i += 1
+                else:
+                    break
+            out.append(group)
+        else:
+            out.append([specs[i]])
+            i += 1
+    return out
 
 
 class MainProcessor:
@@ -336,6 +501,312 @@ class MainProcessor:
                 raise RuntimeError(f"Failed to instantiate {name}: {e}") from e
             return None
 
+    def _tp_run_lazy_spec_thread(
+        self,
+        spec: Tuple[str, str, Dict[str, Any]],
+        current_doc: VideoDocument,
+        artifacts_dir_override: str | None,
+        idx: int,
+        total_extractors: int,
+        parallel_group: bool,
+    ) -> Dict[str, Any]:
+        """Instantiate + extract one lazy-config spec (thread-safe: no CUDA cache on worker thread)."""
+        name, device, params = spec
+        ext_name = str(name)
+        params = dict(params)
+        step_device_effective = _effective_extractor_device(str(device), params)
+        tuple_device = str(device)
+        t_init_start = time.perf_counter()
+        ext: BaseExtractor | None = None
+        try:
+            if self.logger and params:
+                self.logger.debug(f"Creating {ext_name} with params: {list(params.keys())}")
+            if self.logger:
+                self.logger.debug(
+                    f"TextProcessor: [{idx}/{total_extractors}] instantiating {ext_name} (device={tuple_device})..."
+                )
+            ext = self._instantiate_extractor_by_name_with_params(
+                name,
+                device=device,
+                params=params,
+                artifacts_dir_override=artifacts_dir_override,
+            )
+            init_s = round(time.perf_counter() - t_init_start, 3)
+            if self.logger and init_s > 0.1:
+                self.logger.debug(
+                    f"TextProcessor: [{idx}/{total_extractors}] {ext_name} instantiation took {init_s}s"
+                )
+            if ext is None:
+                return {
+                    "idx": idx,
+                    "ext_name": ext_name,
+                    "ext_class_name": ext_name,
+                    "part": {},
+                    "init_s": init_s,
+                    "step_device": step_device_effective,
+                    "tuple_device": tuple_device,
+                    "instantiation_failed": True,
+                    "not_an_instance": False,
+                    "extract_exception": None,
+                    "extract_time": 0.0,
+                    "parallel_group": parallel_group,
+                }
+            if not isinstance(ext, BaseExtractor):
+                return {
+                    "idx": idx,
+                    "ext_name": ext_name,
+                    "ext_class_name": ext_name,
+                    "part": {},
+                    "init_s": init_s,
+                    "step_device": step_device_effective,
+                    "tuple_device": tuple_device,
+                    "instantiation_failed": False,
+                    "not_an_instance": True,
+                    "extract_exception": None,
+                    "extract_time": 0.0,
+                    "parallel_group": parallel_group,
+                }
+            tag = " [parallel lexical/asr]" if parallel_group else ""
+            if self.logger:
+                self.logger.info(
+                    f"TextProcessor: [{idx}/{total_extractors}] running {ext_name} (device={tuple_device}){tag}"
+                )
+            t_extract_start = time.perf_counter()
+            try:
+                if self.logger:
+                    self.logger.debug(
+                        f"TextProcessor: [{idx}/{total_extractors}] {ext.__class__.__name__} calling extract()..."
+                    )
+                part = ext.extract(current_doc) or {}
+                extract_exception = None
+                if self.logger:
+                    self.logger.debug(
+                        f"TextProcessor: [{idx}/{total_extractors}] {ext.__class__.__name__} extract() returned: "
+                        f"status={part.get('status', 'ok')}, has_result={'result' in part}, "
+                        f"has_timings={'timings_s' in part}"
+                    )
+            except Exception as e:
+                part = {}
+                extract_exception = e
+            extract_time = round(time.perf_counter() - t_extract_start, 3)
+            return {
+                "idx": idx,
+                "ext_name": ext_name,
+                "ext_class_name": ext.__class__.__name__,
+                "part": part,
+                "init_s": init_s,
+                "step_device": step_device_effective,
+                "tuple_device": tuple_device,
+                "instantiation_failed": False,
+                "not_an_instance": False,
+                "extract_exception": extract_exception,
+                "extract_time": extract_time,
+                "parallel_group": parallel_group,
+            }
+        finally:
+            try:
+                if ext is not None:
+                    del ext
+            except Exception:
+                pass
+
+    def _apply_lazy_spec_thread_result(
+        self,
+        res: Dict[str, Any],
+        *,
+        features: Dict[str, Any],
+        current_doc: VideoDocument,
+        status_by_extractor: Dict[str, str],
+        errors_by_extractor: Dict[str, str],
+        empty_reasons_by_extractor: Dict[str, str],
+        models_used_all: List[Dict[str, Any]],
+        features_flat_conflicts: List[str],
+        counters: Dict[str, int],
+        total_extractors: int,
+    ) -> None:
+        """Merge one lazy-spec thread result into run state (mirrors MainProcessor.run sequential path)."""
+        idx = int(res["idx"])
+        ext_name = str(res["ext_name"])
+        ext_class_name = str(res["ext_class_name"])
+        part: Dict[str, Any] = res.get("part") or {}
+        init_s = float(res.get("init_s") or 0.0)
+        step_device: str | None = str(res.get("step_device") or "cpu")
+        extract_time = float(res.get("extract_time") or 0.0)
+
+        if res.get("instantiation_failed"):
+            if ext_name in self.required_extractors:
+                raise RuntimeError(f"TextProcessor failed to create required extractor: {ext_name}")
+            if self.strict:
+                raise RuntimeError(f"TextProcessor failed to create extractor: {ext_name}")
+            if self.logger:
+                self.logger.warning(
+                    f"TextProcessor: [{idx}/{total_extractors}] {ext_name} failed to instantiate (strict={self.strict})"
+                )
+            status_by_extractor[ext_name] = "error"
+            errors_by_extractor[ext_name] = "instantiation_failed"
+            counters["failed_count"] = int(counters.get("failed_count", 0)) + 1
+            _text_processor_memory_after_step(step_device=step_device, logger=self.logger)
+            return
+
+        if res.get("not_an_instance"):
+            error_msg = (
+                f"TextProcessor: {ext_name} instantiation returned non-BaseExtractor, expected BaseExtractor instance"
+            )
+            if self.strict:
+                raise RuntimeError(error_msg)
+            if self.logger:
+                self.logger.error(f"TextProcessor: [{idx}/{total_extractors}] {ext_name}: {error_msg}")
+            status_by_extractor[ext_name] = "error"
+            errors_by_extractor[ext_name] = "not_an_instance"
+            counters["failed_count"] = int(counters.get("failed_count", 0)) + 1
+            _text_processor_memory_after_step(step_device=step_device, logger=self.logger)
+            return
+
+        ex = res.get("extract_exception")
+        if ex is not None:
+            err_msg = str(ex)
+            status_by_extractor[ext_class_name] = "error"
+            errors_by_extractor[ext_class_name] = err_msg
+            counters["failed_count"] = int(counters.get("failed_count", 0)) + 1
+            if ext_class_name in self.required_extractors:
+                if self.logger:
+                    self.logger.error(
+                        f"TextProcessor: [{idx}/{total_extractors}] REQUIRED extractor {ext_class_name} FAILED "
+                        f"after {extract_time}s",
+                        exc_info=True,
+                    )
+                raise RuntimeError(
+                    f"TextProcessor: required extractor {ext_class_name} raised exception: {err_msg}"
+                ) from ex
+            if self.logger:
+                import traceback
+
+                tb_str = "".join(traceback.format_exception(type(ex), ex, ex.__traceback__))
+                self.logger.error(
+                    f"TextProcessor: [{idx}/{total_extractors}] {ext_class_name} raised exception after {extract_time}s:\n"
+                    f"  Error: {err_msg}\n"
+                    f"  Type: {type(ex).__name__}\n"
+                    f"  Traceback:\n{tb_str}",
+                    exc_info=False,
+                )
+            _text_processor_memory_after_step(step_device=step_device, logger=self.logger)
+            return
+
+        part_status = part.get("status", "ok")
+        if isinstance(part_status, str):
+            status_by_extractor[ext_class_name] = part_status
+            if part_status == "error":
+                counters["failed_count"] = int(counters.get("failed_count", 0)) + 1
+                err = part.get("error") or errors_by_extractor.get(ext_class_name) or "unknown_error"
+                errors_by_extractor[ext_class_name] = str(err)
+                if self.logger:
+                    error_details = part.get("error_details") or {}
+                    self.logger.error(
+                        f"TextProcessor: [{idx}/{total_extractors}] {ext_class_name} FAILED after {extract_time}s:\n"
+                        f"  Error: {err}\n"
+                        f"  Details: {error_details if error_details else 'none'}"
+                    )
+            elif part_status == "empty":
+                counters["empty_count"] = int(counters.get("empty_count", 0)) + 1
+                empty_reason = part.get("empty_reason")
+                if empty_reason:
+                    empty_reasons_by_extractor[ext_class_name] = str(empty_reason)
+                if self.logger:
+                    self.logger.info(
+                        f"TextProcessor: [{idx}/{total_extractors}] {ext_class_name} completed "
+                        f"(empty: {empty_reason}) ({extract_time}s)"
+                    )
+            else:
+                counters["successful_count"] = int(counters.get("successful_count", 0)) + 1
+                if self.logger:
+                    result = part.get("result", {})
+                    features_flat = result.get("features_flat", {}) if isinstance(result, dict) else {}
+                    features_count = len(features_flat) if isinstance(features_flat, dict) else 0
+                    models_used = result.get("meta", {}).get("models_used", []) if isinstance(result, dict) else []
+                    models_str = (
+                        ", ".join([m.get("name", "unknown") for m in models_used if isinstance(m, dict)])
+                        if models_used
+                        else "none"
+                    )
+                    details = []
+                    if features_count > 0:
+                        details.append(f"{features_count} features")
+                    if models_str != "none":
+                        details.append(f"models: {models_str}")
+                    details_str = f" ({', '.join(details)})" if details else ""
+                    self.logger.info(
+                        f"TextProcessor: [{idx}/{total_extractors}] {ext_class_name} completed (ok) "
+                        f"({extract_time}s){details_str}"
+                    )
+        else:
+            counters["successful_count"] = int(counters.get("successful_count", 0)) + 1
+            if self.logger:
+                self.logger.info(
+                    f"TextProcessor: [{idx}/{total_extractors}] {ext_class_name} completed (ok) ({extract_time}s)"
+                )
+
+        if "system" in part and isinstance(part["system"], dict):
+            features.setdefault("systems_by_extractor", {})
+            features["systems_by_extractor"][ext_class_name] = part["system"]
+
+        if "result" in part and isinstance(part["result"], dict):
+            features.setdefault("results_by_extractor", {})
+            features["results_by_extractor"][ext_class_name] = part["result"]
+            ff = part["result"].get("features_flat") if isinstance(part["result"].get("features_flat"), dict) else None
+            if isinstance(ff, dict) and ff:
+                features.setdefault("features_flat", {})
+                for key in ff.keys():
+                    if key in features["features_flat"]:
+                        conflict_msg = f"{key} (from {ext_class_name}, previously from another extractor)"
+                        features_flat_conflicts.append(conflict_msg)
+                        if self.logger:
+                            self.logger.warning(f"TextProcessor: features_flat conflict: {conflict_msg}")
+                features["features_flat"].update(ff)
+
+            result_meta = part["result"].get("meta") if isinstance(part["result"].get("meta"), dict) else {}
+            models_from_result = result_meta.get("models_used") if isinstance(result_meta.get("models_used"), list) else []
+            if models_from_result:
+                for m in models_from_result:
+                    if isinstance(m, dict):
+                        models_used_all.append(dict(m))
+
+            muts = part.get("mutations") if isinstance(part.get("mutations"), dict) else None
+            if muts:
+                cleaned = muts.get("cleaned_texts") if isinstance(muts.get("cleaned_texts"), dict) else None
+                if cleaned:
+                    try:
+                        if "title" in cleaned:
+                            setattr(current_doc, "title", cleaned["title"])
+                        if "description" in cleaned:
+                            setattr(current_doc, "description", cleaned["description"])
+                    except Exception:
+                        pass
+                tags = muts.get("hashtags") if isinstance(muts.get("hashtags"), list) else None
+                if tags is not None:
+                    try:
+                        setattr(current_doc, "hashtags", tags)
+                    except Exception:
+                        pass
+
+        if "timings_s" in part and isinstance(part["timings_s"], dict):
+            features.setdefault("timings_by_extractor", {})
+            tdict = dict(part["timings_s"])
+            tdict.setdefault("init", init_s)
+            features["timings_by_extractor"][ext_class_name] = tdict
+        else:
+            features.setdefault("timings_by_extractor", {})
+            features["timings_by_extractor"][ext_class_name] = {"init": init_s}
+
+        if part.get("device"):
+            features["device"] = part.get("device")
+        if part.get("version"):
+            features["version"] = part.get("version")
+
+        if part.get("error"):
+            features["error"] = part.get("error")
+
+        _text_processor_memory_after_step(step_device=step_device, logger=self.logger)
+
     def run(self, document: VideoDocument, *, artifacts_dir_override: str | None = None) -> Dict[str, Any]:
         t0 = time.perf_counter()
         features: Dict[str, Any] = {}
@@ -360,170 +831,236 @@ class MainProcessor:
         
         total_extractors = len(extractor_specs)
         
+        if self.logger and total_extractors > 0:
+            self.logger.info(f"TextProcessor: starting {total_extractors} extractor(s)")
+        
         # mutable document to allow earlier extractors to influence later ones (e.g., cleaned texts, hashtags)
         current_doc = document
-        for spec in extractor_specs:
-            ext = None
-            ext_name = None
-            try:
-                if self._extractor_configs is not None:
-                    # Ленивая инициализация
-                    name, device, params = spec
-                    ext_name = str(name)
-                    params = dict(params)
-                    # Log for debugging
-                    if self.logger and params:
-                        self.logger.debug(f"Creating {ext_name} with params: {list(params.keys())}")
-                    t_init_start = time.perf_counter()
-                    ext = self._instantiate_extractor_by_name_with_params(
-                        name,
-                        device=device,
-                        params=params,
-                        artifacts_dir_override=artifacts_dir_override,
-                    )
-                    init_s = round(time.perf_counter() - t_init_start, 3)
-                    if ext is None:
-                        if ext_name in self.required_extractors:
-                            raise RuntimeError(f"TextProcessor failed to create required extractor: {ext_name}")
-                        if self.strict:
-                            raise RuntimeError(f"TextProcessor failed to create extractor: {ext_name}")
-                        self.logger.warning(f"TextProcessor: extractor {ext_name} failed to instantiate (strict={self.strict})")
-                        status_by_extractor[ext_name] = "error"
-                        errors_by_extractor[ext_name] = "instantiation_failed"
-                        failed_count += 1
-                        continue
-                    
-                    # Validate that ext is an instance, not a class
-                    if not isinstance(ext, BaseExtractor):
-                        error_msg = f"TextProcessor: {ext_name} instantiation returned {type(ext).__name__}, expected BaseExtractor instance"
-                        if self.strict:
-                            raise RuntimeError(error_msg)
-                        self.logger.error(error_msg)
-                        status_by_extractor[ext_name] = "error"
-                        errors_by_extractor[ext_name] = "not_an_instance"
-                        failed_count += 1
-                        continue
+        if self._extractor_configs is not None:
+            cnt = {"successful_count": 0, "failed_count": 0, "empty_count": 0}
+            bundles = _bundle_specs_lexical_asr_parallel(
+                extractor_specs, self._batch_enable_cpu_parallel
+            )
+            idx_acc = 0
+            for bundle in bundles:
+                if len(bundle) > 1:
+                    with ThreadPoolExecutor(max_workers=len(bundle)) as ex:
+                        futs = [
+                            ex.submit(
+                                self._tp_run_lazy_spec_thread,
+                                bundle[i],
+                                current_doc,
+                                artifacts_dir_override,
+                                idx_acc + i + 1,
+                                total_extractors,
+                                True,
+                            )
+                            for i in range(len(bundle))
+                        ]
+                        results = [f.result() for f in futs]
                 else:
+                    results = [
+                        self._tp_run_lazy_spec_thread(
+                            bundle[0],
+                            current_doc,
+                            artifacts_dir_override,
+                            idx_acc + 1,
+                            total_extractors,
+                            False,
+                        )
+                    ]
+                idx_acc += len(bundle)
+                for res in results:
+                    self._apply_lazy_spec_thread_result(
+                        res,
+                        features=features,
+                        current_doc=current_doc,
+                        status_by_extractor=status_by_extractor,
+                        errors_by_extractor=errors_by_extractor,
+                        empty_reasons_by_extractor=empty_reasons_by_extractor,
+                        models_used_all=models_used_all,
+                        features_flat_conflicts=features_flat_conflicts,
+                        counters=cnt,
+                        total_extractors=total_extractors,
+                    )
+            successful_count = cnt["successful_count"]
+            failed_count = cnt["failed_count"]
+            empty_count = cnt["empty_count"]
+        else:
+            for idx, spec in enumerate(extractor_specs, 1):
+                ext = None
+                ext_name = None
+                step_device: str | None = None
+                try:
                     # Legacy mode: находим экстрактор по имени
                     ext_name = spec[0] if isinstance(spec, tuple) else spec.__class__.__name__
+                    if isinstance(spec, tuple) and len(spec) > 1:
+                        step_device = str(spec[1])
                     ext = next((e for e in self.extractors if e.__class__.__name__ == ext_name), None)
                     if ext is None:
                         continue
                     init_s = 0.0
-                
-                # Выполняем извлечение с обработкой ошибок
-                part: Dict[str, Any] = {}
-                try:
-                    part = ext.extract(current_doc) or {}
-                except Exception as e:
-                    ext_class_name = ext.__class__.__name__
-                    err_msg = str(e)
-                    status_by_extractor[ext_class_name] = "error"
-                    errors_by_extractor[ext_class_name] = err_msg
-                    failed_count += 1
-                    if ext_class_name in self.required_extractors:
-                        raise RuntimeError(f"TextProcessor: required extractor {ext_class_name} raised exception: {err_msg}") from e
-                    self.logger.warning(f"TextProcessor: extractor {ext_class_name} raised exception: {err_msg}", exc_info=True)
-                    continue
+                    if self.logger:
+                        device_attr = getattr(ext, "device", "cpu")
+                        self.logger.info(f"TextProcessor: [{idx}/{total_extractors}] running {ext_name} (device={device_attr})")
 
-                # Extract status from part (if available)
-                part_status = part.get("status", "ok")
-                if isinstance(part_status, str):
-                    status_by_extractor[ext.__class__.__name__] = part_status
-                    if part_status == "error":
+                    # Выполняем извлечение с обработкой ошибок
+                    part: Dict[str, Any] = {}
+                    t_extract_start = time.perf_counter()
+                    try:
+                        if self.logger:
+                            self.logger.debug(f"TextProcessor: [{idx}/{total_extractors}] {ext.__class__.__name__} calling extract()...")
+                        part = ext.extract(current_doc) or {}
+                        if self.logger:
+                            self.logger.debug(f"TextProcessor: [{idx}/{total_extractors}] {ext.__class__.__name__} extract() returned: status={part.get('status', 'ok')}, has_result={'result' in part}, has_timings={'timings_s' in part}")
+                    except Exception as e:
+                        ext_class_name = ext.__class__.__name__
+                        err_msg = str(e)
+                        extract_time = round(time.perf_counter() - t_extract_start, 3)
+                        status_by_extractor[ext_class_name] = "error"
+                        errors_by_extractor[ext_class_name] = err_msg
                         failed_count += 1
-                        err = part.get("error") or errors_by_extractor.get(ext.__class__.__name__) or "unknown_error"
-                        errors_by_extractor[ext.__class__.__name__] = str(err)
-                    elif part_status == "empty":
-                        empty_count += 1
-                        empty_reason = part.get("empty_reason")
-                        if empty_reason:
-                            empty_reasons_by_extractor[ext.__class__.__name__] = str(empty_reason)
+                        if ext_class_name in self.required_extractors:
+                            if self.logger:
+                                self.logger.error(f"TextProcessor: [{idx}/{total_extractors}] REQUIRED extractor {ext_class_name} FAILED after {extract_time}s", exc_info=True)
+                            raise RuntimeError(f"TextProcessor: required extractor {ext_class_name} raised exception: {err_msg}") from e
+                        if self.logger:
+                            import traceback
+                            tb_str = ''.join(traceback.format_exception(type(e), e, e.__traceback__))
+                            self.logger.error(
+                                f"TextProcessor: [{idx}/{total_extractors}] {ext_class_name} raised exception after {extract_time}s:\n"
+                                f"  Error: {err_msg}\n"
+                                f"  Type: {type(e).__name__}\n"
+                                f"  Traceback:\n{tb_str}",
+                                exc_info=False  # уже вывели traceback вручную
+                            )
+                        continue
+
+                    # Extract status from part (if available)
+                    extract_time = round(time.perf_counter() - t_extract_start, 3)
+                    part_status = part.get("status", "ok")
+                    ext_name = ext.__class__.__name__
+
+                    if isinstance(part_status, str):
+                        status_by_extractor[ext_name] = part_status
+                        if part_status == "error":
+                            failed_count += 1
+                            err = part.get("error") or errors_by_extractor.get(ext_name) or "unknown_error"
+                            errors_by_extractor[ext_name] = str(err)
+                            if self.logger:
+                                error_details = part.get("error_details") or {}
+                                self.logger.error(
+                                    f"TextProcessor: [{idx}/{total_extractors}] {ext_name} FAILED after {extract_time}s:\n"
+                                    f"  Error: {err}\n"
+                                    f"  Details: {error_details if error_details else 'none'}"
+                                )
+                        elif part_status == "empty":
+                            empty_count += 1
+                            empty_reason = part.get("empty_reason")
+                            if empty_reason:
+                                empty_reasons_by_extractor[ext_name] = str(empty_reason)
+                            if self.logger:
+                                self.logger.info(f"TextProcessor: [{idx}/{total_extractors}] {ext_name} completed (empty: {empty_reason}) ({extract_time}s)")
+                        else:
+                            successful_count += 1
+                            # Логируем детали успешного результата
+                            if self.logger:
+                                result = part.get("result", {})
+                                features_flat = result.get("features_flat", {}) if isinstance(result, dict) else {}
+                                features_count = len(features_flat) if isinstance(features_flat, dict) else 0
+                                models_used = result.get("meta", {}).get("models_used", []) if isinstance(result, dict) else []
+                                models_str = ", ".join([m.get("name", "unknown") for m in models_used if isinstance(m, dict)]) if models_used else "none"
+                                details = []
+                                if features_count > 0:
+                                    details.append(f"{features_count} features")
+                                if models_str != "none":
+                                    details.append(f"models: {models_str}")
+                                details_str = f" ({', '.join(details)})" if details else ""
+                                self.logger.info(f"TextProcessor: [{idx}/{total_extractors}] {ext_name} completed (ok) ({extract_time}s){details_str}")
                     else:
                         successful_count += 1
-                else:
-                    successful_count += 1
+                        if self.logger:
+                            self.logger.info(f"TextProcessor: [{idx}/{total_extractors}] {ext_name} completed (ok) ({extract_time}s)")
 
-                # keep per-extractor system snapshots
-                if "system" in part and isinstance(part["system"], dict):
-                    features.setdefault("systems_by_extractor", {})
-                    features["systems_by_extractor"][ext.__class__.__name__] = part["system"]
+                    # keep per-extractor system snapshots
+                    if "system" in part and isinstance(part["system"], dict):
+                        features.setdefault("systems_by_extractor", {})
+                        features["systems_by_extractor"][ext.__class__.__name__] = part["system"]
 
-                # keep per-extractor results (separated by extractor)
-                if "result" in part and isinstance(part["result"], dict):
-                    features.setdefault("results_by_extractor", {})
-                    features["results_by_extractor"][ext.__class__.__name__] = part["result"]
-                    # Optional: merge flat scalar features into a single stable dict (preferred for NPZ export).
-                    ff = part["result"].get("features_flat") if isinstance(part["result"].get("features_flat"), dict) else None
-                    if isinstance(ff, dict) and ff:
-                        features.setdefault("features_flat", {})
-                        # Detect conflicts (same key from different extractors)
-                        for key in ff.keys():
-                            if key in features["features_flat"]:
-                                conflict_msg = f"{key} (from {ext.__class__.__name__}, previously from another extractor)"
-                                features_flat_conflicts.append(conflict_msg)
-                                self.logger.warning(f"TextProcessor: features_flat conflict: {conflict_msg}")
-                        # last-wins; keys should be unique across extractors by convention
-                        features["features_flat"].update(ff)
-                    
-                    # Collect models_used from extractor result
-                    result_meta = part["result"].get("meta") if isinstance(part["result"].get("meta"), dict) else {}
-                    models_from_result = result_meta.get("models_used") if isinstance(result_meta.get("models_used"), list) else []
-                    if models_from_result:
-                        for m in models_from_result:
-                            if isinstance(m, dict):
-                                models_used_all.append(dict(m))
-                    
-                    # propagate mutations to subsequent extractors (privacy-safe: mutations are not persisted in `result` by default)
-                    muts = part.get("mutations") if isinstance(part.get("mutations"), dict) else None
-                    if muts:
-                        cleaned = muts.get("cleaned_texts") if isinstance(muts.get("cleaned_texts"), dict) else None
-                        if cleaned:
-                            try:
-                                if "title" in cleaned:
-                                    setattr(current_doc, "title", cleaned["title"])
-                                if "description" in cleaned:
-                                    setattr(current_doc, "description", cleaned["description"])
-                            except Exception:
-                                pass
-                        tags = muts.get("hashtags") if isinstance(muts.get("hashtags"), list) else None
-                        if tags is not None:
-                            try:
-                                setattr(current_doc, "hashtags", tags)
-                            except Exception:
-                                pass
+                    # keep per-extractor results (separated by extractor)
+                    if "result" in part and isinstance(part["result"], dict):
+                        features.setdefault("results_by_extractor", {})
+                        features["results_by_extractor"][ext.__class__.__name__] = part["result"]
+                        # Optional: merge flat scalar features into a single stable dict (preferred for NPZ export).
+                        ff = part["result"].get("features_flat") if isinstance(part["result"].get("features_flat"), dict) else None
+                        if isinstance(ff, dict) and ff:
+                            features.setdefault("features_flat", {})
+                            # Detect conflicts (same key from different extractors)
+                            for key in ff.keys():
+                                if key in features["features_flat"]:
+                                    conflict_msg = f"{key} (from {ext.__class__.__name__}, previously from another extractor)"
+                                    features_flat_conflicts.append(conflict_msg)
+                                    self.logger.warning(f"TextProcessor: features_flat conflict: {conflict_msg}")
+                            # last-wins; keys should be unique across extractors by convention
+                            features["features_flat"].update(ff)
 
-                # keep per-extractor timings (seconds)
-                if "timings_s" in part and isinstance(part["timings_s"], dict):
-                    features.setdefault("timings_by_extractor", {})
-                    tdict = dict(part["timings_s"])  # copy
-                    # добавить время инициализации экстрактора
-                    tdict.setdefault("init", init_s)
-                    features["timings_by_extractor"][ext.__class__.__name__] = tdict
-                else:
-                    # нет таймингов от экстрактора — всё равно зафиксируем init
-                    features.setdefault("timings_by_extractor", {})
-                    features["timings_by_extractor"][ext.__class__.__name__] = {"init": init_s}
+                        # Collect models_used from extractor result
+                        result_meta = part["result"].get("meta") if isinstance(part["result"].get("meta"), dict) else {}
+                        models_from_result = result_meta.get("models_used") if isinstance(result_meta.get("models_used"), list) else []
+                        if models_from_result:
+                            for m in models_from_result:
+                                if isinstance(m, dict):
+                                    models_used_all.append(dict(m))
 
-                # device/version: keep last non-empty
-                if part.get("device"):
-                    features["device"] = part.get("device")
-                if part.get("version"):
-                    features["version"] = part.get("version")
+                        # propagate mutations to subsequent extractors (privacy-safe: mutations are not persisted in `result` by default)
+                        muts = part.get("mutations") if isinstance(part.get("mutations"), dict) else None
+                        if muts:
+                            cleaned = muts.get("cleaned_texts") if isinstance(muts.get("cleaned_texts"), dict) else None
+                            if cleaned:
+                                try:
+                                    if "title" in cleaned:
+                                        setattr(current_doc, "title", cleaned["title"])
+                                    if "description" in cleaned:
+                                        setattr(current_doc, "description", cleaned["description"])
+                                except Exception:
+                                    pass
+                            tags = muts.get("hashtags") if isinstance(muts.get("hashtags"), list) else None
+                            if tags is not None:
+                                try:
+                                    setattr(current_doc, "hashtags", tags)
+                                except Exception:
+                                    pass
 
-                # error: collect last non-empty (for backward compat); detailed errors can be found per extractor inside result if needed
-                if part.get("error"):
-                    features["error"] = part.get("error")
+                    # keep per-extractor timings (seconds)
+                    if "timings_s" in part and isinstance(part["timings_s"], dict):
+                        features.setdefault("timings_by_extractor", {})
+                        tdict = dict(part["timings_s"])  # copy
+                        # добавить время инициализации экстрактора
+                        tdict.setdefault("init", init_s)
+                        features["timings_by_extractor"][ext.__class__.__name__] = tdict
+                    else:
+                        # нет таймингов от экстрактора — всё равно зафиксируем init
+                        features.setdefault("timings_by_extractor", {})
+                        features["timings_by_extractor"][ext.__class__.__name__] = {"init": init_s}
 
-            finally:
-                # Явно удаляем ссылку и запускаем сборщик мусора (без ручной очистки GPU)
-                if ext is not None:
-                    try:
-                        del ext
-                        import gc
-                        gc.collect()
-                    except Exception:
-                        pass
+                    # device/version: keep last non-empty
+                    if part.get("device"):
+                        features["device"] = part.get("device")
+                    if part.get("version"):
+                        features["version"] = part.get("version")
+
+                    # error: collect last non-empty (for backward compat); detailed errors can be found per extractor inside result if needed
+                    if part.get("error"):
+                        features["error"] = part.get("error")
+
+                finally:
+                    # Явно удаляем ссылку; затем gc / CUDA cache и опционально сброс глобального ModelManager.
+                    if ext is not None:
+                        try:
+                            del ext
+                        except Exception:
+                            pass
+                    _text_processor_memory_after_step(step_device=step_device, logger=self.logger)
 
         # Check required extractors
         for req_name in self.required_extractors:
@@ -572,6 +1109,7 @@ class MainProcessor:
         if features_flat_conflicts:
             features["features_flat_conflicts"] = features_flat_conflicts
 
+        _text_processor_memory_run_end(self.logger)
         return features
 
     def run_batch(
@@ -679,21 +1217,30 @@ class MainProcessor:
             
             for spec in level_specs:
                 name, device, params = spec
-                if device == "cuda" or "gpu" in str(device).lower():
+                eff = _effective_extractor_device(str(device), params)
+                if eff == "cuda":
                     if enable_gpu_batching:
                         # Check if extractor supports batch
+                        ext_probe: BaseExtractor | None = None
                         try:
-                            ext = self._instantiate_extractor_by_name_with_params(name, device, params, artifacts_dir_override=None)
-                            if ext and hasattr(ext, "supports_batch") and ext.supports_batch:
+                            ext_probe = self._instantiate_extractor_by_name_with_params(
+                                name, device, params, artifacts_dir_override=None
+                            )
+                            if ext_probe and hasattr(ext_probe, "supports_batch") and ext_probe.supports_batch:
                                 gpu_batch_specs.append(spec)
                             else:
                                 gpu_legacy_specs.append(spec)
-                            if ext:
-                                del ext
-                                import gc
-                                gc.collect()
                         except Exception:
                             gpu_legacy_specs.append(spec)
+                        finally:
+                            try:
+                                if ext_probe is not None:
+                                    del ext_probe
+                            except Exception:
+                                pass
+                            _text_processor_memory_after_step(
+                                step_device=eff, logger=self.logger, sync_model_manager=True
+                            )
                     else:
                         gpu_legacy_specs.append(spec)
                 else:
@@ -701,6 +1248,7 @@ class MainProcessor:
             
             # Process GPU batch extractors (all documents at once)
             for ext_name, device, params in gpu_batch_specs:
+                ext = None
                 try:
                     ext = self._instantiate_extractor_by_name_with_params(ext_name, device, params, artifacts_dir_override=None)
                     if ext is None:
@@ -726,15 +1274,20 @@ class MainProcessor:
                         results[doc_idx].setdefault("errors_by_extractor", {})[ext_name] = str(e)
                 finally:
                     try:
-                        del ext
-                        import gc
-                        gc.collect()
+                        if ext is not None:
+                            del ext
                     except Exception:
                         pass
+                    _text_processor_memory_after_step(
+                        step_device=_effective_extractor_device(str(device), params),
+                        logger=self.logger,
+                        sync_model_manager=True,
+                    )
             
             # Process GPU legacy extractors (sequential per document)
             for ext_name, device, params in gpu_legacy_specs:
                 for doc_idx, doc in enumerate(docs):
+                    ext = None
                     try:
                         ext = self._instantiate_extractor_by_name_with_params(
                             ext_name, device, params,
@@ -756,11 +1309,13 @@ class MainProcessor:
                         results[doc_idx].setdefault("errors_by_extractor", {})[ext_name] = str(e)
                     finally:
                         try:
-                            del ext
-                            import gc
-                            gc.collect()
+                            if ext is not None:
+                                del ext
                         except Exception:
                             pass
+                        _text_processor_memory_after_step(
+                            step_device=str(device), logger=self.logger, sync_model_manager=True
+                        )
             
             # Process CPU extractors in parallel (if enabled)
             if cpu_specs:
@@ -771,6 +1326,7 @@ class MainProcessor:
                         """Process one document with all CPU extractors in this level."""
                         doc_result: Dict[str, Any] = {}
                         for ext_name, device, params in cpu_specs:
+                            ext = None
                             try:
                                 ext = self._instantiate_extractor_by_name_with_params(
                                     ext_name, device, params,
@@ -825,6 +1381,7 @@ class MainProcessor:
                     # Sequential processing for CPU extractors
                     for doc_idx, doc in enumerate(docs):
                         for ext_name, device, params in cpu_specs:
+                            ext = None
                             try:
                                 ext = self._instantiate_extractor_by_name_with_params(
                                     ext_name, device, params,
@@ -846,12 +1403,18 @@ class MainProcessor:
                                 results[doc_idx].setdefault("errors_by_extractor", {})[ext_name] = str(e)
                             finally:
                                 try:
-                                    del ext
-                                    import gc
-                                    gc.collect()
+                                    if ext is not None:
+                                        del ext
                                 except Exception:
                                     pass
+                                _text_processor_memory_after_step(
+                                    step_device=_effective_extractor_device(str(device), params),
+                                    logger=self.logger,
+                                    sync_model_manager=True,
+                                )
         
+        _text_processor_memory_run_end(self.logger)
+
         # Finalize results: ensure status, error, empty_reason fields (matching run() output structure)
         for i, res in enumerate(results):
             if not res:

@@ -12,6 +12,7 @@ import logging
 import subprocess
 import json
 import hashlib
+import re
 import uuid
 import time
 from concurrent.futures import ThreadPoolExecutor, as_completed
@@ -315,6 +316,15 @@ def _build_subprocess_cmd(root_path, name, target, frames_dir, rs_path, cfg):
         else:
             kwargs.extend([key, str(v)])
 
+    # high_level_semantic: YAML booleans false are skipped above; CLI defaults otherwise require text/audio.
+    if name == "high_level_semantic" and isinstance(cfg, dict):
+        if cfg.get("require_text_processor") is False or cfg.get("require_text_processor") == "False":
+            kwargs.append("--no-require-text-processor")
+        if cfg.get("require_audio_loudness") is False or cfg.get("require_audio_loudness") == "False":
+            kwargs.append("--no-require-audio-loudness")
+        if cfg.get("require_audio_tempo") is False or cfg.get("require_audio_tempo") == "False":
+            kwargs.append("--no-require-audio-tempo")
+
     if not os.path.exists(python_exec):
         logger.warning(
             f"VisualProcessor | main | venv python not found at {python_exec}; "
@@ -417,6 +427,84 @@ def _resolve_gpu_slots(global_cfg: dict) -> int:
     return 2 if total_gb >= 19.0 else 1
 
 
+def _run_cmd_stream_capture(cmd: list, env: dict) -> tuple[int, str, str]:
+    """Запуск субпроцесса: потоковый вывод в консоль + полный захват для сообщения об ошибке."""
+    out_chunks: list[str] = []
+    err_chunks: list[str] = []
+
+    def _pump(pipe, sink, chunks: list[str]) -> None:
+        try:
+            for line in iter(pipe.readline, ""):
+                if line == "":
+                    break
+                chunks.append(line)
+                sink.write(line)
+                sink.flush()
+        finally:
+            try:
+                pipe.close()
+            except Exception:
+                pass
+
+    proc = subprocess.Popen(
+        cmd,
+        env=env,
+        stdout=subprocess.PIPE,
+        stderr=subprocess.PIPE,
+        text=True,
+        bufsize=1,
+    )
+    t_out = threading.Thread(target=_pump, args=(proc.stdout, sys.stdout, out_chunks), daemon=True)
+    t_err = threading.Thread(target=_pump, args=(proc.stderr, sys.stderr, err_chunks), daemon=True)
+    t_out.start()
+    t_err.start()
+    rc = int(proc.wait() or 0)
+    t_out.join(timeout=120)
+    t_err.join(timeout=120)
+    return rc, "".join(out_chunks), "".join(err_chunks)
+
+
+def _vp_subprocess_error_message(exc: subprocess.CalledProcessError, prog: str) -> str:
+    blob = ((exc.stderr or "") + "\n" + (exc.output or "")).replace("\r\n", "\n").strip()
+    lines = [ln.strip() for ln in blob.splitlines() if ln.strip()]
+    tail = lines[-14:] if len(lines) > 14 else lines
+    msg = " · ".join(tail)
+    msg = re.sub(r"\s+", " ", msg).strip()
+    if len(msg) > 1400:
+        msg = msg[:1397] + "…"
+    base = f"subprocess exit {exc.returncode} ({prog})"
+    return f"{base}: {msg}" if msg else base
+
+
+# global_config.yaml used http://localhost:8000 as a documentation placeholder (Fetcher port, not Triton).
+_TRITON_HTTP_FETCHER_PLACEHOLDERS = frozenset(
+    {"http://localhost:8000", "http://127.0.0.1:8000"}
+)
+
+
+def _triton_http_url_for_subprocess_env(*, cfg: Optional[dict], global_cfg: Optional[dict]) -> str:
+    """
+    Value for TRITON_HTTP_URL when the parent process did not export it.
+    If a component repeats the Fetcher placeholder, prefer inline_config.global.triton_http_url.
+    """
+
+    def _pick(d: Optional[dict]) -> str:
+        if not isinstance(d, dict):
+            return ""
+        try:
+            return str(d.get("triton_http_url") or "").strip()
+        except Exception:
+            return ""
+
+    comp = _pick(cfg)
+    glob = _pick(global_cfg)
+    if comp and comp not in _TRITON_HTTP_FETCHER_PLACEHOLDERS:
+        return comp
+    if glob and glob not in _TRITON_HTTP_FETCHER_PLACEHOLDERS:
+        return glob
+    return ""
+
+
 def _run_component_subprocess(
     *,
     kind: str,  # "module"|"core"
@@ -450,10 +538,33 @@ def _run_component_subprocess(
             logger.info(f"VisualProcessor | main | {kind} {name} | GPU slot acquired")
 
         # Ensure repo-root packages (e.g., dp_models, dp_triton) are importable inside component venvs.
+        # Also add VisualProcessor to PYTHONPATH so utils modules can be imported.
+        # root_path is the DataProcessor dir (where main.py lives), so vp_root = DataProcessor/VisualProcessor.
         env = os.environ.copy()
         repo_root = str(root_path)
+        vp_root = os.path.join(repo_root, "VisualProcessor")
         prev_pp = env.get("PYTHONPATH", "")
-        env["PYTHONPATH"] = repo_root if not prev_pp else (repo_root + os.pathsep + prev_pp)
+        # VP first so `utils.*` / `modules.*` always resolve here; repo next for dp_models/dp_triton.
+        new_pp = [vp_root, repo_root]
+        if prev_pp:
+            new_pp = new_pp + [prev_pp]
+        env["PYTHONPATH"] = os.pathsep.join(new_pp)
+
+        # ------------------------------------------------------------
+        # Audit v3: ModelManager Triton specs use ${TRITON_HTTP_URL}.
+        # Ensure it is present in the component subprocess environment.
+        # ------------------------------------------------------------
+        if not str(env.get("TRITON_HTTP_URL") or "").strip():
+            url = _triton_http_url_for_subprocess_env(cfg=cfg, global_cfg=global_cfg)
+            if url:
+                env["TRITON_HTTP_URL"] = url
+
+        # DP_MODELS_ROOT is required for bundled prompts/assets (e.g., Places365 categories) and caches.
+        # Set a deterministic default for local/dev if not provided.
+        if not str(env.get("DP_MODELS_ROOT") or "").strip():
+            candidate = os.path.join(str(root_path), "dp_models", "bundled_models")
+            if os.path.isdir(candidate):
+                env["DP_MODELS_ROOT"] = candidate
         
         # Suppress MediaPipe verbose logs for core_face_landmarks
         if name == "core_face_landmarks":
@@ -513,11 +624,22 @@ def _run_component_subprocess(
             if returncode != 0:
                 raise sp.CalledProcessError(returncode, cmd)
         else:
-            subprocess.run(cmd, check=True, env=env)
+            rc, out_cap, err_cap = _run_cmd_stream_capture(cmd, env)
+            if rc != 0:
+                raise subprocess.CalledProcessError(rc, cmd, output=out_cap, stderr=err_cap)
         ok, err = True, None
     except Exception as e:
-        logger.error(f"VisualProcessor | main | {kind} {name} | Error: {e}")
-        ok, err = False, str(e)
+        if isinstance(e, subprocess.CalledProcessError):
+            cmd = e.cmd
+            prog = "subprocess"
+            if isinstance(cmd, (list, tuple)) and cmd:
+                prog = os.path.basename(str(cmd[0]))
+            err = _vp_subprocess_error_message(e, prog)
+            logger.error(f"VisualProcessor | main | {kind} {name} | {err[:500]}{'…' if len(err) > 500 else ''}")
+            ok, err = False, err
+        else:
+            logger.error(f"VisualProcessor | main | {kind} {name} | Error: {e}")
+            ok, err = False, str(e)
     finally:
         duration_ms = int((time.time() - t0) * 1000)
         finished_at = _utc_iso_now()
@@ -571,6 +693,7 @@ def _run_component_subprocess(
                             name,
                             component_type=kind,
                             output_dir=comp_dir,
+                            frames_dir=global_cfg.get("frames_dir"),
                             enable_render=enable_render,
                             enable_html_render=enable_html_render,
                         )
@@ -760,6 +883,9 @@ def _process_single_video(
                     if isinstance(core_clip_cfg, dict) and core_clip_cfg.get("triton_http_url"):
                         module_cfg = module_cfg.copy()
                         module_cfg["triton_http_url"] = core_clip_cfg["triton_http_url"]
+                    elif g_config.get("triton_http_url") or os.environ.get("TRITON_HTTP_URL"):
+                        module_cfg = module_cfg.copy()
+                        module_cfg["triton_http_url"] = g_config.get("triton_http_url") or os.environ.get("TRITON_HTTP_URL")
                 
                 logger.info(f"VisualProcessor | _process_single_video | {video_id} | module {name} start")
                 
@@ -1726,7 +1852,7 @@ def run_batch(
                                 error_code=None,
                                 notes="processed_in_batch",
                                 producer_version="2.0",
-                                schema_version="core_depth_midas_npz_v1",
+                                schema_version="core_depth_midas_npz_v3",
                                 device_used="cuda",
                             )
                         )
@@ -1758,8 +1884,8 @@ def run_batch(
                                 error=None,
                                 error_code=None,
                                 notes="processed_in_batch",
-                                producer_version="2.0",
-                                schema_version="core_optical_flow_npz_v1",
+                                producer_version="2.2",
+                                schema_version="core_optical_flow_npz_v3",
                                 device_used="cuda",
                             )
                         )
@@ -1825,8 +1951,8 @@ def run_batch(
                                 error=None,
                                 error_code=None,
                                 notes="processed_in_batch",
-                                producer_version="1.0",
-                                schema_version="scene_classification_npz_v1",
+                                producer_version="2.0.1",
+                                schema_version="scene_classification_npz_v2",
                                 device_used="cuda" if scene_classification_config.get("runtime") == "triton" else "cpu",
                             )
                         )
@@ -1858,7 +1984,7 @@ def run_batch(
                                 error=None,
                                 error_code=None,
                                 notes="processed_in_batch",
-                                producer_version="2.0",
+                                producer_version="2.0.1",
                                 schema_version="cut_detection_npz_v1",
                                 device_used="cpu",  # cut_detection is mostly CPU-bound
                             )
@@ -2053,6 +2179,7 @@ CORE_DEPS = {
     "core_face_identity": ["core_object_detections", "core_face_landmarks"],  # Legacy name support
     "content_domain": ["core_clip"],
     "franchise_recognition": ["core_clip"],
+    "ocr_extractor": ["core_object_detections"],
 }
 
 
@@ -2442,7 +2569,6 @@ if __name__ == "__main__":
                 )
             )
             if status == "error":
-                logger.error(f"VisualProcessor | main | core_provider {name} failed")
                 if enforce_requirements and _is_required(req_map, name):
                     logger.error(f"VisualProcessor | main | required core_provider failed: {name}")
                     raise SystemExit(2)
@@ -2462,6 +2588,9 @@ if __name__ == "__main__":
                 if isinstance(core_clip_cfg, dict) and core_clip_cfg.get("triton_http_url"):
                     module_cfg = module_cfg.copy()
                     module_cfg["triton_http_url"] = core_clip_cfg["triton_http_url"]
+                elif g_config.get("triton_http_url") or os.environ.get("TRITON_HTTP_URL"):
+                    module_cfg = module_cfg.copy()
+                    module_cfg["triton_http_url"] = g_config.get("triton_http_url") or os.environ.get("TRITON_HTTP_URL")
             
             logger.info(f"VisualProcessor | main | module {name} start")
 
@@ -2536,11 +2665,9 @@ if __name__ == "__main__":
                     device_used=_device_used_for_component(name, module_cfg),
                 )
             )
-            if not ok:
-                logger.error(f"VisualProcessor | main | module {name} failed")
-                if enforce_requirements and status == "error" and _is_required(req_map, name):
-                    logger.error(f"VisualProcessor | main | required module failed: {name}")
-                    raise SystemExit(2)
+            if not ok and enforce_requirements and status == "error" and _is_required(req_map, name):
+                logger.error(f"VisualProcessor | main | required module failed: {name}")
+                raise SystemExit(2)
             return
 
         # Unknown/unenabled => ignore
@@ -2631,11 +2758,14 @@ if __name__ == "__main__":
                                 device_used=_device_used_for_component(module, config.get(module) or {}),
                             )
                         )
-                        if not ok:
-                            logger.error(f"VisualProcessor | main | module {module} failed")
-                            if enforce_requirements and status == "error" and _is_required(req_map, module):
-                                logger.error(f"VisualProcessor | main | required module failed: {module}")
-                                raise SystemExit(2)
+                        if (
+                            not ok
+                            and enforce_requirements
+                            and status == "error"
+                            and _is_required(req_map, module)
+                        ):
+                            logger.error(f"VisualProcessor | main | required module failed: {module}")
+                            raise SystemExit(2)
 
     finished_at = _utc_iso_now()
     duration_ms_total = int((time.time() - t0_total) * 1000)

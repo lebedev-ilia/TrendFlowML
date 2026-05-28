@@ -27,6 +27,11 @@ import librosa
 
 from src.core.base_extractor import BaseExtractor, ExtractorResult
 from src.core.audio_utils import AudioUtils
+from src.extractors.chroma_extractor.utils.resource_profile import (
+    prefix_snapshot,
+    resource_profile_enabled,
+    snapshot_process_resources,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -41,7 +46,7 @@ class ChromaExtractor(BaseExtractor):
     """Экстрактор хрома-признаков (12-полосный профиль классов высот) с поддержкой segment-based обработки."""
 
     name = "chroma"
-    version = "2.0.0"
+    version = "2.1.1"
     description = "Хрома (12-полосный профиль классов высот) с тюнингом и агрегатами"
     category = "spectral"
     dependencies = ["librosa", "numpy"]
@@ -60,7 +65,7 @@ class ChromaExtractor(BaseExtractor):
         mix_to_mono: bool = True,
         chroma_type: str = "cqt",
         normalize: Optional[str] = "l1",
-        # Additional CQT/STFT parameters
+        # Audit v3: canonical contract fixes n_chroma=12
         n_chroma: int = 12,
         fmin: Optional[float] = None,
         fmax: Optional[float] = None,
@@ -124,6 +129,15 @@ class ChromaExtractor(BaseExtractor):
         self.enable_stats_vector = bool(enable_stats_vector)
         self.enable_time_series = bool(enable_time_series)
 
+        # Audit v3: keep contract minimal and stable.
+        if self.enable_basic_stats or self.enable_extended_stats or self.enable_stats_vector:
+            raise RuntimeError(
+                "chroma | Audit v3: basic/extended stats and stats_vector are not supported in audited contract. "
+                "Disable enable_basic_stats/enable_extended_stats/enable_stats_vector."
+            )
+        if self.normalize != "l1":
+            raise RuntimeError(f"chroma | Audit v3: normalize must be 'l1', got {self.normalize!r}")
+
         # Optional audio normalization
         self.enable_audio_normalization = bool(enable_audio_normalization)
 
@@ -176,6 +190,9 @@ class ChromaExtractor(BaseExtractor):
             raise ValueError(f"chroma | normalize must be None, 'l1', or 'l2', got {normalize}")
         if n_chroma <= 0:
             raise ValueError(f"chroma | n_chroma must be positive, got {n_chroma}")
+        # Audit v3: fix n_chroma to 12 for stable downstream shapes
+        if int(n_chroma) != 12:
+            raise RuntimeError(f"chroma | Audit v3: n_chroma must be 12, got {n_chroma}")
         if fmin is not None and fmin < 0:
             raise ValueError(f"chroma | fmin must be non-negative, got {fmin}")
         if fmax is not None and fmax <= 0:
@@ -236,7 +253,39 @@ class ChromaExtractor(BaseExtractor):
         if not isinstance(features, dict):
             return False, "chroma | features must be a dict"
 
-        # Validate chroma statistics if present
+        # Validate canonical outputs (Audit v3)
+        chroma_mean = features.get("chroma_mean")
+        if chroma_mean is None:
+            return False, "chroma | chroma_mean is required"
+        chroma_mean_arr = np.asarray(chroma_mean, dtype=np.float32).reshape(-1)
+        if chroma_mean_arr.size != self.n_chroma:
+            return False, f"chroma | chroma_mean size ({chroma_mean_arr.size}) must be {self.n_chroma}"
+        if np.any(~np.isfinite(chroma_mean_arr)) or np.any(chroma_mean_arr < 0):
+            return False, "chroma | chroma_mean contains invalid values"
+
+        for k in ["chroma_entropy", "chroma_harmonic_stability", "chroma_contrast", "chroma_dominant_energy", "tuning_estimate"]:
+            v = features.get(k)
+            if v is None:
+                return False, f"chroma | {k} is required"
+            try:
+                fv = float(v)
+            except Exception:
+                return False, f"chroma | {k} must be float"
+            if not np.isfinite(fv):
+                return False, f"chroma | {k} is NaN or Inf"
+
+        # chroma_dominant_class required (int-like, 0..11)
+        vdc = features.get("chroma_dominant_class")
+        if vdc is None:
+            return False, "chroma | chroma_dominant_class is required"
+        try:
+            idx = int(vdc)
+        except Exception:
+            return False, "chroma | chroma_dominant_class must be int"
+        if idx < 0 or idx >= self.n_chroma:
+            return False, f"chroma | chroma_dominant_class out of range: {idx}"
+
+        # Legacy: validate chroma statistics if present (should not be used in audit v3).
         for stat_name in ["chroma_mean", "chroma_std", "chroma_min", "chroma_max", "chroma_median", "chroma_p25", "chroma_p75"]:
             if stat_name in features:
                 stat_value = features.get(stat_name)
@@ -460,6 +509,31 @@ class ChromaExtractor(BaseExtractor):
         
         return metrics
 
+    def _compute_minimal_metrics(self, chroma: np.ndarray) -> Dict[str, Any]:
+        """
+        Audit v3: compute minimal stable chroma signals.
+        """
+        chroma_mean = chroma.mean(axis=1).astype(np.float32)
+        dominant_idx = int(np.argmax(chroma_mean))
+        dominant_energy = float(chroma_mean[dominant_idx])
+
+        chroma_mean_norm = chroma_mean / (float(np.sum(chroma_mean)) + 1e-12)
+        entropy = float(-np.sum(chroma_mean_norm * np.log(chroma_mean_norm + 1e-12)))
+        contrast = float(np.max(chroma_mean) - np.min(chroma_mean))
+
+        chroma_std = chroma.std(axis=1).astype(np.float32)
+        mean_std = float(np.mean(chroma_std))
+        harmonic_stability = float(1.0 / (1.0 + mean_std))
+
+        return {
+            "chroma_mean": chroma_mean,
+            "chroma_dominant_class": dominant_idx,
+            "chroma_dominant_energy": dominant_energy,
+            "chroma_entropy": entropy,
+            "chroma_contrast": contrast,
+            "chroma_harmonic_stability": harmonic_stability,
+        }
+
     def _save_time_series_artifacts(
         self, features: Dict[str, Any], input_uri: str, tmp_path: str
     ) -> Dict[str, Any]:
@@ -474,23 +548,11 @@ class ChromaExtractor(BaseExtractor):
         Returns:
             Обновленный словарь с путями к .npy файлам (если сохранены)
         """
-        if self.artifacts_dir is None:
-            return features
-
-        # Сохраняем chroma time series если размер превышает threshold
+        # Audit v3: NPZ is the only source-of-truth. Do not save external .npy artifacts.
         if "chroma" in features and self.enable_time_series:
             chroma = features.get("chroma")
             if chroma is not None and isinstance(chroma, np.ndarray) and chroma.size > CHROMA_SAVE_THRESHOLD:
-                artifacts_path = Path(self.artifacts_dir)
-                artifacts_path.mkdir(parents=True, exist_ok=True)
-
-                npy_path = artifacts_path / "chroma.npy"
-                np.save(str(npy_path), chroma.astype(np.float32))
-
-                # Заменяем большой массив на путь (relpath внутри _artifacts/)
-                features["chroma_npy"] = "_artifacts/chroma.npy"
-                features["chroma_shape"] = chroma.shape
-                features["chroma_elements"] = int(chroma.size)
+                features["chroma_time_series_omitted"] = True
                 del features["chroma"]
 
         return features
@@ -502,6 +564,11 @@ class ChromaExtractor(BaseExtractor):
         Progress reporting: обновление прогресса для каждого этапа.
         """
         start_time = time.time()
+        t0 = time.perf_counter()
+        stage_ms: Dict[str, float] = {}
+        res_prof: Optional[Dict[str, Any]] = None
+        if resource_profile_enabled():
+            res_prof = {"at_start": snapshot_process_resources()}
         try:
             if not self._validate_input(input_uri):
                 error_code = self._classify_error(ValueError("Invalid input"), "audio_load_failed")
@@ -516,13 +583,17 @@ class ChromaExtractor(BaseExtractor):
             # Загружаем аудио
             if self.progress_callback:
                 self.progress_callback("chroma", 0, 7, "Loading audio")
+            t_load0 = time.perf_counter()
             y_t, sr = self.audio_utils.load_audio(input_uri, self.sample_rate)
             y = self.audio_utils.to_numpy(y_t)
+            stage_ms["load_audio_ms"] = float((time.perf_counter() - t_load0) * 1000.0)
 
             # Опциональная нормализация аудио
             if self.enable_audio_normalization:
+                t_norm0 = time.perf_counter()
                 y = self.audio_utils.normalize_audio(y_t)
                 y = self.audio_utils.to_numpy(y)
+                stage_ms["normalize_audio_ms"] = float((time.perf_counter() - t_norm0) * 1000.0)
 
             # Сведение в моно (опционально)
             if y.ndim == 2:
@@ -538,18 +609,23 @@ class ChromaExtractor(BaseExtractor):
             # Оценка строя
             if self.progress_callback:
                 self.progress_callback("chroma", 1, 7, "Estimating tuning")
+            tuning_failed = False
             try:
+                t_tune0 = time.perf_counter()
                 tuning = float(librosa.estimate_tuning(y=y, sr=sr))
-            except Exception as e:
-                error_code = self._classify_error(e, "tuning_failed")
-                raise RuntimeError(
-                    f"chroma | tuning estimation failed: {e} (error_code={error_code})"
-                )
+                stage_ms["tuning_ms"] = float((time.perf_counter() - t_tune0) * 1000.0)
+            except Exception:
+                # Audit v3: deterministic fallback to 0.0 (do not fail the whole extractor)
+                tuning = 0.0
+                tuning_failed = True
+                stage_ms["tuning_ms"] = float((time.perf_counter() - t_tune0) * 1000.0) if "t_tune0" in locals() else 0.0
 
             # Извлекаем хрома (no-fallback policy)
             if self.progress_callback:
                 self.progress_callback("chroma", 2, 7, f"Extracting chroma ({self.chroma_type})")
+            t_chr0 = time.perf_counter()
             chroma = self._extract_chroma(y, sr, tuning)
+            stage_ms["extract_chroma_ms"] = float((time.perf_counter() - t_chr0) * 1000.0)
 
             # Проверка размерности
             if chroma.ndim != 2 or chroma.shape[0] != self.n_chroma:
@@ -561,47 +637,32 @@ class ChromaExtractor(BaseExtractor):
             if self.progress_callback:
                 self.progress_callback("chroma", 3, 7, "Normalizing chroma")
             if self.normalize is not None:
+                t_cnorm0 = time.perf_counter()
                 chroma = self._normalize_chroma(chroma)
-
-            # Вычисляем статистики
-            if self.progress_callback:
-                self.progress_callback("chroma", 4, 7, "Computing statistics")
-            stats = self._compute_statistics(chroma)
-
-            # Вычисляем дополнительные метрики
-            if self.progress_callback:
-                self.progress_callback("chroma", 5, 7, "Computing additional metrics")
-            additional_metrics = self._compute_additional_metrics(chroma)
+                stage_ms["normalize_chroma_ms"] = float((time.perf_counter() - t_cnorm0) * 1000.0)
 
             # Формируем payload
             features: Dict[str, Any] = {}
+            # Minimal stable outputs (Audit v3)
+            if self.progress_callback:
+                self.progress_callback("chroma", 4, 7, "Computing minimal metrics")
+            t_min0 = time.perf_counter()
+            features.update(self._compute_minimal_metrics(chroma))
+            stage_ms["compute_minimal_ms"] = float((time.perf_counter() - t_min0) * 1000.0)
 
-            # Basic stats (feature-gated)
-            if self.enable_basic_stats:
-                features["chroma_mean"] = stats.get("chroma_mean", np.zeros(self.n_chroma, dtype=np.float32))
-                features["chroma_std"] = stats.get("chroma_std", np.zeros(self.n_chroma, dtype=np.float32))
-                features["chroma_min"] = stats.get("chroma_min", np.zeros(self.n_chroma, dtype=np.float32))
-                features["chroma_max"] = stats.get("chroma_max", np.zeros(self.n_chroma, dtype=np.float32))
+            # Audit v3: expose in-memory chroma for key_extractor reuse, without persisting it.
+            # extractor_runner.py prefers this field over persisted chroma.
+            # Avoid extra copies: chroma is already float32 in the audited path.
+            features["_shared_chroma"] = chroma
 
-            # Extended stats (feature-gated)
-            if self.enable_extended_stats:
-                features["chroma_median"] = stats.get("chroma_median", np.zeros(self.n_chroma, dtype=np.float32))
-                features["chroma_p25"] = stats.get("chroma_p25", np.zeros(self.n_chroma, dtype=np.float32))
-                features["chroma_p75"] = stats.get("chroma_p75", np.zeros(self.n_chroma, dtype=np.float32))
-
-            # Stats vector (feature-gated)
-            if self.enable_stats_vector:
-                features["chroma_stats_vector"] = stats.get("chroma_stats_vector", np.zeros(0, dtype=np.float32))
-
-            # Time series (feature-gated)
+            # Optional debug time series
             if self.enable_time_series:
-                features["chroma"] = chroma.astype(np.float32)
-
-            # Additional metrics
-            features.update(additional_metrics)
+                # Keep as a view/reference; saver may drop this key if too large.
+                features["chroma"] = chroma
 
             # Tuning estimate (always saved)
             features["tuning_estimate"] = float(tuning)
+            features["tuning_failed"] = bool(tuning_failed)
 
             # Метаданные
             features["sample_rate"] = int(sr)
@@ -617,40 +678,37 @@ class ChromaExtractor(BaseExtractor):
             # Сохраняем большие массивы в .npy
             if self.progress_callback:
                 self.progress_callback("chroma", 6, 7, "Saving artifacts")
+            t_save0 = time.perf_counter()
             features = self._save_time_series_artifacts(features, input_uri, tmp_path)
+            stage_ms["save_artifacts_ms"] = float((time.perf_counter() - t_save0) * 1000.0)
 
             # Валидация выходных данных
+            t_val0 = time.perf_counter()
             is_valid, error_msg = self._validate_output(features)
             if not is_valid:
                 error_code = self._classify_error(ValueError(error_msg), "validation_failed")
                 raise ValueError(f"chroma | {error_msg} (error_code={error_code})")
+            stage_ms["validate_output_ms"] = float((time.perf_counter() - t_val0) * 1000.0)
 
             # Добавляем contract version
             features["chroma_contract_version"] = CHROMA_CONTRACT_VERSION
 
             # Track enabled features for meta
             enabled_features = []
-            if self.enable_basic_stats:
-                enabled_features.append("basic_stats")
-            if self.enable_extended_stats:
-                enabled_features.append("extended_stats")
-            if self.enable_stats_vector:
-                enabled_features.append("stats_vector")
             if self.enable_time_series:
                 enabled_features.append("time_series")
             features["_features_enabled"] = enabled_features
 
             # Add stage timings to payload (for meta/stage_timings_ms)
-            processing_time = time.time() - start_time
-            features["stage_timings_ms"] = {
-                "load_audio_ms": 0.0,  # Audio loading is part of extraction
-                "extract_chroma_ms": float(processing_time * 1000.0),
-                "compute_stats_ms": 0.0,  # Stats computation is part of extraction
-                "save_artifacts_ms": 0.0,  # Artifact saving is part of extraction
-                "validate_output_ms": 0.0,  # Validation is part of extraction
-                "total_ms": float(processing_time * 1000.0),
-            }
+            features["stage_timings_ms"] = {**stage_ms, "total_ms": float((time.perf_counter() - t0) * 1000.0)}
+            if res_prof is not None:
+                res_prof["at_end"] = snapshot_process_resources()
+                features["chroma_resource_profile"] = {
+                    **prefix_snapshot("at_start", res_prof.get("at_start", {})),
+                    **prefix_snapshot("at_end", res_prof.get("at_end", {})),
+                }
 
+            processing_time = time.time() - start_time
             self._log_extraction_success(input_uri, processing_time)
             if self.progress_callback:
                 self.progress_callback("chroma", 7, 7, "Completed")
@@ -675,6 +733,11 @@ class ChromaExtractor(BaseExtractor):
         Progress reporting: каждые 10% сегментов (если progress_callback установлен).
         """
         start_time = time.time()
+        t0 = time.perf_counter()
+        stage_ms: Dict[str, float] = {}
+        res_prof: Optional[Dict[str, Any]] = None
+        if resource_profile_enabled():
+            res_prof = {"at_start": snapshot_process_resources()}
         try:
             if not self._validate_input(input_uri):
                 error_code = self._classify_error(ValueError("Invalid input"), "audio_load_failed")
@@ -692,12 +755,39 @@ class ChromaExtractor(BaseExtractor):
             progress_report_interval = max(1, total_segments // 10) if total_segments >= 10 else 1
             last_reported_pct = -1
 
-            # Process segments
-            chroma_all: List[np.ndarray] = []
-            tuning_all: List[float] = []
-            segment_centers: List[float] = []
-            segment_durations: List[float] = []
+            t_segmeta0 = time.perf_counter()
+            # Audit v3: strict alignment by N segments with segment_mask + NaNs.
+            segment_centers: List[float] = [float(seg.get("center_sec", 0.0)) for seg in segments]
+            segment_durations: List[float] = [
+                float(seg.get("end_sec", 0.0) - seg.get("start_sec", 0.0)) for seg in segments
+            ]
+            segment_mask = np.zeros((total_segments,), dtype=bool)
+            chroma_mean_by_segment = np.full((total_segments, self.n_chroma), np.nan, dtype=np.float32)
+            stage_ms["load_segments_ms"] = float((time.perf_counter() - t_segmeta0) * 1000.0)
 
+            # Audit v3: tuning is computed once on full audio; if fails -> 0.0.
+            tuning_failed = False
+            try:
+                t_full0 = time.perf_counter()
+                full_y_t, full_sr = self.audio_utils.load_audio(input_uri, self.sample_rate)
+                full_y = self.audio_utils.to_numpy(full_y_t)
+                if self.enable_audio_normalization:
+                    full_y_t_norm = self.audio_utils.normalize_audio(full_y_t)
+                    full_y = self.audio_utils.to_numpy(full_y_t_norm)
+                if full_y.ndim == 2:
+                    full_y = np.mean(full_y, axis=0) if self.mix_to_mono else full_y[0]
+                full_y = full_y.astype(np.float32)
+                stage_ms["load_full_audio_ms"] = float((time.perf_counter() - t_full0) * 1000.0)
+                t_tune0 = time.perf_counter()
+                tuning = float(librosa.estimate_tuning(y=full_y, sr=int(full_sr)))
+                stage_ms["tuning_ms"] = float((time.perf_counter() - t_tune0) * 1000.0)
+            except Exception:
+                tuning = 0.0
+                tuning_failed = True
+                if "t_tune0" in locals():
+                    stage_ms["tuning_ms"] = float((time.perf_counter() - t_tune0) * 1000.0)
+
+            t_proc0 = time.perf_counter()
             for seg_idx, seg in enumerate(segments):
                 # Progress reporting
                 if self.progress_callback and seg_idx % progress_report_interval == 0:
@@ -714,7 +804,6 @@ class ChromaExtractor(BaseExtractor):
                 # Load segment
                 start_sample = int(seg.get("start_sample", 0))
                 end_sample = int(seg.get("end_sample", 0))
-                center_sec = float(seg.get("center_sec", 0.0))
 
                 wav_t, _sr = self.audio_utils.load_audio_segment(
                     input_uri,
@@ -738,13 +827,8 @@ class ChromaExtractor(BaseExtractor):
 
                 wav = wav.astype(np.float32)
                 if wav.size == 0:
-                    continue  # Skip empty segments
-
-                # Оценка строя для сегмента
-                try:
-                    tuning = float(librosa.estimate_tuning(y=wav, sr=self.sample_rate))
-                except Exception:
-                    tuning = 0.0  # Fallback to 0.0 for segment
+                    # Keep alignment; mark as invalid
+                    continue
 
                 # Extract chroma for segment
                 seg_chroma = self._extract_chroma(wav, self.sample_rate, tuning)
@@ -754,58 +838,53 @@ class ChromaExtractor(BaseExtractor):
                     seg_chroma = self._normalize_chroma(seg_chroma)
 
                 # Собираем данные
-                chroma_all.append(seg_chroma)
-                tuning_all.append(tuning)
-                segment_centers.append(center_sec)
-                segment_durations.append(float((end_sample - start_sample) / self.sample_rate))
+                # Avoid float64 accumulation (smaller allocs, faster).
+                seg_mean = np.mean(seg_chroma, axis=1, dtype=np.float32)  # (12,)
+                if seg_mean.size == self.n_chroma and np.all(np.isfinite(seg_mean)):
+                    chroma_mean_by_segment[seg_idx, :] = seg_mean
+                    segment_mask[seg_idx] = True
+            stage_ms["process_segments_ms"] = float((time.perf_counter() - t_proc0) * 1000.0)
 
             # Final progress report
             if self.progress_callback:
                 self.progress_callback("chroma", total_segments, total_segments, "Aggregating results")
 
-            if not chroma_all:
-                raise ValueError("chroma | all segments produced empty chroma (error_code=chroma_validation_failed)")
+            # Require at least one valid segment.
+            if not bool(np.any(segment_mask)):
+                raise ValueError("chroma | all segments invalid/empty (error_code=chroma_validation_failed)")
 
-            # Aggregate chroma across segments
-            chroma_aggregated = np.concatenate(chroma_all, axis=1)  # Concatenate along time axis
-
-            # Вычисляем статистики на агрегированных данных
-            stats = self._compute_statistics(chroma_aggregated)
-            additional_metrics = self._compute_additional_metrics(chroma_aggregated)
+            # Aggregate chroma_mean across segments (duration-weighted, ignoring masked rows).
+            weights = np.asarray(segment_durations, dtype=np.float32)
+            w = np.where(segment_mask, np.maximum(weights, 0.0), 0.0)
+            w_sum = float(np.sum(w)) + 1e-12
+            t_ag0 = time.perf_counter()
+            chroma_mean = np.nansum(chroma_mean_by_segment * w.reshape(-1, 1), axis=0) / w_sum
+            stage_ms["aggregate_results_ms"] = float((time.perf_counter() - t_ag0) * 1000.0)
 
             # Формируем payload
             features: Dict[str, Any] = {}
+            features["chroma_mean"] = chroma_mean.astype(np.float32)
+            # Compute minimal scalars from chroma_mean and per-segment variation
+            dominant_idx = int(np.argmax(chroma_mean))
+            features["chroma_dominant_class"] = dominant_idx
+            features["chroma_dominant_energy"] = float(chroma_mean[dominant_idx])
+            chroma_mean_norm = chroma_mean / (float(np.sum(chroma_mean)) + 1e-12)
+            features["chroma_entropy"] = float(-np.sum(chroma_mean_norm * np.log(chroma_mean_norm + 1e-12)))
+            features["chroma_contrast"] = float(np.max(chroma_mean) - np.min(chroma_mean))
+            # stability: 1/(1+mean std across segments) using masked rows
+            std_per_class = np.nanstd(chroma_mean_by_segment, axis=0).astype(np.float32)
+            features["chroma_harmonic_stability"] = float(1.0 / (1.0 + float(np.nanmean(std_per_class))))
 
-            # Basic stats (feature-gated)
-            if self.enable_basic_stats:
-                features["chroma_mean"] = stats.get("chroma_mean", np.zeros(self.n_chroma, dtype=np.float32))
-                features["chroma_std"] = stats.get("chroma_std", np.zeros(self.n_chroma, dtype=np.float32))
-                features["chroma_min"] = stats.get("chroma_min", np.zeros(self.n_chroma, dtype=np.float32))
-                features["chroma_max"] = stats.get("chroma_max", np.zeros(self.n_chroma, dtype=np.float32))
-
-            # Extended stats (feature-gated)
-            if self.enable_extended_stats:
-                features["chroma_median"] = stats.get("chroma_median", np.zeros(self.n_chroma, dtype=np.float32))
-                features["chroma_p25"] = stats.get("chroma_p25", np.zeros(self.n_chroma, dtype=np.float32))
-                features["chroma_p75"] = stats.get("chroma_p75", np.zeros(self.n_chroma, dtype=np.float32))
-
-            # Stats vector (feature-gated)
-            if self.enable_stats_vector:
-                features["chroma_stats_vector"] = stats.get("chroma_stats_vector", np.zeros(0, dtype=np.float32))
-
-            # Time series (feature-gated)
+            # Optional segment-level sequence
             if self.enable_time_series:
-                features["chroma"] = chroma_aggregated.astype(np.float32)
+                features["segment_centers_sec"] = np.asarray(segment_centers, dtype=np.float32)
+                features["segment_durations_sec"] = np.asarray(segment_durations, dtype=np.float32)
+                features["segment_mask"] = segment_mask.astype(bool)
+                features["chroma_mean_by_segment"] = chroma_mean_by_segment.astype(np.float32)
 
-            # Additional metrics
-            features.update(additional_metrics)
-
-            # Tuning estimate (mean across segments)
-            features["tuning_estimate"] = float(np.mean(tuning_all)) if tuning_all else 0.0
-
-            # Per-segment data
-            features["segment_centers_sec"] = np.array(segment_centers, dtype=np.float32)
-            features["segment_durations_sec"] = np.array(segment_durations, dtype=np.float32)
+            # Tuning estimate (single global)
+            features["tuning_estimate"] = float(tuning)
+            features["tuning_failed"] = bool(tuning_failed)
             features["segments_count"] = int(total_segments)
 
             # Метаданные
@@ -817,44 +896,45 @@ class ChromaExtractor(BaseExtractor):
             features["chroma_type"] = self.chroma_type
             features["normalize"] = self.normalize
             features["n_chroma"] = int(self.n_chroma)
-            features["chroma_frames"] = int(chroma_aggregated.shape[1])
+            # Segment mode does not expose full spectrogram frames in audit v3 contract.
+            features["chroma_frames"] = 0
+
+            # For key_extractor reuse in the same run: provide a small in-memory proxy chroma.
+            # We do not want to persist full spectrograms; this is best-effort.
+            features["_shared_chroma"] = np.asarray(chroma_mean, dtype=np.float32).reshape(self.n_chroma, 1)
 
             # Сохраняем большие массивы в .npy
+            t_save0 = time.perf_counter()
             features = self._save_time_series_artifacts(features, input_uri, tmp_path)
+            stage_ms["save_artifacts_ms"] = float((time.perf_counter() - t_save0) * 1000.0)
 
             # Валидация выходных данных
+            t_val0 = time.perf_counter()
             is_valid, error_msg = self._validate_output(features)
             if not is_valid:
                 error_code = self._classify_error(ValueError(error_msg), "validation_failed")
                 raise ValueError(f"chroma | {error_msg} (error_code={error_code})")
+            stage_ms["validate_output_ms"] = float((time.perf_counter() - t_val0) * 1000.0)
 
             # Добавляем contract version
             features["chroma_contract_version"] = CHROMA_CONTRACT_VERSION
 
             # Track enabled features for meta
             enabled_features = []
-            if self.enable_basic_stats:
-                enabled_features.append("basic_stats")
-            if self.enable_extended_stats:
-                enabled_features.append("extended_stats")
-            if self.enable_stats_vector:
-                enabled_features.append("stats_vector")
             if self.enable_time_series:
                 enabled_features.append("time_series")
             features["_features_enabled"] = enabled_features
 
             # Add stage timings to payload (for meta/stage_timings_ms)
-            processing_time = time.time() - start_time
-            features["stage_timings_ms"] = {
-                "load_segments_ms": 0.0,  # Segment loading is part of extraction
-                "extract_chroma_ms": float(processing_time * 1000.0),
-                "aggregate_results_ms": 0.0,  # Aggregation is part of extraction
-                "compute_stats_ms": 0.0,  # Stats computation is part of extraction
-                "save_artifacts_ms": 0.0,  # Artifact saving is part of extraction
-                "validate_output_ms": 0.0,  # Validation is part of extraction
-                "total_ms": float(processing_time * 1000.0),
-            }
+            features["stage_timings_ms"] = {**stage_ms, "total_ms": float((time.perf_counter() - t0) * 1000.0)}
+            if res_prof is not None:
+                res_prof["at_end"] = snapshot_process_resources()
+                features["chroma_resource_profile"] = {
+                    **prefix_snapshot("at_start", res_prof.get("at_start", {})),
+                    **prefix_snapshot("at_end", res_prof.get("at_end", {})),
+                }
 
+            processing_time = time.time() - start_time
             self._log_extraction_success(input_uri, processing_time)
             return self._create_result(success=True, payload=features, processing_time=processing_time)
 

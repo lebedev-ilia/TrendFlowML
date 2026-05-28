@@ -15,6 +15,17 @@ import numpy as np
 logger = logging.getLogger(__name__)
 
 
+def _truthy_scalar(d: Dict[str, Any], key: str, *, default: float = 0.0) -> bool:
+    """0/1 flags after _clean_value may be None; treat like falsy for comparisons."""
+    v = d.get(key, default)
+    if v is None:
+        v = default
+    try:
+        return float(v) > 0.5
+    except (TypeError, ValueError):
+        return False
+
+
 def render_comments_embedder(
     extractor_features: Dict[str, Any],
     payload: Dict[str, Any],
@@ -97,18 +108,20 @@ def render_comments_embedder(
     
     # Summary
     render["summary"] = {
-        "present": bool(embedding.get("present", 0) > 0.5),
+        "present": _truthy_scalar(embedding, "present"),
         "count": _clean_value(embedding.get("count")),
         "dimension": _clean_value(embedding.get("dim")),
         "n_input": _clean_value(selection.get("n_input")),
         "n_deduped": _clean_value(selection.get("n_deduped")),
         "n_selected": _clean_value(selection.get("n_selected")),
         "total_chars_used": _clean_value(selection.get("total_chars_used")),
-        "truncated": bool(selection.get("truncated_by_total_chars_flag", 0) > 0.5),
-        "cache_hit": bool(cache.get("cache_hit", 0) > 0.5) if cache.get("cache_hit") is not None else None,
+        "truncated": _truthy_scalar(selection, "truncated_by_total_chars_flag"),
+        "cache_hit": (
+            None if cache.get("cache_hit") is None else _truthy_scalar(cache, "cache_hit")
+        ),
         "select_time_ms": _clean_value(performance.get("select_ms")),
         "encode_time_ms": _clean_value(performance.get("encode_ms")),
-        "device": "CUDA" if configuration.get("device_cuda", 0) > 0.5 else "CPU",
+        "device": "CUDA" if _truthy_scalar(configuration, "device_cuda") else "CPU",
     }
     
     return render
@@ -364,22 +377,22 @@ def render_comments_embedder_html(
                 </tr>
                 <tr>
                     <td>FP16</td>
-                    <td>{{'Да' if configuration.get('fp16', 0) > 0.5 else 'Нет'}}</td>
+                    <td>{{'Да' if (configuration.get('fp16') or 0) > 0.5 else 'Нет'}}</td>
                     <td>Использовалась ли половинная точность (FP16) для вычислений</td>
                 </tr>
                 <tr>
                     <td>Устройство CUDA</td>
-                    <td>{{'Да' if configuration.get('device_cuda', 0) > 0.5 else 'Нет'}}</td>
+                    <td>{{'Да' if (configuration.get('device_cuda') or 0) > 0.5 else 'Нет'}}</td>
                     <td>Использовался ли GPU для вычислений</td>
                 </tr>
                 <tr>
                     <td>Вычисление включено</td>
-                    <td>{{'Да' if configuration.get('compute_enabled', 0) > 0.5 else 'Нет'}}</td>
+                    <td>{{'Да' if (configuration.get('compute_enabled') or 0) > 0.5 else 'Нет'}}</td>
                     <td>Было ли включено вычисление эмбеддингов</td>
                 </tr>
                 <tr>
                     <td>Запись артефакта включена</td>
-                    <td>{{'Да' if configuration.get('write_artifact_enabled', 0) > 0.5 else 'Нет'}}</td>
+                    <td>{{'Да' if (configuration.get('write_artifact_enabled') or 0) > 0.5 else 'Нет'}}</td>
                     <td>Была ли включена запись файла с эмбеддингами</td>
                 </tr>
             </table>

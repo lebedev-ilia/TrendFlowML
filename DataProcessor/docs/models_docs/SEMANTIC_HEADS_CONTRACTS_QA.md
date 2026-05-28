@@ -1,7 +1,7 @@
 ## Semantic Heads & Object Detections — Contracts + Q&A (working doc)
 
 Этот файл — **единственная точка правды** для нового функционала вокруг:
-- `core_object_detections` (proposal generator, tracking required)
+- `core_object_detections` (proposal generator; Audit v3 baseline: tracking removed, используем surrogate `track_ids` downstream)
 - semantic heads (brands / car make+segment / face identity / scene+place)
 - переиспользование `core_clip`
 - правила качества, тесты, валидации, idempotency, dynamic batching constraints.
@@ -27,7 +27,7 @@
 - **Time axis source-of-truth**: `frames_dir/metadata.json.union_timestamps_sec`.
 - **Shared primary sampling group** (для наших core‑слоёв): все зависящие head’ы выравниваются по `frame_indices`
   от `core_object_detections` (или общей группы).
-- **Tracking required**: ByteTrack обязателен для `core_object_detections`.
+- **Tracking (baseline)**: в Audit v3 tracking **удалён** из `core_object_detections`; если нужен “настоящий” track_id, вернём как future-improvement без изменения core NPZ контракта.
 - **Triton batching пока не меняем**: cost считаем на unit=1; throughput — cross-video micro-batching scheduler’ом.
 
 ---
@@ -36,7 +36,7 @@
 
 ### 1.1 Proposal vs semantics (принцип)
 
-- `core_object_detections` даёт **геометрию (bbox) + track_id + базовые object/region классы**.
+- `core_object_detections` даёт **геометрию (bbox) + базовые object/region классы** (baseline: без tracking; downstream используют surrogate `track_ids` per-detection при необходимости).
 - Fine-grained semantics НЕ запихиваем в YOLO как 500 классов брендов/людей/зданий:
   - brands/logos → `core_brand_semantics`
   - car make/model/segment → `core_car_semantics`
@@ -51,15 +51,19 @@
 
 Artifact: `result_store/<platform>/<video>/<run>/core_object_detections/detections.npz`
 
-Обязательные ключи (v1):
+Обязательные ключи (Audit v3 baseline, schema v2):
 - `frame_indices (N,)`
+- `times_s (N,)`
 - `boxes (N, MAX, 4)` xyxy
+- `boxes_norm (N, MAX, 4)`
+- `centers_norm (N, MAX, 2)`
+- `areas_frac (N, MAX)`
 - `scores (N, MAX)`
 - `class_ids (N, MAX)`
 - `valid_mask (N, MAX)`
-- `tracks (N, MAX)` (track_id или -1)
 - `class_names (C,)` `"id:name"`
 - `meta` (dict, object-array; общие поля + models_used[])
+- `meta_json` (str; JSON-строка meta для совместимости между окружениями)
 
 ### 2.2 `core_brand_semantics` (существует, MVP)
 

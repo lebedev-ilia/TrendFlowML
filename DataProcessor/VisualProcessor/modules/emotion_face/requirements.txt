@@ -1,0 +1,2 @@
+# Dependencies for emotion_face module
+# Add module-specific dependencies here

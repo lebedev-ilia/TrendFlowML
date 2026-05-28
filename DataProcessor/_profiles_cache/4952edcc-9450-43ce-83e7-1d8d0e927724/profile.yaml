@@ -1,0 +1,16 @@
+config_hash: ingestion-default
+visual:
+  cfg_path: /media/ilya/Новый том/TrendFlowML/DataProcessor/configs/audit_v3/visual/visual_core_5_only.yaml
+processors:
+  segmenter:
+    enabled: true
+    required: true
+  audio:
+    enabled: false
+    required: false
+  text:
+    enabled: false
+    required: false
+  visual:
+    enabled: true
+    required: true

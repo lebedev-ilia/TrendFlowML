@@ -90,6 +90,7 @@ def render_embedding_source_id_extractor(
         "primary_source": primary_source,
         "vector_id": embedding_source_id.get("vector_id") if isinstance(embedding_source_id, dict) else None,
         "vector_store_uri": embedding_source_id.get("vector_store_uri") if isinstance(embedding_source_id, dict) else None,
+        "model_name": embedding_source_id.get("model_name") if isinstance(embedding_source_id, dict) else None,
         "model_version": embedding_source_id.get("model_version") if isinstance(embedding_source_id, dict) else None,
     }
     
@@ -194,6 +195,10 @@ def render_embedding_source_id_extractor_html(
                     <div class="feature-value"><span class="code">{summary.get("vector_store_uri", "N/A")}</span></div>
                 </div>
                 <div class="feature-card">
+                    <div class="feature-name">Имя модели</div>
+                    <div class="feature-value">{summary.get("model_name", "N/A")}</div>
+                </div>
+                <div class="feature-card">
                     <div class="feature-name">Версия модели</div>
                     <div class="feature-value">{summary.get("model_version", "N/A")}</div>
                 </div>
@@ -277,9 +282,14 @@ def render_embedding_source_id_extractor_html(
                     <td>URI хранилища векторов (например, faiss://semantic_titles_v1)</td>
                 </tr>
                 <tr>
+                    <td>Имя модели</td>
+                    <td>{embedding_source_id.get("model_name", "N/A") if isinstance(embedding_source_id, dict) else "N/A"}</td>
+                    <td>Логическое имя модели из upstream meta (может отсутствовать для transcript mean)</td>
+                </tr>
+                <tr>
                     <td>Версия модели</td>
                     <td>{embedding_source_id.get("model_version", "N/A") if isinstance(embedding_source_id, dict) else "N/A"}</td>
-                    <td>Версия модели, использованной для создания эмбеддинга</td>
+                    <td>Версия/идентификатор модели (из meta или конфига; не смешивается с именем)</td>
                 </tr>
                 <tr>
                     <td>Weights Digest</td>

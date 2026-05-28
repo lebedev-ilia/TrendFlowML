@@ -1,5 +1,8 @@
 ## Component: `core_depth_midas` (Tier‑0 baseline)
 
+- **Контракт NPZ, melt/QA, примеры команд:** [docs/FEATURE_DESCRIPTION.md](docs/FEATURE_DESCRIPTION.md)
+- **Валидатор:** `utils/validate_core_depth_midas_npz.py` (`--struct`, `--qa`, `--ranges` или батч `--results-base`)
+
 ### Назначение
 
 `core_depth_midas` вычисляет depth maps на primary выборке кадров (union-domain) и сохраняет их в `depth.npz`.
@@ -8,7 +11,8 @@
 
 ### Входы
 
-- **Кадры**: `FrameManager.get(idx)` из `frames_dir` (RGB uint8).
+- **Кадры**: `FrameManager.get(idx)` из `frames_dir` (RGB uint8 по умолчанию).
+  - Если `FrameManager` возвращает BGR изображения, используйте `--frames-bgr` для автоматического преобразования в RGB.
 - **Sampling (строго)**: из `frames_dir/metadata.json`:
 
 ```json
@@ -85,11 +89,31 @@ GPU (Triton):
 - `frame_indices (N,) int32`
 - `times_s (N,) float32` — `union_timestamps_sec[frame_indices]`
 - `depth_maps (N, out_h, out_w) float32`
+- `depth_maps_norm (N, out_h, out_w) float32` — robust per-frame normalization to `[0,1]` using `depth_p05/depth_p95`
 - `depth_mean (N,) float32` — mean(depth_maps[i])
 - `depth_std (N,) float32` — std(depth_maps[i])
 - `depth_p05 (N,) float32` — 5-й перцентиль depth_maps[i] (по finite значениям)
 - `depth_p95 (N,) float32` — 95-й перцентиль depth_maps[i] (по finite значениям)
+- `depth_range_robust (N,) float32` — `depth_p95 - depth_p05`
+- `depth_complexity_score (N,) float32` — proxy сложности сцены по depth (mean |grad| на `depth_maps_norm`)
+- `foreground_background_separation_proxy (N,) float32` — proxy разделения FG/BG: `depth_range_robust / (depth_std + eps)`
+- **Backend preview maps (Audit v3)**:
+  - `preview_frame_indices (K,) int32` — subset из `frame_indices` (равномерно по времени)
+  - `preview_times_s (K,) float32`
+  - `preview_depth_maps (K, out_h, out_w) float32`
+  - `preview_depth_maps_norm (K, out_h, out_w) float32`
 - `meta` (dict, object-array)
+
+Примечание (Audit v3, breaking change):
+- В `core_depth_midas_npz_v2+` **убраны legacy top-level scalar keys** (`version`, `created_at`, `model_name`, `total_frames`).
+  Эти поля допускаются только внутри `meta.*`.
+
+### Backend contract (что отдаём наружу)
+
+Audit v3 goal: backend может **рисовать несколько depth-карт** (например `K=10`) равномерно по видео + показывать timeline и простые прокси-скоры.
+
+- Для карт используем `preview_*` (и предпочтительно `preview_depth_maps_norm` для визуализации).
+- Для timeline используем `depth_mean/std/p05/p95` + `depth_complexity_score` + `foreground_background_separation_proxy`.
 
 ### Empty/error semantics
 
@@ -97,8 +121,8 @@ GPU (Triton):
 
 ### Meta / models_used
 
-- `models_used[].runtime="triton-gpu"`
-- `models_used[].engine="onnx"` (served by Triton)
+- Если задан `--triton-model-spec`: используем `models_used[]` из ModelManager (это фиксирует identity spec’а + weights_digest).
+- Иначе (legacy): `models_used[]` формируется из CLI аргументов компонента.
 - `models_used[].device="cuda"`
 - `weights_digest="unknown"` (baseline)
 - `stage_timings_ms` — словарь `{stage_name: duration_ms}` с таймингами ключевых стадий (initialization, depth_inference_total, saving, total)
@@ -137,45 +161,85 @@ GPU (Triton):
 - **Temporal consistency**: depth_mean должен изменяться плавно между соседними кадрами (без резких скачков).
 - Проверка консистентности: `times_s` соответствует `union_timestamps_sec[frame_indices]`.
 
-### Human-friendly визуализация (Render System)
+### Render (dev-only): как читать глубину человеку
 
-`core_depth_midas` генерирует **render-context JSON** для каждого запуска:
+Цель рендера `core_depth_midas`: объяснить человеку (без ML) “что такое depth” и как по выходу понять,
+есть ли ошибки/аномалии, и что означает динамика по времени.
 
-- Путь: `result_store/<platform_id>/<video_id>/<run_id>/core_depth_midas/_render/render_context.json`
+#### Важная оговорка (что такое depth MiDaS)
 
-Этот JSON содержит:
-- **Summary**: статистики по depth maps (frames_count, depth_map_size, global_depth_mean/std/min/max/median)
-- **Timeline**: данные по каждому кадру (frame_index, time_sec, depth_mean, depth_std, depth_p05, depth_p95)
-- **Distributions**: распределения depth_mean, depth_std и всех depth maps (min, max, mean, std, median, percentiles)
+MiDaS даёт **относительную** глубину (это **не метры**):
 
-Render-context может быть использован:
-- **LLM** для генерации текстовых описаний глубины видео
-- **Frontend** для построения графиков и визуализаций (timeline charts, distributions)
-- **Debugging**: быстрая проверка качества depth maps без загрузки NPZ
+- “ближе”/“дальше” внутри одного кадра — осмысленно
+- сравнивать абсолютные значения между разными видео нельзя
 
-**HTML debug страница** (опционально):
-- Путь: `result_store/.../core_depth_midas/_render/render.html`
-- Содержит интерактивные графики (Chart.js):
-  - Timeline: depth_mean и depth_std по времени
-  - Distributions: статистики по depth_mean, depth_std и всем depth maps
-  - Summary metrics: ключевые показатели в удобном формате
+Поэтому в контракте есть нормализованные карты `depth_maps_norm` и robust шкала через `depth_p05/depth_p95`.
 
-**Конфигурация** (в `global_config.yaml`):
+#### Где лежат файлы рендера
+
+- `.../core_depth_midas/_render/render_context.json`
+- `.../core_depth_midas/_render/render.html`
+
+#### Что показывает текущий HTML (MVP сейчас)
+
+- **Timeline**:
+  - `depth_mean` — средняя “глубина” кадра (относительная)
+  - `depth_std` / `depth_range_robust` — насколько глубина “разнообразная” (сложная сцена vs плоская)
+  - `depth_complexity_score` — proxy сложности (градиенты на `depth_maps_norm`)
+  - `foreground_background_separation_proxy` — proxy “есть ли сильное разделение FG/BG”
+- **Distributions** по ключевым скалярам.
+
+Это помогает понять “есть ли жизнь” в depth, и нет ли NaN/inf/скачков.
+
+#### Что ДОЛЖНО появиться в персонализированном рендере (target)
+
+Чтобы человек понял результат “глазами”, рендер обязан включать **картинки**:
+
+- **Preview depth maps**: минимум K=10 кадров равномерно по видео:
+  - исходный кадр (thumbnail)
+  - depth overlay (например colormap “magma/viridis”) + легенда (0..1 для `depth_maps_norm`)
+- **Топ-кадры по сложности**:
+  - топ-3 по `depth_complexity_score` (и анти-топ-3) с превью
+- **Гистограммы depth**:
+  - per-frame histogram для 1–2 выбранных кадров (показывает, есть ли “две моды” FG/BG)
+
+Важно: показывать именно `preview_depth_maps_norm` (0..1), чтобы визуализация была стабильной.
+
+#### Как интерпретировать типовые ситуации
+
+- **Depth карты “шумные”, пятна, рябь**:
+  - часто означает плохой контраст/ночь/сильный compression или неподходящий preprocessing.
+- **Depth почти константа на всех кадрах**:
+  - возможно, ошибка модели/подачи (не тот preset, неверные каналы, проблемы Triton).
+- **Резкие скачки `depth_mean` при плавном видео**:
+  - подозрение на рассинхрон кадров, проблемы sampling или артефакты в кадрах.
+
+#### Время выполнения (что смотреть)
+
+- В `meta.stage_timings_ms`:
+  - `depth_inference_total` (основная часть)
+  - `saving` (должно быть небольшим)
+
+#### Параметры конфига, которые меняют результат и стоимость
+
+- **`triton_model_spec` / preset `midas_{256,384,512}`**:
+  - качество ↑ с размером, стоимость ↑ сильно.
+- **`out_width/out_height`**:
+  - влияет на размер сохранённых карт и скорость post-processing.
+- **`batch_size`**:
+  - влияет на throughput/VRAM, но не на значения.
+
+#### Конфигурация render
+
 ```yaml
 core_depth_midas:
   render:
-    enable_render: true  # Генерировать render-context JSON
-    enable_html_render: true  # Генерировать HTML debug страницу
+    enable_render: true
+    enable_html_render: true
 ```
 
-**Примечание**: Render генерируется автоматически после успешной обработки компонента (best-effort: ошибки render не валят основной процесс).
-
-**Примечание про интерпретацию**:
-- MiDaS даёт **относительную** глубину (не метры). Для сравнения между кадрами используйте нормализацию.
-- Для воспроизводимой визуализации/нормализации в артефакте пишутся `depth_p05/depth_p95` (robust scale per-frame).
-
-Legacy demo (deprecated):
-- `scripts/baseline/demo_core_depth_midas_quality.py` — генерирует HTML с визуализацией depth maps.
+Legacy demo (deprecated, но полезно как референс визуализации карт):
+- `scripts/baseline/demo_core_depth_midas_quality.py`
 
 ### Требования к разрешению (фиксируем требования компонента)
 

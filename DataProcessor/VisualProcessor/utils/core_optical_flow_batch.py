@@ -53,7 +53,7 @@ if _core_optical_flow_main.exists():
         _require_union_times_s = getattr(core_optical_flow_module, "_require_union_times_s", None)
         NAME = getattr(core_optical_flow_module, "NAME", "core_optical_flow")
         VERSION = getattr(core_optical_flow_module, "VERSION", "2.0")
-        SCHEMA_VERSION = getattr(core_optical_flow_module, "SCHEMA_VERSION", "core_optical_flow_npz_v1")
+        SCHEMA_VERSION = getattr(core_optical_flow_module, "SCHEMA_VERSION", "core_optical_flow_npz_v3")
     else:
         raise ImportError("Failed to load core_optical_flow module")
 else:
@@ -127,28 +127,52 @@ def process_core_optical_flow_batch(
     
     start_time = time.perf_counter()
     
-    # Инициализация Triton клиента
-    triton_http_url = config.get("triton_http_url") or os.environ.get("TRITON_HTTP_URL")
-    if not triton_http_url:
-        raise RuntimeError("core_optical_flow | batch | runtime=triton requires triton_http_url")
-    
-    from dp_triton import TritonHttpClient, TritonError
-    
-    client = TritonHttpClient(base_url=str(triton_http_url), timeout_sec=240.0)
-    if not client.ready():
-        raise TritonError("core_optical_flow | batch | Triton is not ready", error_code="triton_unavailable")
-    
-    # Параметры Triton
-    triton_model_name = config.get("triton_model_name")
-    if not triton_model_name:
-        raise RuntimeError("core_optical_flow | batch | triton_model_name is required")
-    
-    triton_model_version = config.get("triton_model_version")
+    # ------------------------------------------------------------
+    # Triton client params (Audit v3): prefer ModelManager spec
+    # ------------------------------------------------------------
+    triton_http_url = ""
+    triton_model_name = config.get("triton_model_name", "raft_256")
+    triton_model_version = config.get("triton_model_version", "1")
     triton_input0_name = config.get("triton_input0_name", "INPUT0__0")
     triton_input1_name = config.get("triton_input1_name", "INPUT1__0")
     triton_output_name = config.get("triton_output_name", "OUTPUT__0")
     triton_datatype = config.get("triton_datatype", "UINT8")
     triton_preprocess_preset = config.get("triton_preprocess_preset", "raft_256")
+
+    mm_entry = None
+    spec_name = config.get("triton_model_spec")
+    if spec_name:
+        _load_spec = getattr(core_optical_flow_module, "_load_triton_spec_via_model_manager", None)
+        if not callable(_load_spec):
+            raise RuntimeError("core_optical_flow | batch | triton_model_spec provided but ModelManager resolver is unavailable")
+        mm_entry = _load_spec(str(spec_name))
+        rp = mm_entry.get("rp") if isinstance(mm_entry, dict) else None
+        if isinstance(rp, dict):
+            triton_http_url = str(rp.get("triton_http_url") or "").strip()
+            triton_model_name = str(rp.get("triton_model_name") or triton_model_name)
+            triton_model_version = str(rp.get("triton_model_version") or triton_model_version)
+            triton_input0_name = str(rp.get("triton_input0_name") or triton_input0_name)
+            triton_input1_name = str(rp.get("triton_input1_name") or triton_input1_name)
+            triton_output_name = str(rp.get("triton_output_name") or triton_output_name)
+            triton_datatype = str(rp.get("triton_input_datatype") or rp.get("triton_datatype") or triton_datatype)
+
+    if not triton_http_url:
+        triton_http_url = str(config.get("triton_http_url") or os.environ.get("TRITON_HTTP_URL") or "").strip()
+    if not triton_http_url:
+        raise RuntimeError("core_optical_flow | batch | runtime=triton requires TRITON_HTTP_URL (env) or config.triton_http_url or config.triton_model_spec")
+    
+    from dp_triton import TritonHttpClient, TritonError
+
+    if isinstance(mm_entry, dict) and mm_entry.get("client") is not None:
+        client = mm_entry["client"]
+    else:
+        client = TritonHttpClient(
+            base_url=str(triton_http_url),
+            timeout_sec=float(os.environ.get("DP_TRITON_HTTP_TIMEOUT_SEC", "240.0")),
+        )
+    if not client.ready():
+        raise TritonError("core_optical_flow | batch | Triton is not ready", error_code="triton_unavailable")
+    
     input_size = _preset_to_input_size(triton_preprocess_preset)
     
     # Этап 1: Сбор всех кадров с привязкой к видео
@@ -178,14 +202,16 @@ def process_core_optical_flow_batch(
                 continue
             
             if not frame_indices or len(frame_indices) < 2:
-                logger.warning(f"core_optical_flow | batch | video {video_ctx.video_id} has insufficient frame_indices (need at least 2)")
+                # Contract: empty is not allowed for core_optical_flow (requires >=2 frames).
+                logger.error(f"core_optical_flow | batch | video {video_ctx.video_id} has insufficient frame_indices (need at least 2)")
                 frames_by_video.append({
                     "video_idx": video_idx,
                     "video_id": video_ctx.video_id,
                     "frame_indices": [],
                     "frame_manager": None,
                     "times_s": None,
-                    "status": "empty",
+                    "status": "error",
+                    "error": "insufficient frame_indices (need at least 2)",
                 })
                 continue
             
@@ -276,6 +302,57 @@ def process_core_optical_flow_batch(
         ]
     
     logger.info(f"core_optical_flow | batch | collected {len(all_frame_pairs)} frame pairs from {len(frames_by_video)} videos")
+
+    # ------------------------------------------------------------
+    # Backend preview (Audit v3): prepare K=10 preview slots per video
+    # We store only downsampled magnitude maps (64x64) normalized to [0,1].
+    # ------------------------------------------------------------
+    preview_k = 10
+    preview_map_h = 64
+    preview_map_w = 64
+    preview_index_map: Dict[int, Tuple[int, int]] = {}  # global_pair_idx -> (video_idx, slot)
+    for vi in frames_by_video:
+        if vi.get("status") != "ok":
+            continue
+        frame_indices = vi.get("frame_indices") or []
+        times_s = vi.get("times_s")
+        if not isinstance(frame_indices, list) or len(frame_indices) < 2 or times_s is None:
+            continue
+        n_frames = int(len(frame_indices))
+        n_pairs_video = max(0, n_frames - 1)
+        n_prev = int(min(preview_k, n_pairs_video))
+        if n_prev <= 0:
+            continue
+        if n_prev == n_pairs_video:
+            preview_pair_pos = np.arange(1, n_frames, dtype=np.int32)
+        else:
+            preview_pair_pos = np.unique(np.round(np.linspace(1, n_frames - 1, n_prev)).astype(np.int32))
+            if preview_pair_pos.size < n_prev:
+                missing = n_prev - int(preview_pair_pos.size)
+                tail = np.arange(n_frames - 1, 0, -1, dtype=np.int32)
+                seen = set(map(int, preview_pair_pos.tolist()))
+                for t in tail:
+                    if int(t) not in seen:
+                        preview_pair_pos = np.append(preview_pair_pos, t)
+                        seen.add(int(t))
+                        missing -= 1
+                        if missing <= 0:
+                            break
+                preview_pair_pos = np.sort(preview_pair_pos.astype(np.int32))
+
+        fi_np = np.asarray(frame_indices, dtype=np.int32)
+        ts_np = np.asarray(times_s, dtype=np.float32)
+        vi["preview_pair_pos"] = preview_pair_pos
+        vi["preview_prev_frame_indices"] = fi_np[preview_pair_pos - 1].astype(np.int32, copy=False)
+        vi["preview_cur_frame_indices"] = fi_np[preview_pair_pos].astype(np.int32, copy=False)
+        vi["preview_prev_times_s"] = ts_np[preview_pair_pos - 1].astype(np.float32, copy=False)
+        vi["preview_cur_times_s"] = ts_np[preview_pair_pos].astype(np.float32, copy=False)
+        vi["preview_flow_mag_map_norm"] = np.full((int(preview_pair_pos.size), preview_map_h, preview_map_w), np.nan, dtype=np.float32)
+
+        pair_start_idx = int(vi.get("pair_start_idx", 0))
+        for slot, pos in enumerate(preview_pair_pos.tolist()):
+            global_pair_idx = pair_start_idx + (int(pos) - 1)  # pair list is 0-based, pos is 1..N-1
+            preview_index_map[int(global_pair_idx)] = (int(vi["video_idx"]), int(slot))
     
     # Этап 2: Группировка в батчи и обработка
     try:
@@ -349,6 +426,29 @@ def process_core_optical_flow_batch(
             # Вычисляем mean для каждого элемента батча
             mag_mean = mag.reshape(flow.shape[0], -1).mean(axis=1).astype(np.float32)  # (B,)
             norm = float(max(flow.shape[2], flow.shape[3], 1))
+
+            # Backend preview maps (best-effort): store only for selected global pair indices.
+            try:
+                import cv2  # type: ignore
+
+                for i_local in range(int(mag.shape[0])):
+                    global_pair_idx = int(start + i_local)
+                    hit = preview_index_map.get(global_pair_idx)
+                    if hit is None:
+                        continue
+                    v_idx, slot = hit
+                    mm = cv2.resize(mag[i_local].astype(np.float32), (preview_map_w, preview_map_h), interpolation=cv2.INTER_AREA).astype(np.float32)
+                    vv = mm[np.isfinite(mm)]
+                    if vv.size <= 0:
+                        continue
+                    p05 = float(np.percentile(vv, 5))
+                    p95 = float(np.percentile(vv, 95))
+                    denom = max(float(p95 - p05), 1e-6)
+                    mmn = (mm - p05) / denom
+                    mmn = np.clip(mmn, 0.0, 1.0).astype(np.float32)
+                    frames_by_video[v_idx]["preview_flow_mag_map_norm"][int(slot)] = mmn
+            except Exception:
+                pass
             
             # Собираем dt для всех пар в батче
             batch_dts = []
@@ -489,6 +589,7 @@ def process_core_optical_flow_batch(
                 "dataprocessor_version": video_ctx.dataprocessor_version or metadata.get("dataprocessor_version") or "unknown",
                 "status": "ok",
                 "empty_reason": None,
+                "backend_proxy_version": "core_optical_flow_backend_proxy_v1",
                 "model_name": str(triton_model_name),
                 "total_frames": total_frames,
                 "batch_size": batch_size,
@@ -496,20 +597,30 @@ def process_core_optical_flow_batch(
                 "device": "cuda",
             }
             
-            # Models used
-            models_used = [
-                model_used(
-                    model_name=str(triton_model_name),
-                    model_version=config.get("model_version", "unknown"),
-                    weights_digest=config.get("weights_digest", "unknown"),
-                    runtime="triton-gpu",
-                    engine="onnx",
-                    precision=config.get("precision", "fp32"),
-                    device="cuda",
-                )
-            ]
-            save_metadata["models_used"] = models_used
+            # Models used (prefer ModelManager identity when spec is used)
+            if isinstance(mm_entry, dict) and isinstance(mm_entry.get("models_used_entry"), dict):
+                models_used = [mm_entry["models_used_entry"]]
+                save_metadata["triton_model_spec"] = str(spec_name)
+                save_metadata["triton_model_name"] = str(triton_model_name)
+            else:
+                models_used = [
+                    model_used(
+                        model_name=str(triton_model_name),
+                        model_version=config.get("model_version", "unknown"),
+                        weights_digest=config.get("weights_digest", "unknown"),
+                        runtime="triton-gpu",
+                        engine="onnx",
+                        precision=config.get("precision", "fp32"),
+                        device="cuda",
+                    )
+                ]
             save_metadata = apply_models_meta(save_metadata, models_used=models_used)
+
+            # Preview metadata (K=10 maps, stored in NPZ)
+            preview_pair_pos = video_info.get("preview_pair_pos")
+            if isinstance(preview_pair_pos, np.ndarray):
+                save_metadata["preview_k"] = int(preview_pair_pos.size)
+                save_metadata["preview_map_size"] = [64, 64]
             
             # Сохранение NPZ
             npz_dict = {
@@ -517,6 +628,12 @@ def process_core_optical_flow_batch(
                 "times_s": video_times_s.astype(np.float32),
                 "motion_norm_per_sec_mean": full_motion.astype(np.float32),
                 "dt_seconds": full_dt.astype(np.float32),
+                "preview_pair_pos": np.asarray(video_info.get("preview_pair_pos"), dtype=np.int32) if video_info.get("preview_pair_pos") is not None else np.zeros((0,), dtype=np.int32),
+                "preview_prev_frame_indices": np.asarray(video_info.get("preview_prev_frame_indices"), dtype=np.int32) if video_info.get("preview_prev_frame_indices") is not None else np.zeros((0,), dtype=np.int32),
+                "preview_cur_frame_indices": np.asarray(video_info.get("preview_cur_frame_indices"), dtype=np.int32) if video_info.get("preview_cur_frame_indices") is not None else np.zeros((0,), dtype=np.int32),
+                "preview_prev_times_s": np.asarray(video_info.get("preview_prev_times_s"), dtype=np.float32) if video_info.get("preview_prev_times_s") is not None else np.zeros((0,), dtype=np.float32),
+                "preview_cur_times_s": np.asarray(video_info.get("preview_cur_times_s"), dtype=np.float32) if video_info.get("preview_cur_times_s") is not None else np.zeros((0,), dtype=np.float32),
+                "preview_flow_mag_map_norm": np.asarray(video_info.get("preview_flow_mag_map_norm"), dtype=np.float32) if video_info.get("preview_flow_mag_map_norm") is not None else np.zeros((0, 64, 64), dtype=np.float32),
                 "meta": np.asarray(save_metadata, dtype=object),
             }
             

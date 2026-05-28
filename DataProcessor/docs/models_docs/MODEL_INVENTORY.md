@@ -25,7 +25,7 @@ Key policies (see `Models/docs/contracts/MODEL_SYSTEM_RULES.md`, `MODEL_MANAGER_
   - accepts `--model-version`, `--weights-digest`, `--engine`, `--precision`, `--runtime`.
   - writes `models_used[]` via `apply_models_meta(...)`.
 
-#### `core_depth_midas` (`VisualProcessor/core/model_process/depth_midas/main.py`)
+#### `core_depth_midas` (`VisualProcessor/core/model_process/core_depth_midas/main.py`)
 - **Role**: depth estimation.
 - **Runtime**: **Triton-only** (client is pure numpy/cv2; preprocessing assumed in Triton).
 - **Engine**: expects `onnx` behind Triton.
@@ -37,15 +37,14 @@ Key policies (see `Models/docs/contracts/MODEL_SYSTEM_RULES.md`, `MODEL_MANAGER_
 - **Engine**: expects `onnx` behind Triton.
 - **Local artifacts**: Triton deployment provides weights; client passes `--model-version`, `--weights-digest`.
 
-#### `core_object_detections` (`VisualProcessor/core/model_process/object_detections/main.py`)
-- **Role**: object detection + tracking.
+#### `core_object_detections` (`VisualProcessor/core/model_process/core_object_detections/main.py`)
+- **Role**: object detection (baseline Audit v3: **tracking removed**).
 - **Model**:
-  - **Ultralytics YOLO** loaded via `YOLO(model_path)`.
-  - ByteTrack is vendored (`ByteTrack/yolox/...`) and used for tracking.
+  - **Ultralytics YOLO** loaded via `YOLO(model_path)` (inprocess runtime).
+  - Optional Triton runtime via ModelManager spec (client-side preprocessing + local NMS).
 - **Local artifacts**:
   - YOLO weight file path (`model_path`) must exist locally.
-  - ByteTrack is repo-local.
-- **Network risk**: low (Ultralytics can download if given a model name instead of a local path; ModelManager must enforce `local_path` only).
+- **Network risk**: low (Ultralytics can download if given a model name instead of a local path; component enforces local-path existence and fails fast).
 
 #### `core_face_landmarks` (`VisualProcessor/core/model_process/core_face_landmarks/main.py`)
 - **Role**: pose/hands/face landmarks.
@@ -87,7 +86,7 @@ Key policies (see `Models/docs/contracts/MODEL_SYSTEM_RULES.md`, `MODEL_MANAGER_
 - **ModelManager target**: route through `core_clip` (preferred) or enforce local-only CLIP weights.
 
 #### `emotion_face` (`VisualProcessor/modules/emotion_face/...`)
-- **Model**: EmoNet loaded from local path like `.../models/emonet/pretrained/emonet_8.pth`.
+- **Model**: EmoNet loaded from local path like `.../dp_models/emonet/pretrained/emonet_8.pth`.
 - **Local artifacts**: repo-local weight file path.
 - **Other deps**: face selection now comes from `core_face_landmarks.face_present` (two-stage core provider). The legacy `face_detection` module was removed.
 

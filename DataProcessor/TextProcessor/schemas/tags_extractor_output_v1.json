@@ -1,0 +1,42 @@
+{
+  "schema_system_version": "vp_schema_v1",
+  "schema_version": "tags_extractor_output_v1",
+  "producer": "tags_extractor",
+  "artifact_kind": "extractor_features_flat",
+  "allow_extra_keys": true,
+  "description": "Logical contract for TagsExtractor.features_flat merged into text_features.npz (text_npz_v1). Keys tp_tags_top{i}_* exist for i=1..top_k_slots (default 5); extra top-K keys allowed when top_k_slots is increased.",
+  "meta": {
+    "required_keys": [],
+    "optional_keys": []
+  },
+  "fields": {
+    "tp_tags_title_present": { "required": true, "tier": "model_facing", "dtype": "float32", "shape": [], "description": "1.0 if non-empty title after normalization" },
+    "tp_tags_description_present": { "required": true, "tier": "model_facing", "dtype": "float32", "shape": [] },
+    "tp_tags_group_extract_enabled": { "required": true, "tier": "analytics", "dtype": "float32", "shape": [] },
+    "tp_tags_group_mutate_clean_texts_enabled": { "required": true, "tier": "analytics", "dtype": "float32", "shape": [] },
+    "tp_tags_group_mutate_hashtags_enabled": { "required": true, "tier": "analytics", "dtype": "float32", "shape": [] },
+    "tp_tags_group_merge_json_hashtags_enabled": { "required": true, "tier": "analytics", "dtype": "float32", "shape": [] },
+    "tp_tags_require_title_enabled": { "required": true, "tier": "analytics", "dtype": "float32", "shape": [] },
+    "tp_tags_hashtags_disabled_by_policy": { "required": true, "tier": "analytics", "dtype": "float32", "shape": [] },
+    "tp_tags_export_cleaned_texts_mode_none": { "required": true, "tier": "debug", "dtype": "float32", "shape": [] },
+    "tp_tags_export_cleaned_texts_mode_raw": { "required": true, "tier": "debug", "dtype": "float32", "shape": [] },
+    "tp_tags_export_hashtags_mode_none": { "required": true, "tier": "debug", "dtype": "float32", "shape": [] },
+    "tp_tags_export_hashtags_mode_raw": { "required": true, "tier": "debug", "dtype": "float32", "shape": [] },
+    "tp_tags_export_hashtags_mode_hashed": { "required": true, "tier": "debug", "dtype": "float32", "shape": [] },
+    "tp_tags_title_parse_capped_flag": { "required": true, "tier": "analytics", "dtype": "float32", "shape": [] },
+    "tp_tags_description_parse_capped_flag": { "required": true, "tier": "analytics", "dtype": "float32", "shape": [] },
+    "tp_tags_title_truncated_flag": { "required": true, "tier": "analytics", "dtype": "float32", "shape": [], "description": "Cleaned title trimmed to max_text_chars" },
+    "tp_tags_description_truncated_flag": { "required": true, "tier": "analytics", "dtype": "float32", "shape": [] },
+    "tp_tags_json_hashtag_merged_count": { "required": true, "tier": "analytics", "dtype": "float32", "shape": [] },
+    "tp_tags_hashtags_truncated_flag": { "required": true, "tier": "analytics", "dtype": "float32", "shape": [] },
+    "tp_tags_title_hashtag_found_count": { "required": true, "tier": "analytics", "dtype": "float32", "shape": [] },
+    "tp_tags_description_hashtag_found_count": { "required": true, "tier": "analytics", "dtype": "float32", "shape": [] },
+    "tp_tags_hashtag_total_found_count": { "required": true, "tier": "analytics", "dtype": "float32", "shape": [] },
+    "tp_tags_hashtag_unique_count": { "required": true, "tier": "model_facing", "dtype": "float32", "shape": [] },
+    "tp_tags_hashtag_avg_len": { "required": true, "tier": "model_facing", "dtype": "float32", "shape": [] },
+    "tp_tags_hashtag_max_len": { "required": true, "tier": "model_facing", "dtype": "float32", "shape": [] },
+    "tp_tags_title_hashtag_density_per_char": { "required": true, "tier": "analytics", "dtype": "float32", "shape": [] },
+    "tp_tags_description_hashtag_density_per_char": { "required": true, "tier": "analytics", "dtype": "float32", "shape": [] },
+    "tp_tags_topk_slots": { "required": true, "tier": "analytics", "dtype": "float32", "shape": [] }
+  }
+}

@@ -12,9 +12,25 @@ except Exception:  # pragma: no cover
 
 from src.core.base_extractor import BaseExtractor
 from src.core.metrics import system_snapshot, process_memory_bytes
-from src.core.model_registry import get_model
+from src.core.model_registry import get_model_with_meta
 from src.core.path_utils import default_artifacts_dir
 from src.core.text_utils import normalize_whitespace
+
+# Stable key order: 7 core + 5 flags + 5 extra (extra → NaN when emit_extra_metrics=False).
+_SPKEMB_FLAG_KEYS: Tuple[str, ...] = (
+    "tp_spkemb_input_present",
+    "tp_spkemb_input_mode_diar_asr",
+    "tp_spkemb_input_mode_legacy_doc_speakers",
+    "tp_spkemb_asr_present",
+    "tp_spkemb_diar_present",
+)
+_SPKEMB_EXTRA_KEYS: Tuple[str, ...] = (
+    "tp_spkemb_batch_size",
+    "tp_spkemb_max_speakers",
+    "tp_spkemb_max_turns_per_speaker",
+    "tp_spkemb_min_chars_per_turn",
+    "tp_spkemb_max_chars_per_turn",
+)
 
 
 def _l2n(v: np.ndarray) -> np.ndarray:
@@ -37,11 +53,11 @@ class SpeakerTurnEmbeddingsAggregatorExtractor(BaseExtractor):
     - Stable speaker_id assignment.
     """
 
-    VERSION = "1.2.0"
+    VERSION = "1.3.0"
 
     def __init__(
         self,
-        model_name: str = "sentence-transformers/all-MiniLM-L6-v2",
+        model_name: str = "intfloat/multilingual-e5-large",
         artifacts_dir: str | None = None,
         device: Optional[str] = "cpu",
         fp16: bool = True,
@@ -88,19 +104,74 @@ class SpeakerTurnEmbeddingsAggregatorExtractor(BaseExtractor):
         if self.min_chars_per_turn > self.max_chars_per_turn:
             raise RuntimeError("speaker_turn_embeddings_aggregator: min_chars_per_turn must be <= max_chars_per_turn")
 
-        # Resolve model metadata via dp_models (fail-fast).
-        try:
-            from dp_models import get_global_model_manager  # type: ignore
+        init_sys_before = system_snapshot()
+        init_mem_before = process_memory_bytes()
+        self._model, self.weights_digest, self.model_version = get_model_with_meta(
+            model_name=str(self.model_name), device=self.device, fp16=self.fp16
+        )
+        init_sys_after = system_snapshot()
+        init_mem_after = process_memory_bytes()
+        self._init_metrics: Dict[str, Any] = {
+            "pre_init": init_sys_before,
+            "post_init": init_sys_after,
+            "ram_peak_bytes": max(init_mem_before, init_mem_after),
+        }
 
-            mm = get_global_model_manager()
-            spec = mm.get_spec(model_name=str(self.model_name))
-            _d, _p, _rt, _eng, weights_digest, _arts = mm.resolve(spec)
-            self.weights_digest = str(weights_digest or "unknown")
-            self.model_version = str(getattr(spec, "model_version", "unknown") or "unknown")
-        except Exception as e:
-            raise RuntimeError(f"speaker_turn_embeddings_aggregator: dp_models resolve failed for model_name={self.model_name!r}: {e}") from e
+    def _gpu_peak_mb(self, sys_after: Any) -> int:
+        def _g(snap: Any) -> int:
+            try:
+                g = (snap or {}).get("gpu") or {}
+                arr = g.get("gpus") or []
+                return max([int(x.get("memory_used_mb", 0)) for x in arr] or [0])
+            except Exception:
+                return 0
 
-        self._model = get_model(self.model_name, self.device, self.fp16)
+        return max(
+            _g(self._init_metrics.get("pre_init")),
+            _g(self._init_metrics.get("post_init")),
+            _g(sys_after),
+        )
+
+    def _speaker_embeddings_meta(self) -> Dict[str, str]:
+        return {
+            "model_name": str(self.model_name),
+            "model_version": str(self.model_version),
+            "weights_digest": str(self.weights_digest),
+        }
+
+    def _apply_extra_metrics_spkemb(self, d: Dict[str, float]) -> None:
+        if self.emit_extra_metrics:
+            d["tp_spkemb_batch_size"] = float(int(self.batch_size))
+            d["tp_spkemb_max_speakers"] = float(int(self.max_speakers))
+            d["tp_spkemb_max_turns_per_speaker"] = float(int(self.max_turns_per_speaker))
+            d["tp_spkemb_min_chars_per_turn"] = float(int(self.min_chars_per_turn))
+            d["tp_spkemb_max_chars_per_turn"] = float(int(self.max_chars_per_turn))
+        else:
+            for k in _SPKEMB_EXTRA_KEYS:
+                d[k] = float("nan")
+
+    def _build_features_flat(
+        self,
+        *,
+        present: float,
+        speakers_total: float,
+        speakers_embedded: float,
+        turns_total: float,
+        flags: Dict[str, float],
+    ) -> Dict[str, float]:
+        d: Dict[str, float] = {
+            "tp_spkemb_present": float(present),
+            "tp_spkemb_speakers_total": float(speakers_total),
+            "tp_spkemb_speakers_embedded": float(speakers_embedded),
+            "tp_spkemb_turns_total": float(turns_total),
+            "tp_spkemb_write_artifacts": 1.0 if self.write_artifacts else 0.0,
+            "tp_spkemb_compute_mean": 1.0 if self.compute_mean else 0.0,
+            "tp_spkemb_compute_max": 1.0 if self.compute_max else 0.0,
+        }
+        for fk in _SPKEMB_FLAG_KEYS:
+            d[fk] = float(flags.get(fk, 0.0))
+        self._apply_extra_metrics_spkemb(d)
+        return d
 
     def _encode_texts(self, texts: List[str]) -> np.ndarray:
         if not texts:
@@ -263,45 +334,44 @@ class SpeakerTurnEmbeddingsAggregatorExtractor(BaseExtractor):
         import time
 
         t0 = time.perf_counter()
-        sys_before = system_snapshot()
         mem_before = process_memory_bytes()
 
         speaker_texts_by_id, flags = self._group_speakers(doc)
         if not speaker_texts_by_id:
             if self.require_input and flags.get("tp_spkemb_input_present", 0.0) <= 0.0:
-                raise RuntimeError("speaker_turn_embeddings_aggregator: required input is missing (no speaker diarization / no legacy doc.speakers)")
+                raise RuntimeError(
+                    "speaker_turn_embeddings_aggregator: required input is missing (no speaker diarization / no legacy doc.speakers)"
+                )
             sys_after = system_snapshot()
             mem_after = process_memory_bytes()
             total_s = time.perf_counter() - t0
+            features_flat = self._build_features_flat(
+                present=0.0,
+                speakers_total=0.0,
+                speakers_embedded=0.0,
+                turns_total=0.0,
+                flags=flags,
+            )
+            gpu_peak_mb = self._gpu_peak_mb(sys_after)
             return {
                 "device": self.device,
                 "version": self.VERSION,
+                "model_name": self.model_name,
+                "model_version": str(self.model_version),
+                "weights_digest": self.weights_digest,
                 "system": {
-                    "pre_init": sys_before,
-                    "post_init": sys_before,
+                    "pre_init": self._init_metrics.get("pre_init"),
+                    "post_init": self._init_metrics.get("post_init"),
                     "post_process": sys_after,
                     "peaks": {
-                        "ram_peak_mb": int(max(mem_before, mem_after) / 1024 / 1024),
-                        "gpu_peak_mb": 0,
+                        "ram_peak_mb": int(max(self._init_metrics.get("ram_peak_bytes", 0), mem_before, mem_after) / 1024 / 1024),
+                        "gpu_peak_mb": int(gpu_peak_mb),
                     },
                 },
                 "timings_s": {"total": round(total_s, 3)},
                 "result": {
-                    "features_flat": {
-                        "tp_spkemb_present": 0.0,
-                        "tp_spkemb_speakers_total": 0.0,
-                        "tp_spkemb_speakers_embedded": 0.0,
-                        "tp_spkemb_turns_total": 0.0,
-                        "tp_spkemb_write_artifacts": 1.0 if self.write_artifacts else 0.0,
-                        "tp_spkemb_compute_mean": 1.0 if self.compute_mean else 0.0,
-                        "tp_spkemb_compute_max": 1.0 if self.compute_max else 0.0,
-                        **flags,
-                    },
-                    "speaker_embeddings_meta": {
-                        "model_name": str(self.model_name),
-                        "model_version": str(self.model_version),
-                        "weights_digest": str(self.weights_digest),
-                    },
+                    "features_flat": features_flat,
+                    "speaker_embeddings_meta": self._speaker_embeddings_meta(),
                 },
                 "error": None,
             }
@@ -357,46 +427,34 @@ class SpeakerTurnEmbeddingsAggregatorExtractor(BaseExtractor):
         mem_after = process_memory_bytes()
         total_s = time.perf_counter() - t0
 
-        features_flat: Dict[str, float] = {
-            "tp_spkemb_present": 1.0 if n_saved > 0 else 0.0,
-            "tp_spkemb_speakers_total": float(int(len(speaker_texts_by_id))),
-            "tp_spkemb_speakers_embedded": float(int(n_saved)),
-            "tp_spkemb_turns_total": float(int(turns_total)),
-            "tp_spkemb_write_artifacts": 1.0 if self.write_artifacts else 0.0,
-            "tp_spkemb_compute_mean": 1.0 if self.compute_mean else 0.0,
-            "tp_spkemb_compute_max": 1.0 if self.compute_max else 0.0,
-            **flags,
-        }
-        if self.emit_extra_metrics:
-            features_flat["tp_spkemb_batch_size"] = float(int(self.batch_size))
-            features_flat["tp_spkemb_max_speakers"] = float(int(self.max_speakers))
-            features_flat["tp_spkemb_max_turns_per_speaker"] = float(int(self.max_turns_per_speaker))
-            features_flat["tp_spkemb_min_chars_per_turn"] = float(int(self.min_chars_per_turn))
-            features_flat["tp_spkemb_max_chars_per_turn"] = float(int(self.max_chars_per_turn))
+        features_flat = self._build_features_flat(
+            present=1.0 if n_saved > 0 else 0.0,
+            speakers_total=float(int(len(speaker_texts_by_id))),
+            speakers_embedded=float(int(n_saved)),
+            turns_total=float(int(turns_total)),
+            flags=flags,
+        )
+        gpu_peak_mb = self._gpu_peak_mb(sys_after)
 
         return {
             "device": self.device,
             "version": self.VERSION,
+            "model_name": self.model_name,
             "model_version": str(self.model_version),
+            "weights_digest": self.weights_digest,
             "system": {
-                "pre_init": sys_before,
-                "post_init": sys_before,
+                "pre_init": self._init_metrics.get("pre_init"),
+                "post_init": self._init_metrics.get("post_init"),
                 "post_process": sys_after,
                 "peaks": {
-                    "ram_peak_mb": int(max(mem_before, mem_after) / 1024 / 1024),
-                    "gpu_peak_mb": 0,
+                    "ram_peak_mb": int(max(self._init_metrics.get("ram_peak_bytes", 0), mem_before, mem_after) / 1024 / 1024),
+                    "gpu_peak_mb": int(gpu_peak_mb),
                 },
             },
             "timings_s": {"total": round(total_s, 3)},
             "result": {
                 "features_flat": features_flat,
-                "speaker_embeddings_meta": {
-                    "model_name": str(self.model_name),
-                    "model_version": str(self.model_version),
-                    "weights_digest": str(self.weights_digest),
-                },
+                "speaker_embeddings_meta": self._speaker_embeddings_meta(),
             },
             "error": None,
         }
-
-

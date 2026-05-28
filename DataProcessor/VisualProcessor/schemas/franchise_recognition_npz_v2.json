@@ -1,0 +1,70 @@
+{
+  "schema_system_version": "vp_schema_v1",
+  "schema_version": "franchise_recognition_npz_v2",
+  "producer": "franchise_recognition",
+  "artifact_kind": "npz",
+  "allow_extra_keys": false,
+  "meta": {
+    "required_keys": [
+      "producer",
+      "producer_version",
+      "schema_version",
+      "created_at",
+      "platform_id",
+      "video_id",
+      "run_id",
+      "config_hash",
+      "sampling_policy_version",
+      "dataprocessor_version",
+      "status",
+      "empty_reason",
+      "models_used",
+      "model_signature",
+      "stage_timings_ms",
+      "embedding_service_url",
+      "franchise_category",
+      "topk",
+      "similarity_threshold",
+      "threshold_global",
+      "num_franchises",
+      "num_frames",
+      "db_name",
+      "db_version",
+      "db_digest"
+    ],
+    "optional_keys": [
+      "db_path",
+      "embedding_model",
+      "franchises_found_count",
+      "ocr_npz",
+      "ocr_events_used",
+      "ocr_hits",
+      "ocr_candidate_names",
+      "ocr_evidence_frames",
+      "core_clip_model_signature"
+    ]
+  },
+  "fields": {
+    "frame_indices": { "required": true, "tier": "model_facing", "dtype": "int32", "shape": ["N"], "description": "Frame indices (strictly = core_clip.frame_indices)" },
+    "times_s": { "required": true, "tier": "model_facing", "dtype": "float32", "shape": ["N"], "description": "Time stamps from union_timestamps_sec[frame_indices]" },
+    
+    "semantic_label_names": { "required": true, "tier": "model_facing", "dtype": "str", "shape": ["A"], "description": "canonical label space: 'int:name' (id is stable within db_digest)" },
+    "semantic_object_ids": { "required": true, "tier": "debug", "dtype": "str", "shape": ["A"], "description": "original object UUIDs from Embedding Service, aligned with semantic_label_names" },
+    "threshold_per_label_arr": { "required": true, "tier": "debug", "dtype": "float32", "shape": ["A"], "description": "per-label thresholds (NaN if not set)" },
+    
+    "track_ids": { "required": true, "tier": "model_facing", "dtype": "int32", "shape": [1], "description": "video-level aggregate track (always [0])" },
+    "track_present_mask": { "required": true, "tier": "model_facing", "dtype": "bool", "shape": [1], "description": "video-level present mask (always [True])" },
+    "track_topk_ids": { "required": true, "tier": "model_facing", "dtype": "int32", "shape": [1, "K"], "description": "video-level top-K franchise IDs (max over time per franchise)" },
+    "track_topk_scores": { "required": true, "tier": "model_facing", "dtype": "float32", "shape": [1, "K"], "description": "video-level top-K similarity scores (max over time)" },
+    "track_is_confident_top1": { "required": true, "tier": "analytics", "dtype": "bool", "shape": [1], "description": "video-level confidence flag (top-1 score >= threshold_global)" },
+    "track_topk_evidence_frame_indices": { "required": true, "tier": "debug", "dtype": "int32", "shape": [1, "K"], "description": "union frame indices where similarity is maximum for each top-K franchise" },
+    
+    "frame_topk_ids": { "required": true, "tier": "analytics", "dtype": "int32", "shape": ["N", "K"], "description": "per-frame top-K franchise IDs" },
+    "frame_topk_scores": { "required": true, "tier": "analytics", "dtype": "float32", "shape": ["N", "K"], "description": "per-frame top-K similarity scores (0.0-1.0, NaN where no result)" },
+    "frame_is_confident_top1": { "required": true, "tier": "analytics", "dtype": "bool", "shape": ["N"], "description": "per-frame confidence flag (top-1 score >= threshold_global)" },
+    
+    "meta": { "required": true, "tier": "debug", "dtype": "object", "shape": [], "description": "metadata dictionary" },
+    "meta_json": { "required": true, "tier": "debug", "dtype": "str", "shape": [], "description": "meta as JSON string (cross-venv safe)" }
+  }
+}
+

@@ -1,0 +1,57 @@
+{
+  "schema_system_version": "vp_schema_v1",
+  "schema_version": "voice_quality_extractor_npz_v1",
+  "producer": "voice_quality_extractor",
+  "artifact_kind": "npz",
+  "allow_extra_keys": false,
+  "meta": {
+    "required_keys": [
+      "producer",
+      "producer_version",
+      "schema_version",
+      "created_at",
+      "platform_id",
+      "video_id",
+      "run_id",
+      "config_hash",
+      "sampling_policy_version",
+      "dataprocessor_version",
+      "status",
+      "empty_reason",
+      "models_used",
+      "model_signature",
+      "stage_timings_ms"
+    ],
+    "optional_keys": [
+      "device_used",
+      "scheduler_knobs",
+      "resource_metrics",
+      "error",
+      "voice_quality_contract_version",
+      "features_enabled",
+      "f0_method",
+      "duration",
+      "segments_count",
+      "sample_rate"
+    ]
+  },
+  "fields": {
+    "feature_names": { "required": true, "tier": "model_facing", "dtype": "object", "shape": ["F"] },
+    "feature_values": { "required": true, "tier": "model_facing", "dtype": "float32", "shape": ["F"] },
+
+    "segment_start_sec": { "required": true, "tier": "analytics", "dtype": "float32", "shape": ["N"] },
+    "segment_end_sec": { "required": true, "tier": "analytics", "dtype": "float32", "shape": ["N"] },
+    "segment_center_sec": { "required": true, "tier": "analytics", "dtype": "float32", "shape": ["N"] },
+    "segment_mask": { "required": true, "tier": "analytics", "dtype": "bool", "shape": ["N"] },
+
+    "jitter_by_segment": { "required": false, "tier": "analytics", "dtype": "float32", "shape": ["N"] },
+    "shimmer_by_segment": { "required": false, "tier": "analytics", "dtype": "float32", "shape": ["N"] },
+    "hnr_by_segment": { "required": false, "tier": "analytics", "dtype": "float32", "shape": ["N"] },
+
+    "f0": { "required": false, "tier": "debug", "dtype": "float32", "shape": ["E"] },
+    "amps": { "required": false, "tier": "debug", "dtype": "float32", "shape": ["E"] },
+    "hnr_vals": { "required": false, "tier": "debug", "dtype": "float32", "shape": ["E"] },
+
+    "meta": { "required": true, "tier": "debug", "dtype": "object", "shape": [] }
+  }
+}

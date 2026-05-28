@@ -4,16 +4,20 @@
 
 Извлекает набор **детерминированных** лексических/статических признаков из текстовых полей видео: заголовка (title), описания (description) и транскрипта (transcript). Компонент **не использует** тяжёлые NLP‑модели (spaCy/langdetect) и не требует сети; любые модели должны быть отдельными extractor’ами через `dp_models`.
 
-**Версия**: 1.1.0  
+**Версия**: 1.2.0  
 **Категория**: lexical features  
 **GPU**: не требуется (CPU-only)
+
+**Контракт Audit v3**: [`SCHEMA.md`](SCHEMA.md) · [`../../schemas/lexico_static_features_output_v1.json`](../../schemas/lexico_static_features_output_v1.json)  
+**Диапазоны и валидатор среза** (`text_features.npz`): [`docs/FEATURE_DESCRIPTION.md`](docs/FEATURE_DESCRIPTION.md) · [`utils/validate_lexico_static_features_text_npz.py`](utils/validate_lexico_static_features_text_npz.py)  
+**Audit v4:** [`../../../../docs/audit_v4/components/text_processor/lexico_static_features_audit_v4.md`](../../../../docs/audit_v4/components/text_processor/lexico_static_features_audit_v4.md) · L2 stats: `scripts/audit_v4_npz_stats.py` → `storage/audit_v4/lexico_static_features_l2/`
 
 ### Входы
 
 - **`VideoDocument`** с полями:
-  - `title` (optional): заголовок (str)
-  - `description` (optional): описание (str)
-  - `asr` (optional, preferred): payload от AudioProcessor, `asr.segments[].text` — **source-of-truth** для transcript
+  - `title` (optional): заголовок (str). В типичном ранне **после** `TagsExtractor` — без inline `#тегов`, если включена очистка.
+  - `description` (optional): описание (str), аналогично title.
+  - `asr` (optional, preferred): payload от AudioProcessor, `asr.segments[].text` — **source-of-truth** для transcript при `transcript_source_policy` включающем ASR
   - `transcripts` (legacy, optional): допускается **только** при явной политике источника транскрипта (см. ниже)
 
 ### Выходы
@@ -109,16 +113,17 @@
 - `enable_title` (bool, default true)
 - `enable_description` (bool, default true)
 - `enable_transcript` (bool, default true)
-- `enable_emoji` (bool, default false)
-- `emoji_policy` (`required|optional`, default `required`):
-  - `required`: если `enable_emoji=true`, а пакет `emoji` не установлен → **fail-fast**
-  - `optional`: если пакет отсутствует → эмодзи‑фичи `NaN` и `tp_lex_emoji_dependency_missing_flag=1`
+- `require_transcript` (bool, default false): если `true` и `enable_transcript`, пустой транскрипт после политики → **RuntimeError** (строгий режим с обязательным ASR)
+- `enable_emoji` (bool, default **true**)
+- `emoji_policy` (`required|optional`, default **`optional`**):
+  - `required`: если `enable_emoji=true`, а пакет `emoji` не установлен → **fail-fast** при **инициализации**
+  - `optional`: если пакет отсутствует → эмодзи‑фичи **`NaN`** и `tp_lex_emoji_dependency_missing_flag=1`
 - `enable_clickbait_heuristic` (bool, default true)
 - `transcript_source_policy` (`asr_only|asr_then_legacy|legacy_only`, default `asr_only`)
 - `allow_legacy_transcripts` (bool, default false): **legacy alias** (deprecated). Если `true` и `transcript_source_policy` не задан, будет использовано `asr_then_legacy`.
-- `max_title_chars` (int|null, default null)
-- `max_description_chars` (int|null, default null)
-- `max_transcript_chars` (int|null, default null)
+- `max_title_chars` (int|null, default **null** — без усечения)
+- `max_description_chars` (int|null, default **null**)
+- `max_transcript_chars` (int|null, default **null**)
 
 **Зависимости**:
 - `emoji` — *только если включён `enable_emoji=true`* (иначе фичи по эмодзи = NaN)
@@ -189,13 +194,15 @@
 
 ### Примечания
 
-1. **ASR источник истины**: transcript берётся из `VideoDocument.asr` (AudioProcessor). `transcripts` используется только если это разрешено политикой `transcript_source_policy`.
-2. **Прокси-метрики**: некоторые метрики (читаемость, частота слов) используют упрощённые эвристики
+1. **ASR источник истины**: transcript берётся из `VideoDocument.asr` (AudioProcessor). `transcripts` используется только если это разрешено политикой `transcript_source_policy`. Для полного Audit v3 — канон **`asr_only`**.
+2. **Прокси-метрики** (см. `SCHEMA.md`, tier **analytics** в machine JSON): читаемость, clickbait score, orthographic proxy, стоп-слова — **эвристики**, не NLP ground truth.
 3. **Стоп-слова**: используется простой список для русского и английского языков
 4. **Clickbait-слова**: список ключевых слов для определения clickbait-контента
 5. **Энтропия**: вычисляется через формулу Шеннона с защитой от log(0)
 
 ### Feature groups и зависимости (важно для UI)
+
+**Audit v3 full**: рекомендуется **`transcript_source_policy="asr_only"`**; см. `TEXTPROCESSOR_AUDIT_V3_PREFLIGHT_RULES.md` и [`SCHEMA.md`](SCHEMA.md).
 
 Группы можно включать/выключать независимо, но есть зависимости:
 - `emoji_features` → зависит от `enable_emoji` и наличия пакета `emoji`

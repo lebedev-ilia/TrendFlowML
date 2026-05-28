@@ -29,6 +29,12 @@ import torchaudio
 from src.core.base_extractor import BaseExtractor, ExtractorResult
 from src.core.audio_utils import AudioUtils
 
+from .utils.resource_profile import (
+    prefix_snapshot,
+    resource_profile_enabled,
+    snapshot_process_resources,
+)
+
 logger = logging.getLogger(__name__)
 
 # Contract version for downstream extractors compatibility validation
@@ -39,7 +45,7 @@ class MelExtractor(BaseExtractor):
     """Экстрактор Mel-спектрограммы с поддержкой GPU."""
 
     name = "mel"
-    version = "2.0.0"
+    version = "2.1.1"
     description = "Извлечение Mel-спектрограммы признаков"
     category = "spectral"
     dependencies = ["torch", "torchaudio"]
@@ -61,14 +67,14 @@ class MelExtractor(BaseExtractor):
         fmax: Optional[float] = None,
         power: float = 2.0,
         mix_to_mono: bool = True,
-        # Feature gating flags (per-feature control, default: all False)
-        enable_basic_features: bool = False,
+        # Feature gating flags (Audit v3 defaults: basic + spectral enabled)
+        enable_basic_features: bool = True,
         enable_statistics: bool = False,
-        enable_spectral_features: bool = False,
+        enable_spectral_features: bool = True,
         enable_time_series: bool = False,
         enable_stats_vector: bool = False,
         # Optional audio normalization
-        enable_audio_normalization: bool = True,  # Audio normalization before processing (default: True for backward compatibility)
+        enable_audio_normalization: bool = True,  # Audit v3: keep enabled by default
         # Progress reporting callback
         progress_callback: Optional[Callable[[str, int, int, str], None]] = None,
         # Per-run storage path for .npy files
@@ -292,6 +298,9 @@ class MelExtractor(BaseExtractor):
         Progress reporting: обновление прогресса для каждого этапа.
         """
         start_time = time.time()
+        t_total0 = time.perf_counter()
+        stage_timings_ms: Dict[str, float] = {}
+        mel_resource_profile: Optional[Dict[str, Any]] = None
         try:
             if not self._validate_input(input_uri):
                 error_code = self._classify_error(ValueError("Invalid input"), "audio_load_failed")
@@ -303,10 +312,20 @@ class MelExtractor(BaseExtractor):
 
             self._log_extraction_start(input_uri)
 
+            if resource_profile_enabled():
+                try:
+                    mel_resource_profile = {
+                        **prefix_snapshot("at_start", snapshot_process_resources()),
+                    }
+                except Exception:
+                    mel_resource_profile = None
+
             # Загружаем аудио
             if self.progress_callback:
                 self.progress_callback("mel", 0, 7, "Loading audio")
+            t0 = time.perf_counter()
             waveform, sr = self.audio_utils.load_audio(input_uri, target_sr=self.sample_rate)
+            stage_timings_ms["load_audio_ms"] = (time.perf_counter() - t0) * 1000.0
 
             # Convert to torch if needed
             if isinstance(waveform, np.ndarray):
@@ -327,44 +346,65 @@ class MelExtractor(BaseExtractor):
                 if self.progress_callback:
                     self.progress_callback("mel", 1, 7, "Normalizing audio")
                 try:
+                    t0 = time.perf_counter()
                     waveform = self.audio_utils.normalize_audio(waveform)
+                    stage_timings_ms["normalize_audio_ms"] = (time.perf_counter() - t0) * 1000.0
                 except Exception as e:
                     error_code = self._classify_error(e, "audio_load_failed")
                     raise RuntimeError(f"mel | Ошибка нормализации аудио (error_code={error_code}): {e}") from e
+            else:
+                stage_timings_ms["normalize_audio_ms"] = 0.0
 
             # Move to device and dtype float32
+            t0 = time.perf_counter()
             waveform = waveform.to(dtype=torch.float32, device=self.torch_device)
+            stage_timings_ms["to_device_ms"] = (time.perf_counter() - t0) * 1000.0
 
             # Extract Mel spectrogram
             if self.progress_callback:
                 self.progress_callback("mel", 2, 7, "Extracting Mel spectrogram")
+            t0 = time.perf_counter()
             mel_spec, mel_db = self._extract_mel_spectrogram(waveform)
+            stage_timings_ms["extract_mel_ms"] = (time.perf_counter() - t0) * 1000.0
 
             # Compute statistics
             if self.progress_callback:
                 self.progress_callback("mel", 3, 7, "Computing statistics")
+            t0 = time.perf_counter()
             mel_stats = self._compute_statistics(mel_db)
+            stage_timings_ms["compute_statistics_ms"] = (time.perf_counter() - t0) * 1000.0
 
             # Compute spectral features
             if self.progress_callback:
                 self.progress_callback("mel", 4, 7, "Computing spectral features")
+            t0 = time.perf_counter()
             spectral_features = self._compute_spectral_features(mel_db)
+            stage_timings_ms["compute_spectral_features_ms"] = (time.perf_counter() - t0) * 1000.0
 
             # Compute additional metrics
             if self.progress_callback:
                 self.progress_callback("mel", 5, 7, "Computing additional metrics")
+            t0 = time.perf_counter()
             additional_metrics = self._compute_additional_metrics(mel_db, mel_stats, spectral_features)
+            stage_timings_ms["compute_additional_metrics_ms"] = (time.perf_counter() - t0) * 1000.0
 
             # Save artifacts
             if self.progress_callback:
                 self.progress_callback("mel", 6, 7, "Saving artifacts")
+            t0 = time.perf_counter()
             features = self._build_payload(mel_db, mel_stats, spectral_features, additional_metrics, sr, waveform.shape[-1] / float(sr))
+            stage_timings_ms["build_payload_ms"] = (time.perf_counter() - t0) * 1000.0
+
+            t0 = time.perf_counter()
             features = self._save_artifacts(features, mel_db, mel_stats, spectral_features, input_uri, tmp_path)
+            stage_timings_ms["save_artifacts_ms"] = (time.perf_counter() - t0) * 1000.0
 
             # Validate output
             if self.progress_callback:
                 self.progress_callback("mel", 7, 7, "Validating output")
+            t0 = time.perf_counter()
             is_valid, error_msg = self._validate_output(features)
+            stage_timings_ms["validate_output_ms"] = (time.perf_counter() - t0) * 1000.0
             if not is_valid:
                 error_code = self._classify_error(ValueError(error_msg), "validation_failed")
                 raise ValueError(f"mel | {error_msg} (error_code={error_code})")
@@ -386,17 +426,20 @@ class MelExtractor(BaseExtractor):
                 enabled_features.append("stats_vector")
             features["_features_enabled"] = enabled_features
 
-            # Add stage timings to payload (for meta/stage_timings_ms)
-            processing_time = time.time() - start_time
-            features["stage_timings_ms"] = {
-                "load_audio_ms": 0.0,  # Audio loading is part of extraction
-                "extract_mel_ms": float(processing_time * 1000.0),
-                "compute_statistics_ms": 0.0,  # Statistics computation is part of extraction
-                "save_artifacts_ms": 0.0,  # Artifact saving is part of extraction
-                "validate_output_ms": 0.0,  # Validation is part of extraction
-                "total_ms": float(processing_time * 1000.0),
-            }
+            stage_timings_ms["total_ms"] = (time.perf_counter() - t_total0) * 1000.0
+            features["stage_timings_ms"] = stage_timings_ms
 
+            if mel_resource_profile is not None:
+                try:
+                    mel_resource_profile = {
+                        **(mel_resource_profile or {}),
+                        **prefix_snapshot("at_end", snapshot_process_resources()),
+                    }
+                except Exception:
+                    pass
+            features["mel_resource_profile"] = mel_resource_profile
+
+            processing_time = time.time() - start_time
             self._log_extraction_success(input_uri, processing_time)
             return self._create_result(success=True, payload=features, processing_time=processing_time)
 
@@ -419,6 +462,9 @@ class MelExtractor(BaseExtractor):
         Progress reporting: каждые 10% сегментов (если progress_callback установлен).
         """
         start_time = time.time()
+        t_total0 = time.perf_counter()
+        stage_timings_ms: Dict[str, float] = {}
+        mel_resource_profile: Optional[Dict[str, Any]] = None
         try:
             if not self._validate_input(input_uri):
                 error_code = self._classify_error(ValueError("Invalid input"), "audio_load_failed")
@@ -431,18 +477,44 @@ class MelExtractor(BaseExtractor):
                 raise ValueError("mel | segments is empty (no-fallback)")
 
             total_segments = len(segments)
+            stage_timings_ms["load_segments_ms"] = 0.0
+
+            if resource_profile_enabled():
+                try:
+                    mel_resource_profile = {
+                        **prefix_snapshot("at_start", snapshot_process_resources()),
+                    }
+                except Exception:
+                    mel_resource_profile = None
 
             # Progress reporting: каждые 10%
             progress_report_interval = max(1, total_segments // 10) if total_segments >= 10 else 1
             last_reported_pct = -1
 
-            # Process segments
-            mel_db_all: List[np.ndarray] = []
-            mel_stats_all: List[Dict[str, Any]] = []
-            spectral_features_all: List[Dict[str, Any]] = []
-            additional_metrics_all: List[Dict[str, Any]] = []
-            segment_centers: List[float] = []
-            segment_durations: List[float] = []
+            # Strict alignment (Audit v3): pre-allocate arrays, no skipping
+            segment_start_sec = np.zeros(total_segments, dtype=np.float32)
+            segment_end_sec = np.zeros(total_segments, dtype=np.float32)
+            segment_center_sec = np.zeros(total_segments, dtype=np.float32)
+            segment_mask = np.zeros(total_segments, dtype=bool)
+
+            mel_mean_by_segment = np.full((total_segments, self.n_mels), np.nan, dtype=np.float32)
+            mel_energy_by_segment = np.full(total_segments, np.nan, dtype=np.float32)
+            mel_centroid_mean_by_segment = np.full(total_segments, np.nan, dtype=np.float32)
+            mel_bandwidth_mean_by_segment = np.full(total_segments, np.nan, dtype=np.float32)
+
+            # For global aggregates
+            valid_means: List[np.ndarray] = []
+            valid_centroids: List[float] = []
+            valid_bandwidths: List[float] = []
+            valid_energies: List[float] = []
+            valid_entropies: List[float] = []
+            valid_contrasts: List[float] = []
+            valid_rolloffs: List[float] = []
+            valid_flatness: List[float] = []
+
+            total_frames = 0
+
+            t0 = time.perf_counter()
 
             for seg_idx, seg in enumerate(segments):
                 # Progress reporting
@@ -452,85 +524,182 @@ class MelExtractor(BaseExtractor):
                         self.progress_callback("mel", seg_idx, total_segments, f"Processing segment {seg_idx+1}/{total_segments}")
                         last_reported_pct = pct
 
-                # Load segment
-                start_sample = int(seg.get("start_sample", 0))
-                end_sample = int(seg.get("end_sample", 0))
-                center_sec = float(seg.get("center_sec", 0.0))
+                # Always populate time axis (strict alignment)
+                st = float(seg.get("start_sec", 0.0))
+                en = float(seg.get("end_sec", 0.0))
+                c = float(seg.get("center_sec", (st + en) * 0.5))
+                segment_start_sec[seg_idx] = st
+                segment_end_sec[seg_idx] = en
+                segment_center_sec[seg_idx] = c
 
-                waveform, _sr = self.audio_utils.load_audio_segment(
-                    input_uri,
-                    start_sample=start_sample,
-                    end_sample=end_sample,
-                    target_sr=self.sample_rate,
-                )
+                # Basic validation
+                if not np.isfinite(st) or not np.isfinite(en) or en <= st:
+                    continue
 
-                # Convert to torch if needed
-                if isinstance(waveform, np.ndarray):
-                    waveform = torch.from_numpy(waveform)
+                try:
+                    # Load segment
+                    start_sample = int(seg.get("start_sample", 0))
+                    end_sample = int(seg.get("end_sample", 0))
+                    waveform, _sr = self.audio_utils.load_audio_segment(
+                        input_uri,
+                        start_sample=start_sample,
+                        end_sample=end_sample,
+                        target_sr=self.sample_rate,
+                    )
 
-                # Ensure 2D tensor
-                if waveform.ndim == 1:
-                    waveform = waveform.unsqueeze(0)
-                elif waveform.ndim > 2:
-                    waveform = waveform.reshape(waveform.shape[0], -1)
+                    # Convert to torch if needed
+                    if isinstance(waveform, np.ndarray):
+                        waveform = torch.from_numpy(waveform)
 
-                # Mix to mono if requested
-                if waveform.shape[0] > 1 and self.mix_to_mono:
-                    waveform = waveform.mean(dim=0, keepdim=True)
+                    # Ensure 2D tensor
+                    if waveform.ndim == 1:
+                        waveform = waveform.unsqueeze(0)
+                    elif waveform.ndim > 2:
+                        waveform = waveform.reshape(waveform.shape[0], -1)
 
-                # Опциональная нормализация аудио (fail-fast, no-fallback)
-                if self.enable_audio_normalization:
-                    try:
+                    # Mix to mono if requested
+                    if waveform.shape[0] > 1 and self.mix_to_mono:
+                        waveform = waveform.mean(dim=0, keepdim=True)
+
+                    # Optional normalization (fail-fast for that segment only)
+                    if self.enable_audio_normalization:
                         waveform = self.audio_utils.normalize_audio(waveform)
-                    except Exception as e:
-                        error_code = self._classify_error(e, "audio_load_failed")
-                        raise RuntimeError(f"mel | Ошибка нормализации аудио (error_code={error_code}): {e}") from e
 
-                # Move to device
-                waveform = waveform.to(dtype=torch.float32, device=self.torch_device)
+                    waveform = waveform.to(dtype=torch.float32, device=self.torch_device)
 
-                # Extract Mel spectrogram
-                mel_spec, mel_db = self._extract_mel_spectrogram(waveform)
+                    # Extract Mel spectrogram
+                    _mel_spec, mel_db = self._extract_mel_spectrogram(waveform)
+                    mel_np = self.audio_utils.to_numpy(mel_db)
+                    if mel_np.ndim == 3:
+                        mel_np = mel_np[0]
+                    if mel_np.ndim != 2 or mel_np.shape[0] != self.n_mels:
+                        raise RuntimeError(f"mel | invalid mel_db shape: {getattr(mel_np, 'shape', None)}")
+                    frames = int(mel_np.shape[1])
+                    total_frames += frames
 
-                # Compute statistics
-                mel_stats = self._compute_statistics(mel_db)
+                    # Compute stats/features for segment-level aggregates
+                    mel_stats = self._compute_statistics(mel_db)
+                    spectral_features = self._compute_spectral_features(mel_db)
+                    additional_metrics = self._compute_additional_metrics(mel_db, mel_stats, spectral_features)
 
-                # Compute spectral features
-                spectral_features = self._compute_spectral_features(mel_db)
+                    # Segment-aligned sequences (Audit v3)
+                    if isinstance(mel_stats.get("mel_mean"), np.ndarray) and mel_stats["mel_mean"].size == self.n_mels:
+                        mel_mean_by_segment[seg_idx, :] = mel_stats["mel_mean"].astype(np.float32)
+                        valid_means.append(mel_stats["mel_mean"].astype(np.float32))
+                    mel_energy_by_segment[seg_idx] = float(additional_metrics.get("mel_energy", np.nan))
+                    mel_centroid_mean_by_segment[seg_idx] = float(additional_metrics.get("mel_centroid_mean", np.nan))
+                    mel_bandwidth_mean_by_segment[seg_idx] = float(additional_metrics.get("mel_bandwidth_mean", np.nan))
 
-                # Compute additional metrics
-                additional_metrics = self._compute_additional_metrics(mel_db, mel_stats, spectral_features)
+                    valid_energies.append(float(additional_metrics.get("mel_energy", 0.0)))
+                    valid_centroids.append(float(additional_metrics.get("mel_centroid_mean", 0.0)))
+                    valid_bandwidths.append(float(additional_metrics.get("mel_bandwidth_mean", 0.0)))
+                    valid_entropies.append(float(additional_metrics.get("mel_spectrogram_entropy", 0.0)))
+                    valid_contrasts.append(float(additional_metrics.get("mel_spectrogram_contrast", 0.0)))
+                    valid_rolloffs.append(float(additional_metrics.get("mel_rolloff", 0.0)))
+                    valid_flatness.append(float(additional_metrics.get("mel_flatness", 0.0)))
 
-                # Store results
-                mel_db_all.append(self.audio_utils.to_numpy(mel_db))
-                mel_stats_all.append(mel_stats)
-                spectral_features_all.append(spectral_features)
-                additional_metrics_all.append(additional_metrics)
-                segment_centers.append(center_sec)
-                segment_durations.append(float((end_sample - start_sample) / self.sample_rate))
+                    segment_mask[seg_idx] = True
+                except Exception as e:
+                    logger.warning(f"mel | Segment {seg_idx} failed: {e}")
+                    continue
 
             # Final progress report
             if self.progress_callback:
                 self.progress_callback("mel", total_segments, total_segments, "Completed")
 
-            # Aggregate results
-            if len(mel_db_all) == 0:
-                error_code = self._classify_error(RuntimeError("All segments produced empty features"), "validation_failed")
-                raise RuntimeError(f"mel | all segments produced empty features (error_code={error_code})")
+            stage_timings_ms["process_segments_ms"] = (time.perf_counter() - t0) * 1000.0
 
-            # Build payload (feature-gated)
-            features = self._build_payload_from_segments(
-                mel_db_all,
-                mel_stats_all,
-                spectral_features_all,
-                additional_metrics_all,
-                segment_centers,
-                segment_durations,
-                total_segments,
-            )
+            t0 = time.perf_counter()
+            n_valid = int(np.sum(segment_mask))
+            if n_valid <= 0:
+                error_code = self._classify_error(RuntimeError("All segments failed"), "validation_failed")
+                raise RuntimeError(f"mel | all segments failed (error_code={error_code})")
 
+            # Build payload (Audit v3): segment-aligned sequences + aggregated scalars
+            features: Dict[str, Any] = {
+                "device_used": str(self.torch_device),
+                "sample_rate": self.sample_rate,
+                "n_fft": self.n_fft,
+                "hop_length": self.hop_length,
+                "n_mels": self.n_mels,
+                "fmin": self.fmin,
+                "fmax": self.fmax,
+                "power": self.power,
+                "segments_count": int(total_segments),
+                "duration": float(np.sum((segment_end_sec - segment_start_sec)[segment_mask])) if n_valid > 0 else 0.0,
+                "segment_start_sec": segment_start_sec,
+                "segment_end_sec": segment_end_sec,
+                "segment_center_sec": segment_center_sec,
+                "segment_mask": segment_mask,
+            }
+
+            # Basic features: describe concatenated time axis without storing full per-frame series in NPZ
+            if self.enable_basic_features:
+                features["mel_shape"] = (int(self.n_mels), int(total_frames))
+                features["mel_elements"] = int(self.n_mels) * int(total_frames)
+
+            # Aggregated additional metrics (expanded model_facing scalars)
+            features["mel_energy"] = float(np.mean(valid_energies)) if valid_energies else 0.0
+            features["mel_centroid_mean"] = float(np.mean(valid_centroids)) if valid_centroids else 0.0
+            features["mel_centroid_std"] = float(np.std(valid_centroids)) if valid_centroids else 0.0
+            features["mel_bandwidth_mean"] = float(np.mean(valid_bandwidths)) if valid_bandwidths else 0.0
+            features["mel_bandwidth_std"] = float(np.std(valid_bandwidths)) if valid_bandwidths else 0.0
+            features["mel_spectrogram_entropy"] = float(np.mean(valid_entropies)) if valid_entropies else 0.0
+            features["mel_spectrogram_contrast"] = float(np.mean(valid_contrasts)) if valid_contrasts else 0.0
+            features["mel_rolloff"] = float(np.mean(valid_rolloffs)) if valid_rolloffs else 0.0
+            features["mel_flatness"] = float(np.mean(valid_flatness)) if valid_flatness else 0.0
+
+            # Stability: mean cosine similarity of consecutive mel_mean vectors (valid segments only)
+            mel_stability = 0.0
+            if len(valid_means) >= 2:
+                sims = []
+                eps = 1e-12
+                prev = valid_means[0].astype(np.float64)
+                prev = prev / (np.linalg.norm(prev) + eps)
+                for v in valid_means[1:]:
+                    cur = v.astype(np.float64)
+                    cur = cur / (np.linalg.norm(cur) + eps)
+                    sims.append(float(np.dot(prev, cur)))
+                    prev = cur
+                if sims:
+                    mel_stability = float(np.mean(sims))
+            features["mel_stability"] = mel_stability
+
+            stage_timings_ms["aggregate_results_ms"] = (time.perf_counter() - t0) * 1000.0
+
+            # Global mel-bin statistics for NPZ/schema (must align M with mel_mean_by_segment)
+            if self.enable_statistics:
+                mm = mel_mean_by_segment[segment_mask]
+                if mm.size == 0:
+                    error_code = self._classify_error(RuntimeError("no mel means"), "validation_failed")
+                    raise RuntimeError(f"mel | no valid mel_mean rows (error_code={error_code})")
+                features["mel_mean"] = np.nanmean(mm, axis=0).astype(np.float32)
+                features["mel_std"] = np.nanstd(mm, axis=0).astype(np.float32)
+                features["mel_min"] = np.nanmin(mm, axis=0).astype(np.float32)
+                features["mel_max"] = np.nanmax(mm, axis=0).astype(np.float32)
+
+            if self.enable_stats_vector and self.enable_statistics and "mel_mean" in features:
+                features["mel_stats_vector"] = np.concatenate(
+                    [
+                        features["mel_mean"],
+                        features["mel_std"],
+                        features["mel_min"],
+                        features["mel_max"],
+                    ],
+                    axis=0,
+                ).astype(np.float32)
+
+            # Segment-aligned sequences (feature-gated: time_series)
+            if self.enable_time_series:
+                features["mel_mean_by_segment"] = mel_mean_by_segment
+                features["mel_energy_by_segment"] = mel_energy_by_segment
+                features["mel_centroid_mean_by_segment"] = mel_centroid_mean_by_segment
+                features["mel_bandwidth_mean_by_segment"] = mel_bandwidth_mean_by_segment
+
+            t0 = time.perf_counter()
             # Save artifacts
             features = self._save_artifacts(features, None, None, None, input_uri, tmp_path)
+            stage_timings_ms["save_artifacts_ms"] = (time.perf_counter() - t0) * 1000.0
 
             # Track enabled features for meta
             enabled_features = []
@@ -546,8 +715,10 @@ class MelExtractor(BaseExtractor):
                 enabled_features.append("stats_vector")
             features["_features_enabled"] = enabled_features
 
+            t0 = time.perf_counter()
             # Validate output
             is_valid, error_msg = self._validate_output(features)
+            stage_timings_ms["validate_output_ms"] = (time.perf_counter() - t0) * 1000.0
             if not is_valid:
                 error_code = self._classify_error(ValueError(error_msg), "validation_failed")
                 raise ValueError(f"mel | {error_msg} (error_code={error_code})")
@@ -555,16 +726,20 @@ class MelExtractor(BaseExtractor):
             # Add contract version
             features["mel_contract_version"] = MEL_CONTRACT_VERSION
 
-            # Add stage timings to payload (for meta/stage_timings_ms)
-            processing_time = time.time() - start_time
-            features["stage_timings_ms"] = {
-                "load_segments_ms": 0.0,  # Segment loading is part of extraction
-                "process_segments_ms": float(processing_time * 1000.0),
-                "aggregate_results_ms": 0.0,  # Aggregation is part of processing
-                "validate_output_ms": 0.0,  # Validation is part of processing
-                "total_ms": float(processing_time * 1000.0),
-            }
+            stage_timings_ms["total_ms"] = (time.perf_counter() - t_total0) * 1000.0
+            features["stage_timings_ms"] = stage_timings_ms
 
+            if mel_resource_profile is not None:
+                try:
+                    mel_resource_profile = {
+                        **(mel_resource_profile or {}),
+                        **prefix_snapshot("at_end", snapshot_process_resources()),
+                    }
+                except Exception:
+                    pass
+            features["mel_resource_profile"] = mel_resource_profile
+
+            processing_time = time.time() - start_time
             self._log_extraction_success(input_uri, processing_time)
             return self._create_result(success=True, payload=features, processing_time=processing_time)
 
@@ -590,13 +765,9 @@ class MelExtractor(BaseExtractor):
         """
         try:
             with torch.inference_mode():
-                if self.torch_device.type == "cuda":
-                    with torch.amp.autocast("cuda"):
-                        mel_spec = self.mel_spectrogram(waveform)
-                        mel_db = self.amplitude_to_db(mel_spec)
-                else:
-                    mel_spec = self.mel_spectrogram(waveform)
-                    mel_db = self.amplitude_to_db(mel_spec)
+                # Audit v3: deterministic float32 path (no autocast), stable across devices.
+                mel_spec = self.mel_spectrogram(waveform)
+                mel_db = self.amplitude_to_db(mel_spec)
 
             # Convert to CPU numpy
             mel_db_cpu = mel_db.detach().cpu()
@@ -789,6 +960,9 @@ class MelExtractor(BaseExtractor):
                     "mel_bandwidth_std": 0.0,
                     "mel_spectrogram_entropy": 0.0,
                     "mel_spectrogram_contrast": 0.0,
+                    "mel_rolloff": 0.0,
+                    "mel_flatness": 0.0,
+                    "mel_stability": 0.0,
                 }
 
             # Mel energy (общая энергия Mel-спектрограммы)
@@ -835,6 +1009,27 @@ class MelExtractor(BaseExtractor):
             mel_contrast = float(np.std(mel_np))
             metrics["mel_spectrogram_contrast"] = mel_contrast
 
+            # Rolloff / flatness (computed on linear power domain)
+            mel_power = mel_lin  # (n_mels, frames)
+            eps = 1e-12
+            # Spectral flatness per frame: geo_mean / arith_mean
+            geo = np.exp(np.mean(np.log(np.maximum(mel_power, eps)), axis=0))
+            arith = np.mean(mel_power, axis=0) + eps
+            flatness = geo / arith
+            metrics["mel_flatness"] = float(np.mean(flatness))
+
+            # Spectral rolloff (0.85) in Hz, using mel-bin center freqs approximation
+            freqs = np.linspace(self.fmin, self.fmax, self.n_mels, dtype=np.float64)
+            csum = np.cumsum(mel_power, axis=0)
+            total = csum[-1, :]
+            thr = 0.85 * np.where(total > 0.0, total, 1.0)
+            idx = np.argmax(csum >= thr[None, :], axis=0)
+            rolloff_hz = freqs[idx]
+            metrics["mel_rolloff"] = float(np.mean(rolloff_hz))
+
+            # Stability: placeholder for run(); computed properly for run_segments().
+            metrics["mel_stability"] = 0.0
+
         except Exception as e:
             logger.warning(f"mel | Error computing additional metrics: {e}")
             # Return default values
@@ -846,6 +1041,9 @@ class MelExtractor(BaseExtractor):
                 "mel_bandwidth_std": 0.0,
                 "mel_spectrogram_entropy": 0.0,
                 "mel_spectrogram_contrast": 0.0,
+                "mel_rolloff": 0.0,
+                "mel_flatness": 0.0,
+                "mel_stability": 0.0,
             }
 
         return metrics

@@ -1,0 +1,57 @@
+version: "1.0.0"
+global:
+  platform_id: "youtube"
+  sampling_policy_version: "v1"
+  dataprocessor_version: "audit3_test"
+processors:
+  audio:
+    enabled: true
+    required: false
+    device: "auto"
+    extractors:
+      hpss:
+        enabled: true
+      asr:
+        enabled: false
+      band_energy:
+        enabled: false
+      chroma:
+        enabled: false
+      clap:
+        enabled: false
+      emotion_diarization:
+        enabled: false
+      key:
+        enabled: false
+      loudness:
+        enabled: false
+      mel:
+        enabled: false
+      mfcc:
+        enabled: false
+      onset:
+        enabled: false
+      pitch:
+        enabled: false
+      quality:
+        enabled: false
+      rhythmic:
+        enabled: false
+      source_separation:
+        enabled: false
+      speaker_diarization:
+        enabled: false
+      spectral:
+        enabled: false
+      spectral_entropy:
+        enabled: false
+      speech_analysis:
+        enabled: false
+      tempo:
+        enabled: false
+      voice_quality:
+        enabled: false
+  text:
+    enabled: false
+  visual:
+    enabled: false

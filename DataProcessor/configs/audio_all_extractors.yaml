@@ -1,0 +1,52 @@
+# Полный прогон AudioProcessor: все extractors, Segmenter → audio/segments.json.
+# Visual/Text отключены. Запуск: DataProcessor/main.py --global-config configs/audio_all_extractors.yaml --no-run-visual ...
+version: "1.0.0"
+
+global:
+  platform_id: "youtube"
+  sampling_policy_version: "v1"
+  dataprocessor_version: "audio_all_extractors"
+
+processors:
+  visual:
+    enabled: false
+  text:
+    enabled: false
+  audio:
+    enabled: true
+    required: false
+    device: "auto"
+    scheduler:
+      segment_parallelism: 1
+      max_inflight: 2
+      clap_batch_size: 1
+    batch_processing:
+      enabled: false
+    extractors:
+      clap: { enabled: true }
+      tempo: { enabled: true }
+      loudness: { enabled: true }
+      asr: { enabled: true }
+      speaker_diarization: { enabled: true }
+      emotion_diarization: { enabled: true }
+      source_separation: { enabled: true }
+      speech_analysis:
+        enabled: true
+        pitch_enabled: true
+        feature_flags:
+          enable_asr_metrics: true
+          enable_diarization_metrics: true
+          enable_pitch_metrics: true
+      spectral: { enabled: true }
+      quality: { enabled: true }
+      mfcc: { enabled: true }
+      mel: { enabled: true }
+      onset: { enabled: true }
+      chroma: { enabled: true }
+      rhythmic: { enabled: true }
+      voice_quality: { enabled: true }
+      hpss: { enabled: true }
+      key: { enabled: true }
+      band_energy: { enabled: true }
+      spectral_entropy: { enabled: true }
+      pitch: { enabled: true }

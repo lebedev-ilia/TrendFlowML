@@ -1,0 +1,57 @@
+{
+  "schema_system_version": "vp_schema_v1",
+  "schema_version": "band_energy_extractor_npz_v1",
+  "producer": "band_energy_extractor",
+  "artifact_kind": "npz",
+  "allow_extra_keys": false,
+  "meta": {
+    "required_keys": [
+      "producer",
+      "producer_version",
+      "schema_version",
+      "created_at",
+      "platform_id",
+      "video_id",
+      "run_id",
+      "config_hash",
+      "sampling_policy_version",
+      "dataprocessor_version",
+      "status",
+      "empty_reason",
+      "models_used",
+      "model_signature",
+      "stage_timings_ms"
+    ],
+    "optional_keys": [
+      "device_used",
+      "scheduler_knobs",
+      "resource_metrics",
+      "error",
+      "features_enabled",
+      "band_energy_contract_version",
+      "method",
+      "sample_rate",
+      "n_fft",
+      "hop_length",
+      "duration",
+      "band_balance_score",
+      "band_dominance",
+      "band_contrast"
+    ]
+  },
+  "fields": {
+    "feature_names": { "required": true, "tier": "model_facing", "dtype": "object", "shape": ["F"] },
+    "feature_values": { "required": true, "tier": "model_facing", "dtype": "float32", "shape": ["F"] },
+
+    "band_edges_hz": { "required": true, "tier": "analytics", "dtype": "float32", "shape": ["B", 2] },
+    "band_energy_shares": { "required": true, "tier": "model_facing", "dtype": "float32", "shape": ["B"] },
+
+    "segment_centers_sec": { "required": false, "tier": "analytics", "dtype": "float32", "shape": ["N"] },
+    "segment_durations_sec": { "required": false, "tier": "analytics", "dtype": "float32", "shape": ["N"] },
+    "segment_mask": { "required": false, "tier": "analytics", "dtype": "bool", "shape": ["N"] },
+    "band_shares_by_segment": { "required": false, "tier": "analytics", "dtype": "float32", "shape": ["N", "B"] },
+
+    "meta": { "required": true, "tier": "debug", "dtype": "object", "shape": [] }
+  }
+}
+

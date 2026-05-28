@@ -1,25 +1,28 @@
+import sys
+from pathlib import Path
+# Ensure VisualProcessor root is first on path so "utils" resolves to VisualProcessor/utils (subprocess entry point).
+_vp = Path(__file__).resolve().parent  # core_clip/
+for _ in range(3):
+    _vp = _vp.parent  # -> model_process -> core -> VisualProcessor
+sys.path.insert(0, str(_vp))
+
 import argparse
 import hashlib
 import json
 import os
-import sys
 import tempfile
 import time
 from contextlib import contextmanager
 from datetime import datetime
-from pathlib import Path
 from typing import Dict, List, Tuple, Optional, Any
 
 import numpy as np      # type: ignore
 import torch            # type: ignore
 from PIL import Image   # type: ignore
 
-_path = os.path.dirname(os.path.dirname(os.path.dirname(os.path.dirname(__file__))))
-if _path not in sys.path:
-    sys.path.append(_path)
-_repo_root = os.path.dirname(_path)
+_repo_root = str(_vp.parent)
 if _repo_root not in sys.path:
-    sys.path.append(_repo_root)
+    sys.path.insert(0, _repo_root)
 
 from utils.frame_manager import FrameManager
 from utils.logger import get_logger
@@ -30,12 +33,46 @@ from utils.artifact_validator import validate_npz
 
 
 NAME = "core_clip"
-VERSION = "2.0"
-SCHEMA_VERSION = "core_clip_npz_v1"
+VERSION = "2.1"
+# Audit v3: expanded outputs (backend-friendly proxies) + ModelManager-only Triton path.
+SCHEMA_VERSION = "core_clip_npz_v2"
 ARTIFACT_FILENAME = "embeddings.npz"
 LOGGER = get_logger(NAME)
 
 PROMPTS_VERSION = "v3_2026-01-16"
+
+
+def _resource_profile_snapshot() -> Dict[str, Any]:
+    """
+    Best-effort resource snapshot for audit/profiling.
+    Enabled only when VP_RESOURCE_PROFILE=1|true|yes.
+    """
+    v = str(os.environ.get("VP_RESOURCE_PROFILE") or "").strip().lower()
+    if v not in ("1", "true", "yes", "y", "on"):
+        return {}
+
+    out: Dict[str, Any] = {}
+    try:
+        import psutil  # type: ignore
+
+        p = psutil.Process(os.getpid())
+        rss = int(getattr(p.memory_info(), "rss", 0) or 0)
+        out["rss_bytes"] = rss
+        out["rss_mib"] = float(rss) / (1024.0 * 1024.0)
+    except Exception:
+        pass
+
+    try:
+        if hasattr(torch, "cuda") and torch.cuda.is_available():
+            try:
+                out["cuda_max_memory_allocated_bytes"] = int(torch.cuda.max_memory_allocated())
+                out["cuda_max_memory_reserved_bytes"] = int(torch.cuda.max_memory_reserved())
+            except Exception:
+                pass
+    except Exception:
+        pass
+
+    return out
 
 
 # Timing instrumentation
@@ -451,9 +488,17 @@ def _parse_places365_categories(raw_text: str) -> List[str]:
 def _load_places365_prompts_from_bundle() -> List[str]:
     """
     Deterministic Places365 prompt list (365 prompts), derived from bundled categories.
-    Requires DP_MODELS_ROOT to point at a folder that contains visual/places365/categories_places365.txt.
-    Falls back to auto-detecting bundled_models relative to repo root if DP_MODELS_ROOT is not set.
+    Production contract (Audit v3):
+    - Prefer strict DP_MODELS_ROOT (no-network, reproducible).
+    - Auto-detect fallback is allowed ONLY in dev when explicitly enabled.
     """
+    allow_autodetect = False
+    try:
+        env_flag = str(os.environ.get("DP_ALLOW_BUNDLE_AUTODETECT", "")).strip().lower()
+        allow_autodetect = env_flag in ("1", "true", "yes", "y")
+    except Exception:
+        allow_autodetect = False
+
     # Try DP_MODELS_ROOT first
     root = os.environ.get("DP_MODELS_ROOT")
     cat_path = None
@@ -463,8 +508,8 @@ def _load_places365_prompts_from_bundle() -> List[str]:
         if os.path.isfile(candidate):
             cat_path = candidate
     
-    # Fallback: try to auto-detect bundled_models relative to repo root
-    if cat_path is None:
+    # Fallback: try to auto-detect bundled_models relative to repo root (dev-only, opt-in)
+    if cat_path is None and allow_autodetect:
         # This file is at: VisualProcessor/core/model_process/core_clip/main.py
         # We need to find: DataProcessor/dp_models/bundled_models/visual/places365/categories_places365.txt
         current_dir = os.path.abspath(__file__)
@@ -738,23 +783,9 @@ def main():
     parser.add_argument("--engine", default="torch")
     parser.add_argument("--precision", default="fp32")
     parser.add_argument("--runtime", default="inprocess", choices=["inprocess", "triton"])
-    # Triton (HTTP v2) options (used when --runtime=triton)
-    parser.add_argument("--triton-http-url", default=None)
-    # Prefer ModelManager specs for Triton (recommended; overrides explicit triton_* args when provided).
+    # Triton options (Audit v3: ModelManager-only, no legacy explicit Triton args)
     parser.add_argument("--triton-image-model-spec", default=None, help="dp_models spec name (e.g., clip_image_triton)")
     parser.add_argument("--triton-text-model-spec", default=None, help="dp_models spec name (e.g., clip_text_triton)")
-    # image embeddings
-    parser.add_argument("--triton-image-model-name", default=None)
-    parser.add_argument("--triton-image-model-version", default=None)
-    parser.add_argument("--triton-image-input-name", default="INPUT__0")
-    parser.add_argument("--triton-image-output-name", default="OUTPUT__0")
-    parser.add_argument("--triton-image-datatype", default="FP32")
-    # text embeddings (required by shot_quality_* contract)
-    parser.add_argument("--triton-text-model-name", default=None)
-    parser.add_argument("--triton-text-model-version", default=None)
-    parser.add_argument("--triton-text-input-name", default="INPUT__0")
-    parser.add_argument("--triton-text-output-name", default="OUTPUT__0")
-    parser.add_argument("--triton-text-datatype", default="INT64")
     parser.add_argument(
         "--triton-preprocess-preset",
         type=str,
@@ -763,9 +794,16 @@ def main():
         help="Image preprocess preset used for Triton runtime (controls resize).",
     )
     parser.add_argument("--batch-size", type=int, required=True, help="Batch size (must be provided by scheduler/orchestrator)")
-    parser.add_argument("--triton-timeout-sec", type=float, default=60.0, help="Triton HTTP client timeout in seconds (default: 60.0, increased for text inference with many prompts)")
+    parser.add_argument("--triton-timeout-sec", type=float, default=60.0, help="Triton HTTP client timeout in seconds (used by ModelManager client if applicable)")
     parser.add_argument("--disable-text-cache", action="store_true", help="Disable text embeddings cache (for benchmarks)")
+    parser.add_argument("--allow-bundle-autodetect", action="store_true", help="Dev-only: allow auto-detecting bundled_models if DP_MODELS_ROOT is not set")
+    parser.add_argument("--disable-prompt-scores", action="store_true", help="Disable exporting prompt score proxies (backend-friendly outputs)")
+    parser.add_argument("--places365-topk", type=int, default=5, help="Top-K Places365 labels to export per-frame and per-video (default: 5)")
     args = parser.parse_args()
+    
+    # Dev-only helper: allow bundle auto-detect when explicitly requested.
+    if getattr(args, "allow_bundle_autodetect", False):
+        os.environ["DP_ALLOW_BUNDLE_AUTODETECT"] = "1"
 
     # Initialize timing dictionary
     timings: Dict[str, float] = {}
@@ -831,39 +869,23 @@ def main():
         if batch_size <= 0:
             raise RuntimeError(f"{NAME} | --batch-size must be > 0 (scheduler-controlled); got {batch_size}")
         try:
-            client = None
             if runtime == "triton":
                 with _time_block("triton_init", timings):
-                    img_mm = None
-                    txt_mm = None
-                    # Recommended path: resolve Triton params via ModelManager specs.
-                    if args.triton_image_model_spec and args.triton_text_model_spec:
-                        img_mm = _load_triton_spec_via_model_manager(str(args.triton_image_model_spec))
-                        txt_mm = _load_triton_spec_via_model_manager(str(args.triton_text_model_spec))
-                        client = img_mm["client"]
-                    else:
-                        # Legacy path: explicit Triton args (kept for backward compatibility).
-                        if not args.triton_http_url:
-                            # Allow orchestrator to provide the endpoint via env (still explicit; no silent defaults).
-                            env_url = os.environ.get("TRITON_HTTP_URL")
-                            if isinstance(env_url, str) and env_url.strip():
-                                args.triton_http_url = env_url.strip()
-                        if not args.triton_http_url:
-                            raise RuntimeError(f"{NAME} | runtime=triton requires --triton-http-url (or TRITON_HTTP_URL env) (no-fallback)")
-
-                        from dp_triton import TritonHttpClient, TritonError  # local import (repo code)
-
-                        client = TritonHttpClient(base_url=str(args.triton_http_url), timeout_sec=float(args.triton_timeout_sec))
-                        if not client.ready():
-                            raise TritonError(
-                                f"{NAME} | Triton is not ready at {args.triton_http_url}",
-                                error_code="triton_unavailable",
-                            )
-
-                        if not args.triton_image_model_name:
-                            raise RuntimeError(f"{NAME} | runtime=triton requires --triton-image-model-name")
-                        if not args.triton_text_model_name:
-                            raise RuntimeError(f"{NAME} | runtime=triton requires --triton-text-model-name")
+                    # Audit v3: ModelManager-only Triton path.
+                    if not (args.triton_image_model_spec and args.triton_text_model_spec):
+                        raise RuntimeError(
+                            f"{NAME} | runtime=triton requires both --triton-image-model-spec and --triton-text-model-spec "
+                            f"(ModelManager-only; legacy explicit Triton args are disabled)."
+                        )
+                    img_mm = _load_triton_spec_via_model_manager(str(args.triton_image_model_spec))
+                    txt_mm = _load_triton_spec_via_model_manager(str(args.triton_text_model_spec))
+                    img_client = img_mm["client"]
+                    txt_client = txt_mm["client"]
+            else:
+                img_mm = None
+                txt_mm = None
+                img_client = None
+                txt_client = None
 
             # Baseline contract: emit process_frames stage
             _emit_stage(
@@ -893,7 +915,7 @@ def main():
                         image_frame_loading_time += time.perf_counter() - frame_load_start
 
                         if runtime == "triton":
-                            assert client is not None
+                            assert img_mm is not None and img_client is not None
                             preset = str(args.triton_preprocess_preset or "openai_clip_224").strip().lower()
                             if preset == "openai_clip_224":
                                 image_size = 224
@@ -904,19 +926,12 @@ def main():
                             else:
                                 raise RuntimeError(f"{NAME} | unknown triton_preprocess_preset: {preset}")
 
-                            if "img_mm" in locals() and img_mm is not None:
-                                rp = img_mm["rp"]
-                                triton_model_name = str(rp.get("triton_model_name"))
-                                triton_model_version = str(rp.get("triton_model_version") or "") or None
-                                triton_input_name = str(rp.get("triton_input_name"))
-                                triton_output_name = str(rp.get("triton_output_name"))
-                                triton_datatype = str(rp.get("triton_input_datatype") or "FP32")
-                            else:
-                                triton_model_name = str(args.triton_image_model_name)
-                                triton_model_version = str(args.triton_image_model_version) if args.triton_image_model_version else None
-                                triton_input_name = str(args.triton_image_input_name)
-                                triton_output_name = str(args.triton_image_output_name)
-                                triton_datatype = str(args.triton_image_datatype)
+                            rp = img_mm["rp"]
+                            triton_model_name = str(rp.get("triton_model_name"))
+                            triton_model_version = str(rp.get("triton_model_version") or "") or None
+                            triton_input_name = str(rp.get("triton_input_name"))
+                            triton_output_name = str(rp.get("triton_output_name"))
+                            triton_datatype = str(rp.get("triton_input_datatype") or "FP32")
                             dt = str(triton_datatype or "FP32").strip().upper()
                             
                             preprocess_start = time.perf_counter()
@@ -929,7 +944,7 @@ def main():
                             infer_start = time.perf_counter()
                             try:
                                 emb_np = _triton_infer_embeddings(
-                                    client=client,
+                                    client=img_client,
                                     model_name=triton_model_name,
                                     model_version=triton_model_version,
                                     input_name=triton_input_name,
@@ -1020,44 +1035,30 @@ def main():
                 )
 
             if runtime == "triton":
-                assert client is not None
+                assert txt_mm is not None and txt_client is not None
                 import clip  # type: ignore
 
                 # Determine model info for cache key
-                if "txt_mm" in locals() and txt_mm is not None:
-                    rp = txt_mm["rp"]
-                    triton_model_name = str(rp.get("triton_model_name"))
-                    triton_model_version = str(rp.get("triton_model_version") or "") or None
-                    triton_input_name = str(rp.get("triton_input_name"))
-                    triton_output_name = str(rp.get("triton_output_name"))
-                    triton_datatype = str(rp.get("triton_input_datatype") or "INT64")
-                else:
-                    triton_model_name = str(args.triton_text_model_name)
-                    triton_model_version = str(args.triton_text_model_version) if args.triton_text_model_version else None
-                    triton_input_name = str(args.triton_text_input_name)
-                    triton_output_name = str(args.triton_text_output_name)
-                    triton_datatype = str(args.triton_text_datatype)
+                rp = txt_mm["rp"]
+                triton_model_name = str(rp.get("triton_model_name"))
+                triton_model_version = str(rp.get("triton_model_version") or "") or None
+                triton_input_name = str(rp.get("triton_input_name"))
+                triton_output_name = str(rp.get("triton_output_name"))
+                triton_datatype = str(rp.get("triton_input_datatype") or "INT64")
                 
                 # Determine model size from preset or image model name for versioning
                 # Text embeddings are model-agnostic, but we version by image model size for clarity
                 model_size = None
-                if runtime == "triton":
-                    preset = str(args.triton_preprocess_preset or "openai_clip_224").strip().lower()
-                    if preset == "openai_clip_224":
-                        model_size = "224"
-                    elif preset == "openai_clip_336":
-                        model_size = "336"
-                    elif preset == "openai_clip_448":
-                        model_size = "448"
-                    else:
-                        # Try to extract from image model name
-                        if "img_mm" in locals() and img_mm is not None:
-                            img_rp = img_mm["rp"]
-                            img_model_name = str(img_rp.get("triton_model_name", ""))
-                        else:
-                            img_model_name = str(args.triton_image_model_name or "")
-                        model_size = _extract_model_size_from_name(img_model_name)
-                    LOGGER.info(f"{NAME} | Determined model_size={model_size} from preset={preset}")
+                preset = str(args.triton_preprocess_preset or "openai_clip_224").strip().lower()
+                if preset == "openai_clip_224":
+                    model_size = "224"
+                elif preset == "openai_clip_336":
+                    model_size = "336"
+                elif preset == "openai_clip_448":
+                    model_size = "448"
+                else:
+                    raise RuntimeError(f"{NAME} | unknown triton_preprocess_preset: {preset}")
+                LOGGER.info(f"{NAME} | Determined model_size={model_size} from preset={preset}")
                 
                 # Try to load from cache first (unless disabled)
                 all_text_embeddings = None
@@ -1107,7 +1108,7 @@ def main():
                         infer_start = time.perf_counter()
                         try:
                             seq = _triton_infer_embeddings(
-                                client=client,
+                                client=txt_client,
                                 model_name=triton_model_name,
                                 model_version=triton_model_version,
                                 input_name=triton_input_name,
@@ -1206,6 +1207,68 @@ def main():
             popularity_topic_text_embeddings = np.asarray(all_text_embeddings[sl_pop], dtype=np.float32)
             places365_text_embeddings = np.asarray(all_text_embeddings[sl_p365], dtype=np.float32)
 
+            # ------------------------------------------------------------
+            # Audit v3: backend-friendly proxy outputs (no raw embeddings to website)
+            # ------------------------------------------------------------
+            export_prompt_scores = not bool(getattr(args, "disable_prompt_scores", False))
+            places365_topk_k = max(1, int(getattr(args, "places365_topk", 5) or 5))
+
+            # Consecutive cosine similarity is a compact "visual change" proxy.
+            consecutive_cosine_prev = np.full((int(embeddings.shape[0]),), np.nan, dtype=np.float32)
+            if isinstance(embeddings, np.ndarray) and embeddings.ndim == 2 and embeddings.shape[0] >= 2:
+                consecutive_cosine_prev[1:] = np.sum(embeddings[1:] * embeddings[:-1], axis=1).astype(np.float32)
+
+            def _score_matrix(img_emb: np.ndarray, txt_emb: np.ndarray) -> np.ndarray:
+                if img_emb.size == 0 or txt_emb.size == 0:
+                    return np.zeros((int(img_emb.shape[0]), int(txt_emb.shape[0])), dtype=np.float32)
+                return (img_emb @ txt_emb.T).astype(np.float32, copy=False)
+
+            if export_prompt_scores:
+                shot_quality_scores = _score_matrix(embeddings, shot_quality_text_embeddings)
+                scene_aesthetic_scores = _score_matrix(embeddings, scene_aesthetic_text_embeddings)
+                scene_luxury_scores = _score_matrix(embeddings, scene_luxury_text_embeddings)
+                scene_atmosphere_scores = _score_matrix(embeddings, scene_atmosphere_text_embeddings)
+                cut_detection_transition_scores = _score_matrix(embeddings, cut_detection_transition_text_embeddings)
+                popularity_topic_scores = _score_matrix(embeddings, popularity_topic_text_embeddings)
+                # Places365: keep only top-k per frame + per-video top-k to keep backend payload compact.
+                _p365_scores = _score_matrix(embeddings, places365_text_embeddings)  # (N,365)
+                if _p365_scores.size == 0:
+                    places365_topk_indices = np.full((int(embeddings.shape[0]), places365_topk_k), -1, dtype=np.int32)
+                    places365_topk_scores = np.full((int(embeddings.shape[0]), places365_topk_k), np.nan, dtype=np.float32)
+                    places365_video_topk_indices = np.full((places365_topk_k,), -1, dtype=np.int32)
+                    places365_video_topk_scores = np.full((places365_topk_k,), np.nan, dtype=np.float32)
+                else:
+                    K = min(places365_topk_k, int(_p365_scores.shape[1]))
+                    idx = np.argpartition(-_p365_scores, K - 1, axis=1)[:, :K]
+                    top = np.take_along_axis(_p365_scores, idx, axis=1)
+                    ord2 = np.argsort(-top, axis=1)
+                    places365_topk_indices = np.take_along_axis(idx, ord2, axis=1).astype(np.int32, copy=False)
+                    places365_topk_scores = np.take_along_axis(top, ord2, axis=1).astype(np.float32, copy=False)
+
+                    mean_scores = np.mean(_p365_scores, axis=0)  # (365,)
+                    vid_idx = np.argpartition(-mean_scores, K - 1)[:K]
+                    vid_top = mean_scores[vid_idx]
+                    vid_ord = np.argsort(-vid_top)
+                    places365_video_topk_indices = vid_idx[vid_ord].astype(np.int32, copy=False)
+                    places365_video_topk_scores = vid_top[vid_ord].astype(np.float32, copy=False)
+                # free large intermediate
+                try:
+                    del _p365_scores
+                except Exception:
+                    pass
+            else:
+                # Keep schema stable: export NaN matrices and -1 indices when disabled.
+                shot_quality_scores = np.full((int(embeddings.shape[0]), int(shot_quality_text_embeddings.shape[0])), np.nan, dtype=np.float32)
+                scene_aesthetic_scores = np.full((int(embeddings.shape[0]), int(scene_aesthetic_text_embeddings.shape[0])), np.nan, dtype=np.float32)
+                scene_luxury_scores = np.full((int(embeddings.shape[0]), int(scene_luxury_text_embeddings.shape[0])), np.nan, dtype=np.float32)
+                scene_atmosphere_scores = np.full((int(embeddings.shape[0]), int(scene_atmosphere_text_embeddings.shape[0])), np.nan, dtype=np.float32)
+                cut_detection_transition_scores = np.full((int(embeddings.shape[0]), int(cut_detection_transition_text_embeddings.shape[0])), np.nan, dtype=np.float32)
+                popularity_topic_scores = np.full((int(embeddings.shape[0]), int(popularity_topic_text_embeddings.shape[0])), np.nan, dtype=np.float32)
+                places365_topk_indices = np.full((int(embeddings.shape[0]), places365_topk_k), -1, dtype=np.int32)
+                places365_topk_scores = np.full((int(embeddings.shape[0]), places365_topk_k), np.nan, dtype=np.float32)
+                places365_video_topk_indices = np.full((places365_topk_k,), -1, dtype=np.int32)
+                places365_video_topk_scores = np.full((places365_topk_k,), np.nan, dtype=np.float32)
+
         finally:
             if model is not None:
                 del model
@@ -1262,6 +1325,9 @@ def main():
                     "device": device_meta,
                     "stage_timings_ms": stage_timings_ms,
                 }
+                rp_before = _resource_profile_snapshot()
+                if isinstance(rp_before, dict) and rp_before:
+                    meta_out["resource_profile_before"] = dict(rp_before)
                 required_run_keys = ["platform_id", "video_id", "run_id", "sampling_policy_version", "config_hash"]
                 missing = [k for k in required_run_keys if not meta.get(k)]
                 if missing:
@@ -1272,43 +1338,18 @@ def main():
                 dpv = meta.get("dataprocessor_version") or "unknown"
                 meta_out["dataprocessor_version"] = str(dpv)
                 meta_out["prompts_version"] = PROMPTS_VERSION
+                meta_out["backend_proxy_version"] = "core_clip_backend_proxy_v1"
+                meta_out["export_prompt_scores"] = bool(export_prompt_scores)
+                meta_out["places365_topk_k"] = int(places365_topk_k)
 
                 # PR-3: model system baseline (core_clip may use both image+text encoders on Triton).
                 models_used_list = []
-                if runtime == "triton" and "img_mm" in locals() and "txt_mm" in locals() and img_mm is not None and txt_mm is not None:
-                    # Use ModelManager entries (preferred path)
+                if runtime == "triton":
+                    # Audit v3: ModelManager-only; must have fully resolved models_used entries.
+                    if img_mm is None or txt_mm is None:
+                        raise RuntimeError(f"{NAME} | runtime=triton requires ModelManager specs (internal error: img_mm/txt_mm missing)")
                     models_used_list.append(img_mm["models_used_entry"])
                     models_used_list.append(txt_mm["models_used_entry"])
-                elif runtime == "triton":
-                    # Legacy Triton path: create entries from explicit args
-                    # Image encoder
-                    triton_image_model_name = str(args.triton_image_model_name) if args.triton_image_model_name else "unknown"
-                    triton_image_model_version = str(args.triton_image_model_version) if args.triton_image_model_version else "unknown"
-                    models_used_list.append(
-                        model_used(
-                            model_name=triton_image_model_name,
-                            model_version=triton_image_model_version,
-                            weights_digest="unknown",  # Not available in legacy path
-                            runtime=runtime_meta,
-                            engine="triton",
-                            precision=str(args.triton_image_datatype or "unknown").lower(),
-                            device=device_meta,
-                        )
-                    )
-                    # Text encoder
-                    triton_text_model_name = str(args.triton_text_model_name) if args.triton_text_model_name else "unknown"
-                    triton_text_model_version = str(args.triton_text_model_version) if args.triton_text_model_version else "unknown"
-                    models_used_list.append(
-                        model_used(
-                            model_name=triton_text_model_name,
-                            model_version=triton_text_model_version,
-                            weights_digest="unknown",  # Not available in legacy path
-                            runtime=runtime_meta,
-                            engine="triton",
-                            precision=str(args.triton_text_datatype or "unknown").lower(),
-                            device=device_meta,
-                        )
-                    )
                 else:
                     # Inprocess runtime: single model
                     models_used_list.append(
@@ -1326,11 +1367,6 @@ def main():
 
                 _atomic_save_npz(
                     out_path,
-                    # legacy fields (kept)
-                    version=VERSION,
-                    created_at=created_at,
-                    model_name=args.model_name,
-                    total_frames=total_frames,
                     frame_indices=np.array(frame_indices, dtype=np.int32),
                     times_s=times_s,
                     frame_embeddings=embeddings,
@@ -1353,6 +1389,18 @@ def main():
                     # downstream contract: Places365 zero-shot label embeddings for fusion
                     places365_prompts=np.array(places365_prompts, dtype=object),
                     places365_text_embeddings=places365_text_embeddings,
+                    # backend-friendly proxies (do NOT send raw frame_embeddings to website)
+                    consecutive_cosine_prev=consecutive_cosine_prev,
+                    shot_quality_scores=shot_quality_scores,
+                    scene_aesthetic_scores=scene_aesthetic_scores,
+                    scene_luxury_scores=scene_luxury_scores,
+                    scene_atmosphere_scores=scene_atmosphere_scores,
+                    cut_detection_transition_scores=cut_detection_transition_scores,
+                    popularity_topic_scores=popularity_topic_scores,
+                    places365_topk_indices=places365_topk_indices,
+                    places365_topk_scores=places365_topk_scores,
+                    places365_video_topk_indices=places365_video_topk_indices,
+                    places365_video_topk_scores=places365_video_topk_scores,
                     # canonical meta (required by artifact_validator)
                     meta=np.asarray(meta_out, dtype=object),
                 )

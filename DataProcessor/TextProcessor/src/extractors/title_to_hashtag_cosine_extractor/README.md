@@ -2,127 +2,63 @@
 
 ### Назначение
 
-Вычисляет **косинусное сходство** между эмбеддингом заголовка и эмбеддингом хэштегов видео. Компонент читает relpath эмбеддингов из `doc.tp_artifacts` (без `glob+mtime`) и вычисляет cosine similarity.
+**Cosine similarity** между эмбеддингами **title** и **hashtag** по **`doc.tp_artifacts`** (детерминированные `relpath`, без glob/mtime). Векторы **L2-нормируются** внутри экстрактора; затем скалярное произведение.
 
-**Версия**: 1.1.0  
+**Версия**: 1.2.0  
 **Категория**: similarity metric  
 **GPU**: не требуется
 
+**Диапазоны и валидатор среза** (`text_features.npz`): [`docs/FEATURE_DESCRIPTION.md`](docs/FEATURE_DESCRIPTION.md) · [`utils/validate_title_to_hashtag_cosine_extractor_text_npz.py`](utils/validate_title_to_hashtag_cosine_extractor_text_npz.py)
+
+**Контракт Audit v3**: [SCHEMA.md](./SCHEMA.md) · machine: [`schemas/title_to_hashtag_cosine_extractor_output_v1.json`](../../schemas/title_to_hashtag_cosine_extractor_output_v1.json) · **Audit v4:** [`../../../../docs/audit_v4/components/text_processor/title_to_hashtag_cosine_extractor_audit_v4.md`](../../../../docs/audit_v4/components/text_processor/title_to_hashtag_cosine_extractor_audit_v4.md) · **L2 stats:** [`../../../../storage/audit_v4/title_to_hashtag_cosine_extractor_l2/title_to_hashtag_cosine_extractor_audit_v4_stats.json`](../../../../storage/audit_v4/title_to_hashtag_cosine_extractor_l2/title_to_hashtag_cosine_extractor_audit_v4_stats.json) (tooling: `scripts/audit_v4_npz_stats.py`)
+
 ### Входы
 
-- **`doc`** (Any): документ (используется только для структуры, не требует специфических полей)
-
-**Зависимости**:
-- `doc.tp_artifacts["embeddings"]["title"]["relpath"]` (создаёт `title_embedder`)
-- `doc.tp_artifacts["embeddings"]["hashtag"]["relpath"]` (создаёт `hashtag_embedder`)
+- `doc.tp_artifacts["embeddings"]["title"]["relpath"]` ← **TitleEmbedder**
+- `doc.tp_artifacts["embeddings"]["hashtag"]["relpath"]` ← **HashtagEmbedder**
 
 ### Выходы
 
-Экстрактор возвращает `ExtractorResult` с payload, содержащим:
+`result.features_flat` — **ровно 11** ключей `tp_titlehashcos_*` (порядок фиксирован, `allow_extra_keys: false` в machine schema).
 
-#### Скалярные признаки (`result.features_flat`)
+Кратко:
 
-- **Canonical (new)**: `tp_titlehashcos_*` (стабильная схема, ключи всегда присутствуют)
-  - `tp_titlehashcos_present` (0/1)
-  - `tp_titlehashcos_cosine` (float, \([-1, 1]\) или NaN)
-  - `tp_titlehashcos_title_present`, `tp_titlehashcos_hashtag_present`
-  - `tp_titlehashcos_dim_mismatch_flag`, `tp_titlehashcos_zero_norm_flag`, `tp_titlehashcos_unsafe_relpath_flag`
-  - `tp_titlehashcos_enabled`, `tp_titlehashcos_disabled_by_policy`
-  - `tp_titlehashcos_require_title_embedding_enabled`, `tp_titlehashcos_require_hashtag_embedding_enabled`
+- `tp_titlehashcos_present`, `tp_titlehashcos_cosine`
+- `tp_titlehashcos_require_*_enabled` (зеркала opt-in fail-fast)
+- `tp_titlehashcos_title_present`, `tp_titlehashcos_hashtag_present`
+- `tp_titlehashcos_unsafe_relpath_flag` — только **path traversal** при join
+- `tp_titlehashcos_title_embed_missing_flag`, `tp_titlehashcos_hashtag_embed_missing_flag` — безопасный путь, но файл отсутствует / не читается / пустой вектор
+- `tp_titlehashcos_dim_mismatch_flag`, `tp_titlehashcos_zero_norm_flag`
 
-- **Legacy aliases (back-compat)**:
-  - `tp_title_hashtag_cosine_present`
-  - `tp_title_hashtag_cosine`
+См. [SCHEMA.md](./SCHEMA.md).
 
-#### Метаданные (общие для всех экстракторов)
+### Верхний уровень ответа
 
-- `device`: устройство обработки (всегда `"cpu"`)
-- `version`: версия экстрактора (`"1.0.0"`)
-- `system`: системные метрики (pre_init, post_init, post_process, peaks)
-- `timings_s.total`: общее время обработки (секунды)
-`error` не используется для “optional missing input” (valid empty). Fail-fast возможен только при `require_*`.
-
-### Алгоритм
-
-1. **Поиск эмбеддингов**: детерминированный выбор relpath из `doc.tp_artifacts` (без `glob+mtime`)
-2. **L2-нормализация**: нормализация обоих векторов к единичной длине
-3. **Вычисление cosine similarity**: скалярное произведение нормализованных векторов
-4. **Возврат результата**: возврат значения схожести в диапазоне [-1, 1]
-
-Формула:
-```
-cosine_similarity = dot(normalize(title_vec), normalize(hashtag_vec))
-```
-
-### Поиск эмбеддингов
-
-Экстрактор использует:
-- `doc.tp_artifacts["embeddings"]["title"]["relpath"]`
-- `doc.tp_artifacts["embeddings"]["hashtag"]["relpath"]`
-- **Формат**: 1D numpy array, автоматически приводится к `[-1]` (flatten)
-
-Безопасность:
-- relpath резолвится через safe-join (защита от path traversal), при подозрительных значениях → `tp_titlehashcos_unsafe_relpath_flag=1` и valid empty (если не require).
+`model_name` / `model_version` / `weights_digest`: **`null`**. `system`: снимки из **`__init__`** и **`post_process`**, **`gpu_peak_mb`**.
 
 ### Конфигурация
 
 ```python
-{
-    "artifacts_dir": None,                 # per-run artifacts dir (по умолчанию: default_artifacts_dir())
-    "enabled": True,                       # feature-gating
-    "require_title_embedding": False,      # fail-fast если нет title embedding
-    "require_hashtag_embedding": False     # fail-fast если нет hashtag embedding
-}
+TitleToHashtagCosineExtractor(
+    artifacts_dir=None,
+    require_title_embedding=False,
+    require_hashtag_embedding=False,
+)
 ```
 
-### Особенности
+Параметр **`enabled`** в **`__init__`** отсутствует: включение/выключение экстрактора — на уровне **конфига прогона** (список extractors). Неизвестные ключи в kwargs (в т.ч. устаревший `enabled`) **игнорируются**.
 
-- **L2-нормализация**: автоматическая нормализация векторов для корректного вычисления cosine similarity
-- **Простота**: минималистичный компонент для одной метрики
-- **Метрики производительности**: отслеживание времени выполнения и использования памяти
+### Алгоритм
 
-### Обработка ошибок
-
-- **Отсутствие входов**: valid empty (NaN + `*_present=0`), fail-fast при `require_*`
-- **Несоответствие размерностей**: `tp_titlehashcos_dim_mismatch_flag=1`, valid empty
-- **Нулевые нормы**: `tp_titlehashcos_zero_norm_flag=1`, valid empty (no fake metrics)
+1. Прочитать `relpath` из `tp_artifacts`
+2. Безопасный join → при исключении: **`unsafe_relpath_flag`**
+3. `np.load`, `float32` flatten; отсутствие файла / ошибка чтения: **`_*_embed_missing_flag`**
+4. Сверка размерности, нормы → cosine
 
 ### Архитектура
 
-1. Читает relpath из `doc.tp_artifacts`
-2. Safe-join и `np.load(...)`, reshape(-1)
-3. Валидация размерности и zero-norm
-4. L2-нормализация и dot-product
-5. Возврат только `features_flat`
-
-### Performance characteristics
-
-**Resource costs**:
-- **CPU**: минимальные (только загрузка файлов и одно скалярное произведение)
-- **RAM**: минимальные (два вектора эмбеддингов в памяти)
-- **Estimated duration**: <0.001 секунды для типичных эмбеддингов
-
-**Параметры производительности**:
-- Размерность эмбеддинга: не влияет значительно (операция векторизована)
-- Размер файлов: минимальное влияние (загрузка из диска)
+Один проход: загрузка двух векторов, валидация, нормализация, dot-product. **Нет** выбора «самого свежего» файла — только явные `relpath` в `tp_artifacts`.
 
 ### Связанные компоненты
 
-- **BaseExtractor**: базовый интерфейс экстрактора
-- **title_embedder**: компонент, создающий эмбеддинг заголовка (зависимость)
-- **hashtag_embedder**: компонент, создающий эмбеддинг хэштегов (зависимость)
-- **system_snapshot, process_memory_bytes**: утилиты для сбора метрик
-
-### Примечания
-
-1. **Зависимости**: требует предварительного создания эмбеддингов заголовка и хэштегов
-2. **Размерность эмбеддингов**: должна совпадать между заголовком и хэштегами (обычно определяется моделью)
-3. **Выбор последних эмбеддингов**: если создано несколько эмбеддингов, используется самый свежий для каждого типа
-4. **Диапазон значений**: cosine similarity в диапазоне [-1, 1], где:
-   - `1.0`: идентичные векторы (максимальное сходство)
-   - `0.0`: ортогональные векторы (нет сходства)
-   - `-1.0`: противоположные векторы (максимальное различие)
-5. **Нормализация**: L2-нормализация гарантирует, что результат является именно cosine similarity
-6. **Использование**: метрика может использоваться для анализа согласованности заголовка и хэштегов видео
-7. **Производительность**: компонент очень быстрый, так как выполняет только одну операцию скалярного произведения
-
+- **TitleEmbedder**, **HashtagEmbedder**, **TagsExtractor** (хэштеги в документе до hashtag embedder)

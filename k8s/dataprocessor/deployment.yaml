@@ -1,0 +1,77 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: dataprocessor-worker
+  labels:
+    app: dataprocessor
+    component: worker
+spec:
+  replicas: 2  # Начать с 2 worker'ов (на GPU нодах)
+  selector:
+    matchLabels:
+      app: dataprocessor
+      component: worker
+  template:
+    metadata:
+      labels:
+        app: dataprocessor
+        component: worker
+    spec:
+      # Запускать только на GPU нодах
+      nodeSelector:
+        accelerator: nvidia-tesla-v100  # Или другой GPU тип
+      containers:
+      - name: worker
+        image: trendflow-dataprocessor:latest  # Замените на ваш registry
+        imagePullPolicy: Always
+        env:
+        - name: DATABASE_URL
+          valueFrom:
+            secretKeyRef:
+              name: app-secrets
+              key: database-url
+        - name: REDIS_URL
+          valueFrom:
+            secretKeyRef:
+              name: app-secrets
+              key: redis-url
+        - name: MINIO_ENDPOINT
+          value: "http://minio-service:9000"
+        - name: MINIO_ACCESS_KEY
+          valueFrom:
+            secretKeyRef:
+              name: app-secrets
+              key: minio-access-key
+        - name: MINIO_SECRET_KEY
+          valueFrom:
+            secretKeyRef:
+              name: app-secrets
+              key: minio-secret-key
+        - name: TRITON_HTTP_URL
+          value: "http://triton-service:8000"
+        - name: LOG_LEVEL
+          value: "INFO"
+        resources:
+          requests:
+            nvidia.com/gpu: 1    # Требуется 1 GPU
+            cpu: "4"              # 4 CPU
+            memory: "16Gi"        # 16 GB RAM
+          limits:
+            nvidia.com/gpu: 1    # Максимум 1 GPU
+            cpu: "8"              # Максимум 8 CPU
+            memory: "32Gi"        # Максимум 32 GB RAM
+        livenessProbe:
+          exec:
+            command:
+            - /bin/sh
+            - -c
+            - "ps aux | grep '[p]ython.*main.py' || exit 1"
+          initialDelaySeconds: 120  # Дать время на загрузку моделей
+          periodSeconds: 30
+        readinessProbe:
+          httpGet:
+            path: /health
+            port: 8080  # Если есть health endpoint
+          initialDelaySeconds: 60
+          periodSeconds: 10
+

@@ -1,0 +1,2 @@
+"""Integration тесты для Fetcher."""
+

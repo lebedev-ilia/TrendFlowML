@@ -1,0 +1,91 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: fetcher-finalize-worker
+  labels:
+    app: fetcher
+    component: finalize-worker
+spec:
+  replicas: 1  # Начать с 1 worker'а (artifact builder)
+  selector:
+    matchLabels:
+      app: fetcher
+      component: finalize-worker
+  template:
+    metadata:
+      labels:
+        app: fetcher
+        component: finalize-worker
+    spec:
+      containers:
+      - name: worker
+        image: trendflow-fetcher:latest  # Замените на ваш registry
+        imagePullPolicy: Always
+        command: ["celery", "-A", "fetcher.celery_app", "worker", "--loglevel=info", "--queues=fetch.finalize", "--concurrency=2"]
+        env:
+        - name: POSTGRES_DSN
+          valueFrom:
+            secretKeyRef:
+              name: fetcher-secrets
+              key: postgres-dsn
+        - name: REDIS_URL
+          valueFrom:
+            secretKeyRef:
+              name: fetcher-secrets
+              key: redis-url
+        - name: S3_ENDPOINT_URL
+          valueFrom:
+            configMapKeyRef:
+              name: fetcher-config
+              key: s3-endpoint-url
+        - name: S3_ACCESS_KEY_ID
+          valueFrom:
+            secretKeyRef:
+              name: fetcher-secrets
+              key: s3-access-key
+        - name: S3_SECRET_ACCESS_KEY
+          valueFrom:
+            secretKeyRef:
+              name: fetcher-secrets
+              key: s3-secret-key
+        - name: S3_BUCKET_RAW
+          valueFrom:
+            configMapKeyRef:
+              name: fetcher-config
+              key: s3-bucket-raw
+        - name: DATAPROCESSOR_API_URL
+          valueFrom:
+            configMapKeyRef:
+              name: fetcher-config
+              key: dataprocessor-api-url
+        - name: LOG_LEVEL
+          valueFrom:
+            configMapKeyRef:
+              name: fetcher-config
+              key: log-level
+        resources:
+          requests:
+            cpu: "500m"      # 0.5 CPU
+            memory: "512Mi"  # 512 MB RAM
+          limits:
+            cpu: "1"         # Максимум 1 CPU
+            memory: "1Gi"    # Максимум 1 GB RAM
+        livenessProbe:
+          exec:
+            command:
+            - /bin/sh
+            - -c
+            - "celery -A fetcher.celery_app inspect ping -d celery@$(hostname) || exit 1"
+          initialDelaySeconds: 60
+          periodSeconds: 30
+          timeoutSeconds: 10
+        readinessProbe:
+          exec:
+            command:
+            - /bin/sh
+            - -c
+            - "celery -A fetcher.celery_app inspect ping -d celery@$(hostname) || exit 1"
+          initialDelaySeconds: 30
+          periodSeconds: 10
+          timeoutSeconds: 5
+

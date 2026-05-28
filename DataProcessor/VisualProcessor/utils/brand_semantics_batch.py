@@ -13,6 +13,8 @@ from __future__ import annotations
 import os
 import sys
 import time
+import json
+import hashlib
 import tempfile
 from typing import Dict, List, Any, Optional, Tuple
 from pathlib import Path
@@ -41,17 +43,23 @@ logger = get_logger("VisualProcessor.brand_semantics_batch")
 
 # Import from brand_semantics
 try:
-    from core.model_process.core_identity.brand_semantics.embedding_service_client import EmbeddingServiceClient
-    from core.model_process.core_identity.brand_semantics.crop_utils import crop_with_padding, select_best_crop_for_track
+    from core.model_process.core_identity.brand_semantics.utils.embedding_service_client import EmbeddingServiceClient
+    from core.model_process.core_identity.brand_semantics.utils.crop_utils import crop_with_padding, select_best_crop_for_track
 except ImportError:
-    # Fallback: direct import
-    sys.path.insert(0, str(_brand_semantics_path))
-    from embedding_service_client import EmbeddingServiceClient
-    from crop_utils import crop_with_padding, select_best_crop_for_track
+    # Fallback: try utils directory, then direct import
+    try:
+        sys.path.insert(0, str(_brand_semantics_path / "utils"))
+        from embedding_service_client import EmbeddingServiceClient
+        from crop_utils import crop_with_padding, select_best_crop_for_track
+    except ImportError:
+        # Last fallback: direct import from root
+        sys.path.insert(0, str(_brand_semantics_path))
+        from embedding_service_client import EmbeddingServiceClient
+        from crop_utils import crop_with_padding, select_best_crop_for_track
 
 NAME = "brand_semantics"
-VERSION = "0.1"
-SCHEMA_VERSION = "brand_semantics_npz_v1"
+VERSION = "0.2"
+SCHEMA_VERSION = "brand_semantics_npz_v2"
 ARTIFACT_FILENAME = "brand_semantics.npz"
 BRAND_CATEGORY = "brand"
 TOP_K = 5
@@ -150,10 +158,70 @@ def process_brand_semantics_batch(
     )
     
     embedding_client = EmbeddingServiceClient(base_url=embedding_service_url)
+
+    # Fail-fast + deterministic label-space (UUID->int32 mapping)
+    try:
+        embedding_client._ensure_url()
+    except Exception as e:
+        raise RuntimeError(
+            f"{NAME} | batch | Embedding Service unavailable at {embedding_client.base_url}: {e} (fail-fast)"
+        ) from e
+
+    labels = embedding_client.get_labels(category=BRAND_CATEGORY)
+    if not labels:
+        raise RuntimeError(
+            f"{NAME} | batch | Embedding Service category '{BRAND_CATEGORY}' has 0 labels (fail-fast)"
+        )
+
+    def _canon_label_row(r: Dict[str, Any]) -> Dict[str, Any]:
+        return {
+            "id": str(r.get("id") or ""),
+            "name": str(r.get("name") or ""),
+            "embedding_model": str(r.get("embedding_model") or ""),
+            "embedding_dim": int(r.get("embedding_dim") or 0),
+            "updated_at": str(r.get("updated_at") or ""),
+        }
+
+    labels_canon = [_canon_label_row(r) for r in labels]
+    labels_canon = [r for r in labels_canon if r["id"]]
+    labels_canon.sort(key=lambda r: r["id"])
+    db_digest = hashlib.sha256(
+        json.dumps(labels_canon, ensure_ascii=False, sort_keys=True, separators=(",", ":")).encode("utf-8")
+    ).hexdigest()
+    uuid_to_int: Dict[str, int] = {r["id"]: i for i, r in enumerate(labels_canon)}
+    semantic_object_ids = np.asarray([r["id"] for r in labels_canon], dtype="U")
+    semantic_label_names = np.asarray(
+        [f"{i}:{labels_canon[i]['name']}" for i in range(len(labels_canon))],
+        dtype="U",
+    )
+    threshold_per_label_arr = np.full((len(labels_canon),), np.nan, dtype=np.float32)
+    embedding_models = sorted({r["embedding_model"] for r in labels_canon if r["embedding_model"]})
+    embedding_model = embedding_models[0] if len(embedding_models) == 1 else ""
     
     # Параметры конфигурации
     topk = int(config.get("topk", TOP_K))
-    similarity_threshold = float(config.get("similarity_threshold", 0.0))
+    if topk != TOP_K:
+        raise RuntimeError(
+            f"{NAME} | batch | topk must be fixed to {TOP_K} by contract; got {topk}"
+        )
+
+    # Contract: MUST NOT gate top-K by thresholds.
+    # Keep config key name for backward compatibility, use it ONLY for confident flags.
+    confidence_threshold_top1 = float(
+        config.get("confidence_threshold_top1", config.get("similarity_threshold", 0.0))
+    )
+    if not (0.0 <= confidence_threshold_top1 <= 1.0):
+        raise RuntimeError(
+            f"{NAME} | batch | confidence_threshold_top1 out of range [0,1]: {confidence_threshold_top1}"
+        )
+
+    proposal_classes = config.get("proposal_classes", "logo_region,text_region")
+    if isinstance(proposal_classes, list):
+        proposal_classes_list = [str(x).strip() for x in proposal_classes if str(x).strip()]
+    else:
+        proposal_classes_list = [s.strip() for s in str(proposal_classes).split(",") if s.strip()]
+    if not proposal_classes_list:
+        raise RuntimeError(f"{NAME} | batch | proposal_classes is empty (contract)")
     max_tracks = config.get("max_tracks")
     if max_tracks == "" or max_tracks is None:
         max_tracks = None
@@ -272,12 +340,20 @@ def process_brand_semantics_batch(
             class_names = np.asarray(detections.get("class_names"), dtype="U")  # (M,)
             class_id_to_name = _get_class_id_to_name(class_names)
             
-            # Find logo_region class ID
-            logo_class_id = None
-            for cid, cname in class_id_to_name.items():
-                if cname in ["logo_region", "text_region", "brand"]:
-                    logo_class_id = cid
-                    break
+            # Resolve proposal classes to class_ids (strict)
+            available_class_names = set(class_id_to_name.values())
+            missing = [c for c in proposal_classes_list if c not in available_class_names]
+            if missing:
+                raise RuntimeError(
+                    f"{NAME} | batch | video {video_ctx.video_id} proposal_classes not found in taxonomy: {missing}"
+                )
+            allowed_class_ids = {
+                int(cid) for cid, cname in class_id_to_name.items() if cname in set(proposal_classes_list)
+            }
+            if not allowed_class_ids:
+                raise RuntimeError(
+                    f"{NAME} | batch | video {video_ctx.video_id} resolved proposal_classes produced empty class_id set"
+                )
             
             # Get tracks
             if "tracks" in detections:
@@ -307,10 +383,9 @@ def process_brand_semantics_batch(
                     if not valid_mask[frame_idx, det_idx]:
                         continue
                     
-                    # Filter by class if logo_class_id specified
-                    if logo_class_id is not None:
-                        if class_ids[frame_idx, det_idx] != logo_class_id:
-                            continue
+                    # Filter by allowed proposal classes
+                    if int(class_ids[frame_idx, det_idx]) not in allowed_class_ids:
+                        continue
                     
                     track_id = int(tracks[frame_idx, det_idx])
                     if track_id < 0:
@@ -344,6 +419,7 @@ def process_brand_semantics_batch(
                 crops = []
                 scores_list = []
                 areas_list = []
+                crop_meta = []  # (frame_pos, det_idx, det_score, bbox, class_id)
                 
                 for frame_idx, det_idx, score, bbox in detections_list:
                     frame_idx_global = frame_indices[frame_idx]
@@ -359,6 +435,15 @@ def process_brand_semantics_batch(
                     area = (bbox[2] - bbox[0]) * (bbox[3] - bbox[1])
                     areas_list.append(area)
                     scores_list.append(score)
+                    crop_meta.append(
+                        (
+                            int(frame_idx),
+                            int(det_idx),
+                            float(score),
+                            bbox.astype(np.float32),
+                            int(class_ids[frame_idx, det_idx]),
+                        )
+                    )
                 
                 if not crops:
                     continue
@@ -368,9 +453,15 @@ def process_brand_semantics_batch(
                     best_idx, best_crop = select_best_crop_for_track(
                         crops, scores_list, areas_list, use_sharpness=use_sharpness
                     )
+                    best_frame_pos, best_det_idx, best_det_score, best_bbox, best_class_id = crop_meta[int(best_idx)]
                     video_tracks[track_id] = (best_crop, {
                         "detections_list": detections_list,
                         "frame_indices": frame_indices,
+                        "best_frame_pos": best_frame_pos,
+                        "best_det_idx": best_det_idx,
+                        "best_bbox_xyxy": best_bbox,
+                        "best_det_score": best_det_score,
+                        "best_class_id": best_class_id,
                     })
                 except Exception as e:
                     logger.warning(f"brand_semantics | batch | video {video_ctx.video_id} failed to select best crop for track {track_id}: {e}")
@@ -385,6 +476,7 @@ def process_brand_semantics_batch(
                 "times_s": times_s,
                 "frame_manager": frame_manager,
                 "track_detections": track_detections,
+                "max_dets": int(boxes.shape[1]),
                 "status": "ok",
             })
             
@@ -448,7 +540,7 @@ def process_brand_semantics_batch(
                     category=BRAND_CATEGORY,
                     images=batch_images,
                     top_k=topk,
-                    similarity_threshold=similarity_threshold,
+                    similarity_threshold=0.0,  # Contract: do NOT gate top-K
                     max_retries=3,
                     retry_delay=1.0,
                 )
@@ -466,7 +558,7 @@ def process_brand_semantics_batch(
                             category=BRAND_CATEGORY,
                             image=crop,
                             top_k=topk,
-                            similarity_threshold=similarity_threshold,
+                            similarity_threshold=0.0,  # Contract: do NOT gate top-K
                             max_retries=3,
                             retry_delay=1.0,
                         )
@@ -502,81 +594,94 @@ def process_brand_semantics_batch(
             video_times_s = video_info["times_s"]
             video_track_detections = video_info["track_detections"]
             
-            # Build output arrays
+            # Build output arrays (align with brand_semantics_npz_v2)
             unique_track_ids = sorted([tid for tid in video_tracks.keys() if (video_idx, tid) in track_results])
-            n_frames = len(video_frame_indices)
-            n_tracks = len(unique_track_ids)
-            
-            # Track-level arrays
-            track_ids_arr = np.asarray(unique_track_ids, dtype=np.int32)  # (T,)
-            track_topk_ids = np.zeros((n_tracks, topk), dtype=np.int32)  # (T, K)
-            track_topk_scores = np.zeros((n_tracks, topk), dtype=np.float32)  # (T, K)
-            
-            # Frame-level arrays
-            frame_topk_ids = np.zeros((n_frames, topk), dtype=np.int32)  # (N, K)
-            frame_topk_scores = np.zeros((n_frames, topk), dtype=np.float32)  # (N, K)
-            
-            # Build semantic_label_names from results
-            all_brand_ids: Dict[str, int] = {}
-            label_id_counter = 0
-            
-            for track_idx, track_id in enumerate(unique_track_ids):
-                results_list = track_results.get((video_idx, track_id), [])
-                
-                # Track-level top-K
-                for k, result in enumerate(results_list[:topk]):
-                    brand_name = result.get("name", "unknown")
-                    similarity = float(result.get("similarity", 0.0))
-                    
-                    # Map brand name to label ID
-                    if brand_name not in all_brand_ids:
-                        all_brand_ids[brand_name] = label_id_counter
-                        label_id_counter += 1
-                    
-                    label_id = all_brand_ids[brand_name]
-                    track_topk_ids[track_idx, k] = label_id
-                    track_topk_scores[track_idx, k] = similarity
-            
-            # Build semantic_label_names array
-            brand_names_list = sorted(all_brand_ids.keys(), key=lambda x: all_brand_ids[x])
-            semantic_label_names = np.asarray(
-                [f"{all_brand_ids[name]}:{name}" for name in brand_names_list], dtype="U"
-            )
-            
-            # Frame-level aggregation
-            for frame_idx in range(n_frames):
-                brand_scores: Dict[str, float] = {}
-                
-                for track_id, detections_list in video_track_detections.items():
-                    if track_id not in video_tracks:
+            n_frames = int(len(video_frame_indices))
+            n_tracks = int(len(unique_track_ids))
+            max_dets = int(video_info.get("max_dets") or 0)
+
+            track_ids_arr = np.asarray(unique_track_ids, dtype=np.int32)
+            track_present_mask = np.ones((n_tracks,), dtype=bool)
+            track_topk_ids = np.full((n_tracks, TOP_K), -1, dtype=np.int32)
+            track_topk_scores = np.full((n_tracks, TOP_K), np.nan, dtype=np.float32)
+            track_is_confident_top1 = np.zeros((n_tracks,), dtype=bool)
+
+            track_best_frame_pos = np.full((n_tracks,), -1, dtype=np.int32)
+            track_best_det_idx = np.full((n_tracks,), -1, dtype=np.int32)
+            track_best_bbox_xyxy = np.full((n_tracks, 4), np.nan, dtype=np.float32)
+            track_best_det_score = np.full((n_tracks,), np.nan, dtype=np.float32)
+            track_best_class_id = np.full((n_tracks,), -1, dtype=np.int32)
+
+            det_present_mask = np.zeros((n_frames, max_dets), dtype=bool) if max_dets > 0 else np.zeros((n_frames, 0), dtype=bool)
+            det_topk_ids = np.full((n_frames, max_dets, TOP_K), -1, dtype=np.int32) if max_dets > 0 else np.full((n_frames, 0, TOP_K), -1, dtype=np.int32)
+            det_topk_scores = np.full((n_frames, max_dets, TOP_K), np.nan, dtype=np.float32) if max_dets > 0 else np.full((n_frames, 0, TOP_K), np.nan, dtype=np.float32)
+            det_is_confident_top1 = np.zeros((n_frames, max_dets), dtype=bool) if max_dets > 0 else np.zeros((n_frames, 0), dtype=bool)
+
+            frame_topk_ids = np.full((n_frames, TOP_K), -1, dtype=np.int32)
+            frame_topk_scores = np.full((n_frames, TOP_K), np.nan, dtype=np.float32)
+            frame_is_confident_top1 = np.zeros((n_frames,), dtype=bool)
+
+            # Fill track arrays + per-detection arrays from search results
+            for track_pos, track_id in enumerate(unique_track_ids):
+                results_list = track_results.get((video_idx, track_id), []) or []
+
+                track_meta = video_tracks[track_id][1] if track_id in video_tracks else {}
+                track_best_frame_pos[track_pos] = int(track_meta.get("best_frame_pos", -1))
+                track_best_det_idx[track_pos] = int(track_meta.get("best_det_idx", -1))
+                try:
+                    track_best_bbox_xyxy[track_pos, :] = np.asarray(track_meta.get("best_bbox_xyxy"), dtype=np.float32).reshape(4)
+                except Exception:
+                    pass
+                track_best_det_score[track_pos] = float(track_meta.get("best_det_score", np.nan))
+                track_best_class_id[track_pos] = int(track_meta.get("best_class_id", -1))
+
+                for k, r in enumerate(results_list[:TOP_K]):
+                    oid = str(r.get("id") or "")
+                    if oid not in uuid_to_int:
                         continue
-                    
-                    # Check if track has detection on this frame
-                    has_detection = any(
-                        det_frame_idx == frame_idx for det_frame_idx, _, _, _ in detections_list
-                    )
-                    
-                    if not has_detection:
+                    track_topk_ids[track_pos, k] = int(uuid_to_int[oid])
+                    track_topk_scores[track_pos, k] = float(r.get("similarity", np.nan))
+
+                top1 = float(track_topk_scores[track_pos, 0]) if np.isfinite(track_topk_scores[track_pos, 0]) else float("nan")
+                if np.isfinite(top1) and top1 >= confidence_threshold_top1:
+                    track_is_confident_top1[track_pos] = True
+
+                # per-detection fill for kept detections list (post cost-control)
+                kept_dets = track_meta.get("detections_list") or []
+                for frame_pos, det_idx, _score, _bbox in kept_dets:
+                    if max_dets <= 0:
                         continue
-                    
-                    results_list = track_results.get((video_idx, track_id), [])
-                    for result in results_list[:topk]:
-                        brand_name = result.get("name", "unknown")
-                        similarity = float(result.get("similarity", 0.0))
-                        
-                        if brand_name in all_brand_ids:
-                            if brand_name not in brand_scores or similarity > brand_scores[brand_name]:
-                                brand_scores[brand_name] = similarity
-                
-                # Sort by similarity and take top-K
-                frame_results = [
-                    (similarity, all_brand_ids[brand_name])
-                    for brand_name, similarity in brand_scores.items()
-                ]
-                frame_results.sort(key=lambda x: x[0], reverse=True)
-                for k, (similarity, label_id) in enumerate(frame_results[:topk]):
-                    frame_topk_ids[frame_idx, k] = label_id
-                    frame_topk_scores[frame_idx, k] = similarity
+                    if int(det_idx) < 0 or int(det_idx) >= max_dets:
+                        continue
+                    det_present_mask[int(frame_pos), int(det_idx)] = True
+                    det_topk_ids[int(frame_pos), int(det_idx), :] = track_topk_ids[track_pos, :]
+                    det_topk_scores[int(frame_pos), int(det_idx), :] = track_topk_scores[track_pos, :]
+                    if track_is_confident_top1[track_pos]:
+                        det_is_confident_top1[int(frame_pos), int(det_idx)] = True
+
+            # Frame-level aggregation (dedup by label_id)
+            for frame_pos in range(n_frames):
+                best_by_label: Dict[int, float] = {}
+                for det_idx in range(max_dets):
+                    if not det_present_mask[frame_pos, det_idx]:
+                        continue
+                    for k in range(TOP_K):
+                        lid = int(det_topk_ids[frame_pos, det_idx, k])
+                        sc = float(det_topk_scores[frame_pos, det_idx, k])
+                        if lid < 0 or np.isnan(sc):
+                            continue
+                        prev = best_by_label.get(lid)
+                        if prev is None or sc > prev:
+                            best_by_label[lid] = sc
+                if not best_by_label:
+                    continue
+                items = sorted(best_by_label.items(), key=lambda x: x[1], reverse=True)[:TOP_K]
+                for k, (lid, sc) in enumerate(items):
+                    frame_topk_ids[frame_pos, k] = int(lid)
+                    frame_topk_scores[frame_pos, k] = float(sc)
+                top1 = float(frame_topk_scores[frame_pos, 0])
+                if np.isfinite(top1) and top1 >= confidence_threshold_top1:
+                    frame_is_confident_top1[frame_pos] = True
             
             # Сохраняем результаты в per-video rs_path
             component_dir = video_ctx.get_component_rs_path(NAME)
@@ -585,6 +690,14 @@ def process_brand_semantics_batch(
             # Подготовка метаданных
             metadata = video_ctx.load_metadata()
             
+            dets_present_cnt = int(np.sum(det_present_mask)) if det_present_mask is not None else 0
+            if n_tracks <= 0 or dets_present_cnt <= 0:
+                status = "empty"
+                empty_reason = "no_logo_proposals"
+            else:
+                status = "ok"
+                empty_reason = None
+
             save_metadata = {
                 "producer": NAME,
                 "producer_version": VERSION,
@@ -596,16 +709,26 @@ def process_brand_semantics_batch(
                 "sampling_policy_version": video_ctx.sampling_policy_version or metadata.get("sampling_policy_version"),
                 "config_hash": video_ctx.config_hash or metadata.get("config_hash"),
                 "dataprocessor_version": video_ctx.dataprocessor_version or metadata.get("dataprocessor_version") or "unknown",
-                "status": "ok",
-                "empty_reason": None,
+                "status": status,
+                "empty_reason": empty_reason,
+                # DB provenance
+                "db_name": "embedding_service",
+                "db_version": "v1",
+                "db_digest": db_digest,
+                "db_path": f"{embedding_client.base_url}/categories/{BRAND_CATEGORY}",
                 "embedding_service_url": embedding_service_url,
                 "brand_category": BRAND_CATEGORY,
-                "topk": topk,
-                "similarity_threshold": similarity_threshold,
+                "embedding_model": embedding_model,
+                "topk": TOP_K,
+                "confidence_threshold_top1": confidence_threshold_top1,
+                "proposal_classes": proposal_classes_list,
                 "pad_ratio": pad_ratio,
                 "use_sharpness": use_sharpness,
-                "num_tracks": n_tracks,
-                "num_brands": len(all_brand_ids),
+                "max_tracks": max_tracks,
+                "max_dets_per_track": max_dets_per_frame,
+                "tracks_total": int(n_tracks),
+                "tracks_present": int(np.sum(track_present_mask)),
+                "dets_present": dets_present_cnt,
             }
             
             # Models used
@@ -625,13 +748,32 @@ def process_brand_semantics_batch(
             npz_dict = {
                 "frame_indices": np.asarray(video_frame_indices, dtype=np.int32),
                 "times_s": video_times_s.astype(np.float32),
+                # label space (shared for all videos)
+                "semantic_label_names": semantic_label_names,
+                "semantic_object_ids": semantic_object_ids,
+                "threshold_per_label_arr": threshold_per_label_arr,
                 "track_ids": track_ids_arr,
+                "track_present_mask": track_present_mask,
                 "track_topk_ids": track_topk_ids,
                 "track_topk_scores": track_topk_scores,
+                "track_is_confident_top1": track_is_confident_top1,
                 "frame_topk_ids": frame_topk_ids,
                 "frame_topk_scores": frame_topk_scores,
-                "semantic_label_names": semantic_label_names,
+                "frame_is_confident_top1": frame_is_confident_top1,
+                "det_present_mask": det_present_mask,
+                "det_topk_ids": det_topk_ids,
+                "det_topk_scores": det_topk_scores,
+                "det_is_confident_top1": det_is_confident_top1,
+                "track_best_frame_pos": track_best_frame_pos,
+                "track_best_det_idx": track_best_det_idx,
+                "track_best_bbox_xyxy": track_best_bbox_xyxy,
+                "track_best_det_score": track_best_det_score,
+                "track_best_class_id": track_best_class_id,
                 "meta": np.asarray(save_metadata, dtype=object),
+                "meta_json": np.asarray(
+                    json.dumps(save_metadata, ensure_ascii=False, sort_keys=True),
+                    dtype="U",
+                ),
             }
             
             _atomic_save_npz(npz_path, **npz_dict)

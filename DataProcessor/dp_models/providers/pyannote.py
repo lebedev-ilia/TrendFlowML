@@ -1,10 +1,18 @@
 from __future__ import annotations
 
 import os
+import warnings
 from typing import Any
 
 from ..errors import ModelManagerError
 from ..specs import ModelSpec
+
+
+def _suppress_pyannote_io_noise() -> None:
+    """soundfile/waveform input — torchcodec traceback только засоряет логи."""
+    warnings.filterwarnings("ignore", category=UserWarning, module="pyannote.audio.core.io")
+    warnings.filterwarnings("ignore", module="pyannote.audio.utils.reproducibility")
+    warnings.filterwarnings("ignore", category=UserWarning, module="pyannote.audio.models.blocks.pooling")
 
 
 class PyannoteProvider:
@@ -48,7 +56,20 @@ class PyannoteProvider:
                 error_code="weights_missing",
                 details={"model_name": spec.model_name, "model_dir": model_dir},
             )
+        cfg_path = os.path.join(model_dir, "config.yaml")
+        if not os.path.isfile(cfg_path):
+            raise ModelManagerError(
+                message="Pyannote bundle incomplete (expected config.yaml in model directory)",
+                error_code="weights_missing",
+                details={
+                    "model_name": spec.model_name,
+                    "model_dir": model_dir,
+                    "hint": "Populate e.g. audio/pyannote_speaker_diarization from HF "
+                    "pyannote/speaker-diarization-community-1 (see AudioProcessor/ex.py snapshot_download).",
+                },
+            )
 
+        _suppress_pyannote_io_noise()
         try:
             from pyannote.audio import Pipeline  # type: ignore
             import torch  # type: ignore
@@ -59,9 +80,12 @@ class PyannoteProvider:
                 details={"import_error": str(e)},
             ) from e
 
-        # Load pipeline from local directory
+        # Строго локальная загрузка (как в AudioProcessor/ex.py): без докачки через HF hub.
         try:
-            pipeline = Pipeline.from_pretrained(model_dir)
+            try:
+                pipeline = Pipeline.from_pretrained(model_dir, local_files_only=True)
+            except TypeError:
+                pipeline = Pipeline.from_pretrained(model_dir)
         except Exception as e:
             raise ModelManagerError(
                 message="Failed to load pyannote Pipeline from local directory",

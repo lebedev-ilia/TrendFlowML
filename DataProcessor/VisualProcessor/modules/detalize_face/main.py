@@ -19,7 +19,7 @@ _PATH = os.path.dirname(os.path.dirname(os.path.dirname(__file__)))
 if _PATH not in sys.path:
     sys.path.append(_PATH)
 
-from modules.detalize_face.detalize_face_refactored import DetalizeFaceModule  # type: ignore
+from modules.detalize_face.utils.detalize_face_refactored import DetalizeFaceModule  # type: ignore
 from utils.logger import get_logger
 
 
@@ -127,7 +127,7 @@ def main(argv: Optional[List[str]] = None) -> int:
     )
     parser.add_argument(
         "--refine-landmarks",
-        action="store_true",
+        action=argparse.BooleanOptionalAction,
         default=True,
         help="Использовать уточненные landmarks (468 точек), если доступны",
     )

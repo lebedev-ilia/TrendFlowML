@@ -1,5 +1,7 @@
 ## Component: `brand_semantics` (semantic head, v1)
 
+**Описание фич / melt / QA:** `docs/FEATURE_DESCRIPTION.md` · `utils/validate_brand_semantics.py`
+
 ### Назначение
 
 `brand_semantics` распознает бренды и логотипы в видео:
@@ -101,17 +103,37 @@ POST http://localhost:8001/objects/batch_add
 
 **Artifact filename**: `brand_semantics.npz` (фиксированное имя, `ARTIFACT_FILENAME`)
 
-**Schema version**: `brand_semantics_npz_v1`
+**Schema version**: `brand_semantics_npz_v2`
 
-Ключи (v1):
-- `frame_indices (N,) int32`
-- `times_s (N,) float32`
-- `track_ids (T,) int32` - ID треков
-- `track_topk_brand_ids (T, 5) int32` - Top‑5 брендов на трек
-- `track_topk_scores (T, 5) float32` - Similarity scores
-- `frame_topk_brand_ids (N, 5) int32` - Top‑5 брендов на кадр
-- `frame_topk_scores (N, 5) float32` - Similarity scores
-- `meta` (object dict): статус + информация о базе брендов + models_used
+Ключи (v2, semantic-head contract v1):
+- **Time-axis**:
+  - `frame_indices (N,) int32`
+  - `times_s (N,) float32` (`union_timestamps_sec[frame_indices]`)
+- **Label space (deterministic, derived from Embedding Service)**:
+  - `semantic_label_names (A,) str`: `"int_id:name"`
+  - `semantic_object_ids (A,) str`: UUID из Embedding Service (aligned с `semantic_label_names`)
+  - `threshold_per_label_arr (A,) float32`: сейчас `NaN` (placeholder)
+- **Track axis** (track = реальный track если есть, иначе per-detection track_id):
+  - `track_ids (T,) int32`
+  - `track_present_mask (T,) bool`
+  - `track_topk_ids (T,5) int32` (NaN-policy: `-1` где нет id)
+  - `track_topk_scores (T,5) float32` (NaN-policy: `NaN` где нет score)
+  - `track_is_confident_top1 (T,) bool`
+- **Per-detection axis**:
+  - `det_present_mask (N,MAX) bool`
+  - `det_topk_ids (N,MAX,5) int32`
+  - `det_topk_scores (N,MAX,5) float32`
+  - `det_is_confident_top1 (N,MAX) bool`
+- **Frame axis (aggregated over detections)**:
+  - `frame_topk_ids (N,5) int32`
+  - `frame_topk_scores (N,5) float32`
+  - `frame_is_confident_top1 (N,) bool`
+- **QA/debug helpers for render assets (dev-only)**:
+  - `track_best_frame_pos (T,) int32`, `track_best_det_idx (T,) int32`
+  - `track_best_bbox_xyxy (T,4) float32`, `track_best_det_score (T,) float32`, `track_best_class_id (T,) int32`
+- **Meta**:
+  - `meta` (object dict)
+  - `meta_json` (str) — JSON-копия `meta` для кросс-venv совместимости
 
 **Meta обязательные поля** (baseline contract):
 - `producer`, `producer_version`, `schema_version`, `created_at`
@@ -126,28 +148,25 @@ POST http://localhost:8001/objects/batch_add
   - `saving`: сохранение артефакта
   - `total`: общее время выполнения
 
-### Early validation (Embedding Service)
+### DB provenance / label-space (Embedding Service)
 
-Компонент выполняет **раннюю проверку доступности Embedding Service**:
-- Проверка health endpoint через `embedding_client._ensure_url()`
-- Тестовый запрос с первым треком (dummy image) для проверки работоспособности search endpoint
-- Если тест не проходит (например, 500 ошибка):
-  - Выдается одно предупреждение вместо множества ошибок
-  - Пропускается обработка всех треков
-  - Заполняются пустые результаты вместо обработки с ошибками
-- Если тест проходит — продолжается обычная обработка
+Компонент **всегда** загружает label-space через Embedding Service endpoint:
+- `GET /categories/brand/labels`
 
-**Преимущества**:
-- Fail-fast: проблемы обнаруживаются до начала обработки всех треков
-- Улучшенный UX: одно предупреждение вместо сотен ошибок
-- Экономия ресурсов: не тратится время на обработку, которая все равно завершится ошибкой
+И на основе результата:
+- строит **детерминированный** маппинг UUID→`int32 label_id` (sorted by UUID),
+- считает `db_digest` (sha256 от канонического списка labels),
+- сохраняет `db_digest/db_path/embedding_model` в `meta`.
 
-### No-fallback
+### No-fallback / empty semantics (Audit v3)
 
-- Если Embedding Service недоступен при инициализации → **error** (fail-fast)
-- Если Embedding Service недоступен во время обработки → компонент пропускает все треки с предупреждением
-- Если нет `core_object_detections` → **error**
-- Если бренд не найден → возвращает пустой результат (не error)
+- **Hard deps**:
+  - `core_object_detections` NPZ + `frame_indices` в metadata.json
+  - Embedding Service доступен + категория `brand` не пустая (`/labels` возвращает >0)
+  - Любая ошибка Embedding Service во время обработки → **error** (fail-fast)
+- **Valid empty**:
+  - нет proposals в `proposal_classes` → `status="empty"`, `empty_reason="no_logo_proposals"`
+  - не удалось собрать ни одного валидного crop → `status="empty"`, `empty_reason="no_valid_crops"`
 
 ### Использование
 
@@ -160,6 +179,7 @@ python main.py \
     --embedding-service-url http://localhost:8001 \
     --topk 5 \
     --similarity-threshold 0.7 \
+    --proposal-classes "logo_region,text_region" \
     --max-tracks 100 \
     --max-dets-per-frame 5 \
     --pad-ratio 0.15 \
@@ -171,8 +191,10 @@ python main.py \
 - `--frames-dir` (required): Директория с кадрами и `metadata.json`
 - `--rs-path` (required): Путь к result store (например, `result_store/platform/video/run`)
 - `--embedding-service-url` (optional): URL Embedding Service (по умолчанию: `http://localhost:8001` или из `EMBEDDING_SERVICE_URL`)
-- `--topk` (optional): Количество топ результатов (по умолчанию: `5`)
-- `--similarity-threshold` (optional): Минимальный порог similarity (по умолчанию: `0.0`, диапазон: `0.0-1.0`)
+- `--topk`: **фиксирован = 5** (иначе error, контракт)
+- `--similarity-threshold`: **НЕ гейтит** top‑K. Используется только как порог для `*_is_confident_top1` (deprecated name).
+- `--confidence-threshold-top1`: явное имя порога для `*_is_confident_top1` (приоритетнее, чем `--similarity-threshold`).
+- `--proposal-classes`: список классов proposals из таксономии `core_object_detections` (например `logo_region,text_region`)
 - `--max-tracks` (optional): Максимальное количество треков для обработки (cost control)
 - `--max-dets-per-frame` (optional): Максимальное количество детекций на кадр (cost control)
 - `--pad-ratio` (optional): Коэффициент паддинга для кропов (по умолчанию: `0.15` = 15% с каждой стороны)
@@ -366,7 +388,7 @@ Render-context может быть использован:
 
 **HTML debug страница** (опционально):
 - Путь: `result_store/.../brand_semantics/_render/render.html`
-- Содержит интерактивные графики (Chart.js):
+- Содержит offline SVG графики (без CDN):
   - Timeline: top-1 brand scores по времени с цветовой кодировкой брендов
   - Distributions: статистики по top1_scores и topk_scores
   - Top brands: таблица с топ брендами и их метриками

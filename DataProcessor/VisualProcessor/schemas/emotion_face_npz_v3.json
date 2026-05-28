@@ -1,0 +1,80 @@
+{
+  "schema_system_version": "vp_schema_v1",
+  "schema_version": "emotion_face_npz_v3",
+  "producer": "emotion_face",
+  "artifact_kind": "npz",
+  "allow_extra_keys": false,
+  "meta": {
+    "required_keys": [
+      "producer",
+      "producer_version",
+      "schema_version",
+      "created_at",
+      "platform_id",
+      "video_id",
+      "run_id",
+      "config_hash",
+      "sampling_policy_version",
+      "dataprocessor_version",
+      "status",
+      "empty_reason",
+      "models_used",
+      "model_signature",
+      "stage_timings_ms"
+    ],
+    "optional_keys": [
+      "total_frames",
+      "processed_frames",
+      "frames_dir",
+      "analysis_fps",
+      "analysis_width",
+      "analysis_height",
+      "ui_payload",
+      "module_sampling_policy_version",
+      "face_frames_sampling_policy_version",
+
+      "face_frame_stride",
+      "max_frames",
+      "max_faces_per_frame",
+      "face_bbox_margin",
+      "transition_threshold",
+      "max_gap_seconds",
+      "quality_threshold",
+      "min_diversity_threshold",
+      "target_length",
+      "min_frames_ratio",
+      "min_keyframes",
+      "min_transitions",
+      "emonet_model_spec",
+      "device",
+      "enable_microexpressions",
+      "enable_emotional_individuality",
+      "enable_face_asymmetry"
+    ]
+  },
+  "fields": {
+    "frame_indices": { "required": true, "tier": "model_facing", "dtype": "int32", "shape": ["N"] },
+    "times_s": { "required": true, "tier": "model_facing", "dtype": "float32", "shape": ["N"] },
+
+    "face_present": { "required": true, "tier": "model_facing", "dtype": "bool", "shape": ["N"] },
+    "processed_mask": { "required": true, "tier": "model_facing", "dtype": "bool", "shape": ["N"] },
+    "face_count": { "required": true, "tier": "model_facing", "dtype": "int16", "shape": ["N"] },
+
+    "valence": { "required": true, "tier": "model_facing", "dtype": "float32", "shape": ["N"] },
+    "arousal": { "required": true, "tier": "model_facing", "dtype": "float32", "shape": ["N"] },
+    "intensity": { "required": true, "tier": "model_facing", "dtype": "float32", "shape": ["N"] },
+    "emotion_confidence": { "required": true, "tier": "model_facing", "dtype": "float32", "shape": ["N"] },
+    "emotion_probs": { "required": true, "tier": "model_facing", "dtype": "float32", "shape": ["N", 8] },
+    "dominant_emotion_id": { "required": true, "tier": "model_facing", "dtype": "int8", "shape": ["N"] },
+
+    "sequence_features": { "required": true, "tier": "debug", "dtype": "object", "shape": [] },
+    "keyframes": { "required": true, "tier": "analytics", "dtype": "object", "shape": ["K"] },
+    "summary": { "required": true, "tier": "analytics", "dtype": "object", "shape": [] },
+    "features": { "required": true, "tier": "analytics", "dtype": "object", "shape": [] },
+    "advanced_features": { "required": true, "tier": "analytics", "dtype": "object", "shape": [] },
+    "axis_source": { "required": false, "tier": "debug", "dtype": "object", "shape": [] },
+    "meta": { "required": true, "tier": "debug", "dtype": "object", "shape": [] }
+  }
+}
+
+

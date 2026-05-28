@@ -1,0 +1,86 @@
+# Prometheus alert rules для Fetcher.
+# Подключение в prometheus.yml:
+#   rule_files:
+#     - /path/to/fetcher_alerts.yaml
+#
+groups:
+  - name: fetcher_critical
+    interval: 30s
+    rules:
+      - alert: FetcherHighFailureRate
+        expr: sum(rate(fetcher_videos_failed_total[5m])) > 10
+        for: 2m
+        labels:
+          severity: critical
+          service: fetcher
+        annotations:
+          summary: "Fetcher failure rate превысил порог"
+          description: "Failure rate {{ $value | humanize }}/min. Проверьте логи и платформы."
+
+      - alert: FetcherCircuitBreakerTripped
+        expr: sum(rate(circuit_breaker_tripped_total[5m])) > 5
+        for: 2m
+        labels:
+          severity: critical
+          service: fetcher
+        annotations:
+          summary: "Circuit breaker сработал слишком часто"
+          description: "Срабатываний {{ $value | humanize }}/min. Проверьте прокси и YouTube API."
+
+      - alert: FetcherProxyFailureRateHigh
+        expr: proxy_failure_rate > 0.8
+        for: 2m
+        labels:
+          severity: critical
+          service: fetcher
+        annotations:
+          summary: "Proxy failure rate критически высок"
+          description: "Proxy {{ $labels.proxy_id }}: {{ $value | humanizePercentage }}. Проверьте прокси."
+
+  - name: fetcher_warning
+    interval: 30s
+    rules:
+      - alert: FetcherLowCacheHitRatio
+        expr: |
+          (sum(rate(fetcher_cache_hits_total[5m])) /
+          (sum(rate(fetcher_cache_hits_total[5m])) + sum(rate(fetcher_cache_miss_total[5m])))) < 0.3
+        for: 5m
+        labels:
+          severity: warning
+          service: fetcher
+        annotations:
+          summary: "Cache hit ratio ниже порога"
+          description: "Cache hit ratio {{ $value | humanizePercentage }}. Проверьте кеширование."
+
+      - alert: FetcherHighYouTube429Rate
+        expr: sum(rate(fetcher_youtube_429_total[5m])) > 10
+        for: 2m
+        labels:
+          severity: warning
+          service: fetcher
+        annotations:
+          summary: "Слишком много 429 от YouTube"
+          description: "429: {{ $value | humanize }}/min. Проверьте rate limiting и прокси."
+
+      - alert: FetcherQueueDepthHigh
+        expr: sum(fetcher_celery_queue_pending) > 1000
+        for: 5m
+        labels:
+          severity: warning
+          service: fetcher
+        annotations:
+          summary: "Глубина очереди Celery высокая"
+          description: "Pending {{ $value }}. Проверьте воркеры и масштабирование."
+
+      - alert: FetcherHighDownloadLatency
+        expr: |
+          histogram_quantile(0.95,
+            sum(rate(fetcher_download_latency_seconds_bucket[5m])) by (le, platform)
+          ) > 300
+        for: 5m
+        labels:
+          severity: warning
+          service: fetcher
+        annotations:
+          summary: "P95 download latency > 5 min"
+          description: "P95 {{ $value }}s. Проверьте сеть и прокси."

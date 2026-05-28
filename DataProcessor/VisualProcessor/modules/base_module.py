@@ -10,9 +10,13 @@
 
 from __future__ import annotations
 
-import os, sys
-sys.path.append(os.path.dirname(os.path.dirname(__file__)))
+import sys
+from pathlib import Path
+# Ensure VisualProcessor root is first on path so module-level "utils" imports resolve to VisualProcessor/utils.
+_vp = Path(__file__).resolve().parent.parent  # modules/ -> VisualProcessor/
+sys.path.insert(0, str(_vp))
 
+import os
 from abc import ABC, abstractmethod
 from typing import Dict, List, Any, Optional, Union
 from datetime import datetime
@@ -767,14 +771,30 @@ class BaseModule(ABC):
                 # Используем store_compressed для per-track результатов
                 core_dir = os.path.join(self.rs_path, self.module_name)
                 os.makedirs(core_dir, exist_ok=True)
-                npz_path = os.path.join(core_dir, f"{self.module_name}_emb.npz")
-                
-                return self.results_store.store_compressed(
+                fixed_compressed = getattr(self, "ARTIFACT_FILENAME", None)
+                if isinstance(fixed_compressed, str) and fixed_compressed.strip():
+                    npz_path = os.path.join(core_dir, fixed_compressed.strip())
+                else:
+                    npz_path = os.path.join(core_dir, f"{self.module_name}_emb.npz")
+
+                path = self.results_store.store_compressed(
                     results=results,
                     out_path=npz_path,
                     embeddings_key=embeddings_key,
                     meta=save_meta
                 )
+                ok, issues, _ = validate_npz(path)
+                if not ok:
+                    try:
+                        if os.path.exists(path):
+                            os.remove(path)
+                    except Exception:
+                        pass
+                    raise RuntimeError(
+                        f"{self.module_name} | saved artifact failed validation: "
+                        + "; ".join([f"{i.level}:{i.message}" for i in issues])
+                    )
+                return path
         
         # Стандартное сохранение через np.savez_compressed
         # Baseline: per-run storage is already unique by run_id in path, so fixed filenames are allowed.
@@ -804,20 +824,37 @@ class BaseModule(ABC):
         # Рекурсивно обрабатываем результаты
         for key, value in results.items():
             if isinstance(value, (np.ndarray, np.generic)):
-                npz_dict[key] = value
+                # Если это уже object array (например, keyframes), сохраняем как есть
+                # Проверяем, что это не пустой массив, который был неправильно преобразован
+                if value.dtype == object or (hasattr(value, 'dtype') and value.dtype == object):
+                    npz_dict[key] = value
+                else:
+                    npz_dict[key] = value
             elif isinstance(value, (list, tuple)):
-                # Преобразуем списки в numpy массивы
-                try:
-                    npz_dict[key] = np.asarray(value)
-                except Exception:
-                    # Если не удалось - сохраняем как object array
-                    npz_dict[key] = np.asarray(value, dtype=object)
+                # Для keyframes и других списков словарей - сохраняем как object array
+                if key == "keyframes" and value and isinstance(value[0], dict):
+                    # Создаем object array для списка словарей
+                    arr = np.empty(len(value), dtype=object)
+                    for i, item in enumerate(value):
+                        arr[i] = item
+                    npz_dict[key] = arr
+                else:
+                    # Преобразуем списки в numpy массивы
+                    try:
+                        npz_dict[key] = np.asarray(value)
+                    except Exception:
+                        # Если не удалось - сохраняем как object array
+                        npz_dict[key] = np.asarray(value, dtype=object)
             elif isinstance(value, dict):
                 # Вложенные словари сохраняем как scalar object (важно!)
                 npz_dict[key] = _box_object(value)
             elif isinstance(value, (int, float, str, bool)):
-                # Скаляры сохраняем как numpy типы
-                npz_dict[key] = np.asarray(value)
+                # Для axis_source и других строк, которые должны быть object - используем _box_object
+                if key == "axis_source" and isinstance(value, str):
+                    npz_dict[key] = _box_object(value)
+                else:
+                    # Скаляры сохраняем как numpy типы
+                    npz_dict[key] = np.asarray(value)
             else:
                 # Остальное - как object
                 npz_dict[key] = _box_object(value)

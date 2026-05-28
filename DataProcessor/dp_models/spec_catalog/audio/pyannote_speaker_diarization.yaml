@@ -1,3 +1,5 @@
+# Ожидаемый бандл: каталог HF snapshot для pyannote/speaker-diarization-community-1
+# (config.yaml + segmentation/embedding/plda). См. AudioProcessor/ex.py — первичная загрузка с HF_TOKEN.
 model_name: pyannote_speaker_diarization
 model_version: "1"
 role: speaker_diarization

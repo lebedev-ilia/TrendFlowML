@@ -1,0 +1,70 @@
+core_providers:
+  core_clip: false
+  core_depth_midas: false
+  core_optical_flow: false
+  core_object_detections: true
+  ocr_extractor: false
+  core_face_landmarks: false
+  content_domain: false
+  franchise_recognition: false
+  brand_semantics: true
+  car_semantics: false
+  face_identity: false
+  place_semantics: false
+
+modules:
+  cut_detection: false
+  scene_classification: false
+  video_pacing: false
+  uniqueness: false
+  shot_quality: false
+  story_structure: false
+  detalize_face: false
+  emotion_face: false
+  behavioral: false
+  optical_flow: false
+  action_recognition: false
+  color_light: false
+  frames_composition: false
+  high_level_semantic: false
+  micro_emotion: false
+  similarity_metrics: false
+  text_scoring: false
+
+global:
+  # Used by dp_models Triton specs via ${TRITON_HTTP_URL} (Embedding Service uses it internally).
+  triton_http_url: "http://localhost:8000"
+
+core_object_detections:
+  runtime: "ultralytics"
+  model: "visual/yolo/yolo11x_41_best.pt"  # Relative to DP_MODELS_ROOT
+  batch_size: 16
+  device: "cuda"  # cuda|cpu|auto
+  box_threshold: 0.6
+  iou_threshold: 0.3
+  # Kept for compatibility (unused in ultralytics runtime)
+  triton_model_spec: ""
+  triton_http_url: ""
+  triton_model_name: ""
+  triton_model_version: ""
+  triton_input_name: "images"
+  triton_output_name: "output0"
+  triton_preprocess_preset: "yolo11x_640"
+  render:
+    enable_render: true
+    enable_html_render: true
+
+brand_semantics:
+  embedding_service_url: "http://localhost:8005"
+  topk: 5  # Contract: fixed K=5
+  confidence_threshold_top1: 0.7  # Used ONLY for *_is_confident_top1 flags (no gating)
+  proposal_classes: "logo_region,text_region"
+  max_tracks: ""
+  max_dets_per_frame: ""
+  pad_ratio: 0.15
+  use_sharpness: false
+  render:
+    enable_render: true
+    enable_html_render: true
+
+

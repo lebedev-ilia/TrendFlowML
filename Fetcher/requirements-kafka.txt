@@ -1,0 +1,6 @@
+# Опциональные зависимости для Kafka event streaming
+# Установите только если используете Kafka для production
+
+# Kafka client для Python
+kafka-python>=2.0.2
+

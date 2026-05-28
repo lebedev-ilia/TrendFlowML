@@ -29,6 +29,19 @@
 1. **Aggregate Features** — агрегированные статистики по всему видео (для MLP/Tabular Head)
 2. **Per-Frame Vectors** — компактные векторы для каждого кадра (для VisualTransformer)
 
+**Версия (producer_version)**: 2.0.2  
+**schema_version**: `micro_emotion_npz_v3`  
+**Schemas**:
+- Human: `DataProcessor/VisualProcessor/modules/micro_emotion/SCHEMA.md`
+- Machine: `DataProcessor/VisualProcessor/schemas/micro_emotion_npz_v3.json`
+
+### Audit v3 — Decisions (FINAL)
+
+- **OpenFace runtime**: Docker+image = **hard dependency** (no-fallback). Нет docker/image/FeatureExtraction ⇒ `error`.
+- **compact22**: **строго 22 dims**, стабильные имена (контракт для моделей).
+- **Outputs**: сохраняем и **wide** `frame_features (N,F)` и **compact22 (N,22)`.
+- **Events stream**: `event_*` остаётся **analytics** (QA/debug, не обязателен модели).
+
 ### Основные возможности
 
 - ✅ Извлечение 45 Action Units с интенсивностью и presence
@@ -142,6 +155,16 @@ python3 DataProcessor/VisualProcessor/modules/micro_emotion/main.py \
     --feature-groups default \
     --openface-batch-size 64 \
     --docker-image openface/openface:latest \
+    --fps 30 \
+    --microexpr-smoothing-sigma 0.05 \
+    --microexpr-delta-threshold 0.4 \
+    --microexpr-max-duration-frames 15 \
+    --microexpr-min-peak-distance-frames 6 \
+    --gaze-centered-threshold 10.0 \
+    --pca-components 3 \
+    --au-confidence-threshold 0.5 \
+    --device cuda \
+    --progress-every-frames 50 \
     --log-level INFO
 ```
 
@@ -152,7 +175,19 @@ python3 DataProcessor/VisualProcessor/modules/micro_emotion/main.py \
 - `--feature-groups` (по умолчанию: `default`): Набор фич (preset или CSV)
 - `--openface-batch-size` (по умолчанию: `64`): Максимум кадров на один запуск OpenFace
 - `--docker-image` (по умолчанию: `openface/openface:latest`): Docker образ для OpenFace
+- `--fps` (по умолчанию: `30`): Кадров в секунду (для нормализации времени и окон micro-expressions)
+- `--microexpr-smoothing-sigma` (по умолчанию: `0.05`): Сглаживание micro-expressions (в секундах)
+- `--microexpr-delta-threshold` (по умолчанию: `0.4`): Порог изменения интенсивности для micro-expression
+- `--microexpr-max-duration-frames` (по умолчанию: `15`): Максимальная длительность micro-expression в кадрах
+- `--microexpr-min-peak-distance-frames` (по умолчанию: `6`): Минимальное расстояние между пиками micro-expression
+- `--gaze-centered-threshold` (по умолчанию: `10.0`): Порог для определения взгляда в камеру (градусы)
+- `--pca-components` (по умолчанию: `3`): Количество PCA компонент для AU
+- `--au-confidence-threshold` (по умолчанию: `0.5`): Порог уверенности AU для флагов надёжности
+- `--device` (по умолчанию: `cuda`): Устройство для обработки (cuda/cpu/auto). **Note**: Модуль требует `cuda` для OpenFace (GPU-only).
+- `--progress-every-frames` (по умолчанию: `50`): Как часто писать прогресс в `state_events.jsonl`
 - `--log-level` (по умолчанию: `INFO`): Уровень логирования (DEBUG/INFO/WARN/ERROR)
+
+**Примечание**: CLI по умолчанию использует `use_face_detection=True`, что означает фильтрацию кадров по `core_face_landmarks.face_present` перед запуском OpenFace. Это оптимизирует обработку, запуская OpenFace только на кадрах с лицами. При программном использовании `MicroEmotionModule` значение по умолчанию — `False`.
 
 ### Программный интерфейс
 
@@ -166,7 +201,17 @@ saved_path = run_pipeline(
     rs_path="/path/to/results",
     feature_groups="default",
     openface_batch_size=64,
-    docker_image="openface/openface:latest"
+    docker_image="openface/openface:latest",
+    fps=30,
+    microexpr_smoothing_sigma=0.05,
+    microexpr_delta_threshold=0.4,
+    microexpr_max_duration_frames=15,
+    microexpr_min_peak_distance_frames=6,
+    gaze_centered_threshold=10.0,
+    pca_components=3,
+    au_confidence_threshold=0.5,
+    device="cuda",
+    progress_every_frames=50,
 )
 ```
 
@@ -225,6 +270,10 @@ NPZ meta содержит baseline identity keys +:
 - `ui_payload`: JSON для фронта (внутри NPZ meta, не отдельный JSON-артефакт)
 
 ### Aggregate Features (для MLP/Tabular Head)
+
+В `micro_emotion_npz_v3` агрегаты по видео хранятся таблично:
+
+- `feature_names[V]` + `feature_values[V]` (float32, NaN если недоступно)
 
 #### Ключевые Action Units (10-14 AU)
 
@@ -290,9 +339,24 @@ NPZ meta содержит baseline identity keys +:
 - **`occlusion_flag`** (`bool`): Флаг окклюзии лица
 - **`lighting_flag`** (`bool`): Флаг качества освещения
 
-### Per-Frame Vectors (для VisualTransformer)
+### Per-Frame Features
 
-Массив `per_frame_vectors` имеет форму `[N_frames, 22]` и содержит для каждого кадра:
+Модуль сохраняет два типа per-frame признаков:
+
+#### Wide Frame Features (`frame_features`, `frame_feature_names`)
+
+Массив `frame_features` имеет форму `[N_frames, F]` (где F ~40-80) и содержит для каждого кадра:
+- `time_norm`: Нормализованное время кадра (0.0-1.0)
+- `face_present_any`: Флаг наличия лица (0.0/1.0)
+- `{AU}_delta`: Интенсивность ключевых AU относительно baseline (AU12, AU06, AU04, AU25, и др.)
+- `pose_Rx`, `pose_Ry`, `pose_Rz`, `pose_Tz`: Поза головы
+- `gaze_angle_x`, `gaze_angle_y`: Углы взгляда
+
+Значения `NaN` используются для кадров без лиц.
+
+#### Compact22 Features (`compact22`, `compact22_feature_names`)
+
+Массив `compact22` имеет форму `[N_frames, 22]` и содержит оптимизированные признаки для VisualTransformer:
 
 1. **time_norm** (1): Нормализованное время кадра (0.0-1.0)
 2. **face_presence_flag** (1): Флаг наличия лица (0.0/1.0)
@@ -319,32 +383,28 @@ NPZ meta содержит baseline identity keys +:
 
 ```python
 result = {
-    "features": {
-        "AU12_intensity_mean": 2.3,
-        "AU12_intensity_std": 0.8,
-        "AU12_presence_rate": 0.65,
-        "AU12_peak_count": 5,
-        "pose_stability_score": 0.85,
-        "gaze_centered_ratio": 0.72,
-        "blink_rate_per_min": 18.5,
-        "microexpr_count": 12,
-        "microexpr_rate_per_min": 2.4,
-        "microexpr_types_distribution": {"smile": 8, "surprise": 4},
+    "frame_indices": np.array([0, 5, 10, 15, ...], dtype=np.int32),  # Union-domain frame indices
+    "times_s": np.array([0.0, 0.167, 0.333, ...], dtype=np.float32),  # Time axis
+    "face_present_any": np.array([True, True, False, ...], dtype=bool),  # Face presence per frame
+    "frame_feature_names": np.array(["time_norm", "face_present_any", "AU12_delta", ...], dtype=object),
+    "frame_features": np.array([
+        [0.0, 1.0, 0.2, 0.1, 0.0, 0.3, 15.5, -2.3, 0.05, 0.02, ...],  # Wide features [N, F]
+        [0.01, 1.0, 0.25, 0.12, 0.0, 0.32, 16.2, -2.1, 0.06, 0.03, ...],
+        [0.02, 0.0, np.nan, np.nan, np.nan, np.nan, np.nan, np.nan, np.nan, np.nan, ...],  # No face
         ...
-    },
-    "per_frame_vectors": np.array([
-        [0.0, 1.0, 0.2, 0.1, 0.0, 0.3, 0.5, 0.0, 0.1, 0.0, 1.0, 0.05, 0.02, 0.1, 0.0, 0.0, 0.1, 0.2, 0.0, 1.0],
-        [0.01, 1.0, 0.25, 0.12, 0.0, 0.32, 0.52, 0.0, 0.11, 0.0, 1.0, 0.06, 0.03, 0.11, 0.0, 0.0, 0.12, 0.21, 0.01, 1.0],
+    ], dtype=np.float32),  # [N_frames, F] where F ~40-80
+    "compact22": np.array([
+        [0.0, 1.0, 0.2, 0.1, 0.0, 0.3, 0.5, 0.0, 0.1, 0.0, 1.0, 0.05, 0.02, 0.1, 0.0, 0.0, 0.1, 0.2, 0.0, 1.0, 0.0, 1.0],
+        [0.01, 1.0, 0.25, 0.12, 0.0, 0.32, 0.52, 0.0, 0.11, 0.0, 1.0, 0.06, 0.03, 0.11, 0.0, 0.0, 0.12, 0.21, 0.01, 1.0, 0.0, 1.0],
+        [0.02, 0.0, np.nan, np.nan, np.nan, np.nan, np.nan, np.nan, np.nan, np.nan, np.nan, np.nan, np.nan, np.nan, np.nan, np.nan, np.nan, np.nan, np.nan, np.nan, np.nan, np.nan],
         ...
-    ]),  # [N_frames, 22]
-    "reliability_flags": {
-        "au_quality_overall": 0.87,
-        "au_quality_reliable": True,
-        "landmark_visibility_mean": 0.92,
-        "landmark_visibility_reliable": True,
-        "occlusion_flag": False,
-        "lighting_flag": False
-    },
+    ], dtype=np.float32),  # [N_frames, 22] - compact features for VisualTransformer
+    "compact22_feature_names": np.array(["c22_0", "c22_1", ...], dtype=object),
+    "event_times_s": np.array([1.2, 2.5, 3.8, ...], dtype=np.float32),  # Micro-expression timestamps
+    "event_type_id": np.array([1, 1, 2, ...], dtype=np.int16),  # 1=smile, 2=surprise, 3=frown, 4=disgust
+    "event_strength": np.array([0.85, 0.72, 0.91, ...], dtype=np.float32),
+    "feature_names": np.array(["pose_stability_score", "gaze_centered_ratio", "blink_rate_per_min", ...], dtype=object),
+    "feature_values": np.array([0.85, 0.72, 18.5, ...], dtype=np.float32),
     "microexpr_features": {
         "microexpr_count": 12,
         "microexpr_rate_per_min": 2.4,
@@ -355,10 +415,16 @@ result = {
     },
     "summary": {
         "total_frames": 900,
-        "frames_processed": 850,
         "frames_with_face": 820,
+        "frames_processed_openface": 820,
         "success": True,
-        "fps": 30
+        "fps": 30,
+        "stage_timings_ms": {
+            "deps_load_ms": 45.2,
+            "openface_run_ms": 1234.5,
+            "micro_emotion_features_ms": 12.3,
+            "process_ms": 1291.8
+        }
     }
 }
 ```
@@ -384,10 +450,19 @@ result = {
 
 | Параметр | Тип | По умолчанию | Описание |
 |----------|-----|--------------|----------|
-| `--batch-size` | `int` | `50` | Размер батча для обработки кадров OpenFace |
-| `--features` | `str` | `all` | Группы фич (`all`, `basic`, `au`, `pose`, `gaze`) |
-| `--use-face-detection` | `bool` | `False` | Фильтровать кадры по `core_face_landmarks.face_present` |
+| `--openface-batch-size` | `int` | `64` | Размер батча для обработки кадров OpenFace (вызов Docker) |
+| `--feature-groups` | `str` | `default` | Группы фич (`default`, `all`, и т.п.) |
 | `--docker-image` | `str` | `openface/openface:latest` | Docker образ для OpenFace |
+| `--fps` | `int` | `30` | Кадров в секунду |
+| `--microexpr-smoothing-sigma` | `float` | `0.05` | Сглаживание для micro-expressions (в секундах) |
+| `--microexpr-delta-threshold` | `float` | `0.4` | Порог изменения интенсивности для micro-expression |
+| `--microexpr-max-duration-frames` | `int` | `15` | Максимальная длительность micro-expression в кадрах |
+| `--microexpr-min-peak-distance-frames` | `int` | `6` | Минимальное расстояние между пиками (в кадрах) |
+| `--gaze-centered-threshold` | `float` | `10.0` | Порог для определения взгляда в камеру (градусы) |
+| `--pca-components` | `int` | `3` | Количество PCA компонент для AU |
+| `--au-confidence-threshold` | `float` | `0.5` | Порог уверенности AU для флагов надёжности |
+| `--device` | `str` | `cuda` | Устройство обработки (cuda/cpu/auto) |
+| `--progress-every-frames` | `int` | `50` | Шаг прогресса по кадрам для state_events |
 
 ### Рекомендации по настройке
 
@@ -563,11 +638,14 @@ processed = processor.process_openface_dataframe(df, fit_models=True)
 
 # Использование результатов
 features = processed['features']
-per_frame_vectors = processed['per_frame_vectors']
+per_frame_vectors = processed['per_frame_vectors']  # Внутренний формат процессора
 microexpr_features = processed['microexpr_features']
 
 print(f"Micro-expressions: {microexpr_features['microexpr_count']}")
 print(f"Per-frame vectors shape: {per_frame_vectors.shape}")
+
+# Примечание: В NPZ сохраняются frame_features (wide) и compact22 (для VisualTransformer)
+# вместо per_frame_vectors. См. раздел "Структура выходных данных" для деталей.
 ```
 
 ## Логирование

@@ -1,14 +1,17 @@
-#!/VisualProcessor/core/model_process/.model_process_venv python3
+import sys
+from pathlib import Path
+_vp = Path(__file__).resolve().parent
+for _ in range(3):
+    _vp = _vp.parent
+sys.path.insert(0, str(_vp))
 
 import argparse
 import math
 import os
-import sys
 import hashlib
 import json
 import time
 from datetime import datetime
-from pathlib import Path
 from typing import List, Any, Dict, Optional, Tuple
 from collections import defaultdict
 from concurrent.futures import ThreadPoolExecutor, as_completed
@@ -45,23 +48,59 @@ import warnings
 warnings.filterwarnings("ignore", category=UserWarning, module="google.protobuf")
 warnings.filterwarnings("ignore", message="SymbolDatabase.GetPrototype") 
 
-_path = os.path.dirname(os.path.dirname(os.path.dirname(os.path.dirname(__file__))))
-if _path not in sys.path:
-    sys.path.append(_path)
+_repo_root = str(_vp.parent)
+if _repo_root not in sys.path:
+    sys.path.insert(0, _repo_root)
 
 from utils.frame_manager import FrameManager
 from utils.logger import get_logger
 from utils.utilites import load_metadata
 from utils.meta_builder import apply_models_meta, model_used
 
-VERSION = "2.0"
+VERSION = "2.1"
 NAME = "core_face_landmarks"
-SCHEMA_VERSION = "core_face_landmarks_npz_v1"
+# v2: adds raw+filtered landmarks, person-mask diagnostics, and face_mesh_ran mask (QA-friendly).
+SCHEMA_VERSION = "core_face_landmarks_npz_v2"
 ARTIFACT_FILENAME = "landmarks.npz"
 LOGGER = get_logger(NAME)
 
 # Progress context for state_events (used inside processing functions)
 _PROGRESS_CONTEXT: Dict[str, Any] = {}
+
+
+def _resource_profile_snapshot() -> Dict[str, Any]:
+    """
+    Best-effort resource snapshot for audit/profiling.
+    Enabled only when VP_RESOURCE_PROFILE=1|true|yes.
+    """
+    v = str(os.environ.get("VP_RESOURCE_PROFILE") or "").strip().lower()
+    if v not in ("1", "true", "yes", "y", "on"):
+        return {}
+
+    out: Dict[str, Any] = {}
+    try:
+        import psutil  # type: ignore
+
+        p = psutil.Process(os.getpid())
+        rss = int(getattr(p.memory_info(), "rss", 0) or 0)
+        out["rss_bytes"] = rss
+        out["rss_mib"] = float(rss) / (1024.0 * 1024.0)
+    except Exception:
+        pass
+
+    try:
+        import torch  # type: ignore
+
+        if hasattr(torch, "cuda") and torch.cuda.is_available():
+            try:
+                out["cuda_max_memory_allocated_bytes"] = int(torch.cuda.max_memory_allocated())
+                out["cuda_max_memory_reserved_bytes"] = int(torch.cuda.max_memory_reserved())
+            except Exception:
+                pass
+    except Exception:
+        pass
+
+    return out
 
 
 def _append_state_event_if_possible(*, rs_path: str, event: Dict[str, Any]) -> None:
@@ -293,6 +332,8 @@ def apply_temporal_filter(
         return data
     
     dt = 1.0 / fps if fps > 0 else 1.0 / 30.0
+    # Important: do NOT hallucinate values for frames where the original signal was missing (NaN).
+    # We'll use interpolation only to make the smoother stable, but then restore NaNs for originally-missing samples.
     filtered = data.copy()
     n_frames = data.shape[0]
     
@@ -332,6 +373,10 @@ def apply_temporal_filter(
             for i in range(n_frames):
                 interp_series[i] = filter_obj(interp_series[i], dt)
         
+        # Restore NaNs where the original series had missing values (no hallucinations in output)
+        interp_series = interp_series.astype(np.float32, copy=False)
+        interp_series[~valid_mask] = np.nan
+
         flat_filtered[:, feat_idx] = interp_series
     
     return flat_filtered.reshape(original_shape)
@@ -340,17 +385,23 @@ def _load_npz(path: str) -> Dict[str, Any]:
     if not os.path.isfile(path):
         raise RuntimeError(f"{NAME} | missing required artifact: {path}")
     d = np.load(path, allow_pickle=True)
-    out: Dict[str, Any] = {}
-    for k in d.files:
-        v = d[k]
-        if isinstance(v, np.ndarray) and v.dtype == object and v.shape == ():
-            try:
-                out[k] = v.item()
-            except Exception:
+    try:
+        out: Dict[str, Any] = {}
+        for k in d.files:
+            v = d[k]
+            if isinstance(v, np.ndarray) and v.dtype == object and v.shape == ():
+                try:
+                    out[k] = v.item()
+                except Exception:
+                    out[k] = v
+            else:
                 out[k] = v
-        else:
-            out[k] = v
-    return out
+        return out
+    finally:
+        try:
+            d.close()
+        except Exception:
+            pass
 
 
 def _parse_class_names(arr: Any) -> Dict[str, int]:
@@ -731,15 +782,24 @@ def process_video(
     total_duration = time.perf_counter() - total_start
     profiler.add("total", total_duration)
     
-    # Apply temporal filtering if enabled
+    # Preserve raw arrays (source-of-truth for QA/debug) and produce filtered arrays (default for downstream).
+    pose_raw = pose_data.copy() if pose_data is not None else None
+    hands_raw = hands_data.copy() if hands_data is not None else None
+    face_raw = face_data.copy() if face_data is not None else None
+
+    pose_filt = pose_raw
+    hands_filt = hands_raw
+    face_filt = face_raw
+
+    # Apply temporal filtering if enabled (filtered outputs only).
     if enable_temporal_filter:
         with profiler.time("postproc.temporal_filter"):
-            if pose_data is not None:
-                pose_data = apply_temporal_filter(pose_data, fps=fps)
-            if hands_data is not None:
-                hands_data = apply_temporal_filter(hands_data, fps=fps)
-            if face_data is not None:
-                face_data = apply_temporal_filter(face_data, fps=fps)
+            if pose_raw is not None:
+                pose_filt = apply_temporal_filter(pose_raw, fps=fps)
+            if hands_raw is not None:
+                hands_filt = apply_temporal_filter(hands_raw, fps=fps)
+            if face_raw is not None:
+                face_filt = apply_temporal_filter(face_raw, fps=fps)
     
     # Log profiling summary
     summary = profiler.summary()
@@ -747,7 +807,17 @@ def process_video(
     for stage, stats in summary.items():
         LOGGER.info(f"  {stage}: total={stats['total']:.3f}s, mean={stats['mean']:.3f}s, count={stats['count']}")
     
-    return pose_data, hands_data, face_data, pose_present, hands_present, face_present
+    return (
+        pose_raw,
+        hands_raw,
+        face_raw,
+        pose_filt,
+        hands_filt,
+        face_filt,
+        pose_present,
+        hands_present,
+        face_present,
+    )
 
 
 def _process_video_sequential(
@@ -1214,7 +1284,17 @@ def main():
 
     t_process_start = time.perf_counter()
 
-    pose, hands, face, pose_present, hands_present, face_present = process_video(
+    (
+        pose_raw,
+        hands_raw,
+        face_raw,
+        pose,
+        hands,
+        face,
+        pose_present,
+        hands_present,
+        face_present,
+    ) = process_video(
         frame_manager=frame_manager,
         frame_indices=frame_indices,
         cfg=args,
@@ -1243,13 +1323,25 @@ def main():
     has_any_pose = bool(np.any(pose_present)) if pose_present is not None else False
     has_any_hands = bool(np.any(hands_present)) if hands_present is not None else False
 
+    # Diagnostics masks (aligned to primary frame_indices)
+    person_present_mask = person_present.astype(bool).reshape(-1)  # (N,)
+    face_mesh_ran_mask = np.zeros((len(frame_indices),), dtype=bool)
+    for p in face_mesh_positions_override:
+        if 0 <= int(p) < len(frame_indices):
+            face_mesh_ran_mask[int(p)] = True
+
     # Valid empty reasons:
-    # - no_faces_in_video is a valid empty for this provider (NOT an error)
+    # - if FaceMesh is gated by person-mask and we never ran it (no person frames), this is a VALID empty
+    #   and must be distinguishable from "FaceMesh ran but no faces were detected".
+    # - if FaceMesh ran but no faces were detected => "no_faces_in_video" (VALID empty)
     face_empty_reason: Optional[str] = None
     pose_empty_reason: Optional[str] = None
     hands_empty_reason: Optional[str] = None
-    if args.use_face_mesh and not has_any_face:
-        face_empty_reason = "no_faces_in_video"
+    if args.use_face_mesh:
+        if int(face_mesh_ran_mask.sum()) == 0:
+            face_empty_reason = "skipped_due_to_person_mask_no_person"
+        elif not has_any_face:
+            face_empty_reason = "no_faces_in_video"
     if args.use_pose and not has_any_pose:
         pose_empty_reason = "no_pose_detected"
     if args.use_hands and not has_any_hands:
@@ -1290,6 +1382,10 @@ def main():
         "person_class_id": int(person_id),
         "person_frames_count": int(np.sum(person_present)),
         "person_window_radius": int(radius),
+        "face_mesh_frames_count": int(face_mesh_ran_mask.sum()),
+        "temporal_filter_enabled": bool(args.enable_temporal_filter),
+        "temporal_filter_min_cutoff": float(getattr(args, "temporal_filter_min_cutoff", 1.0)),
+        "temporal_filter_beta": float(getattr(args, "temporal_filter_beta", 0.0)),
         "stage_timings_ms": stage_timings_ms,
     }
     required_run_keys = ["platform_id", "video_id", "run_id", "sampling_policy_version", "config_hash"]
@@ -1350,33 +1446,59 @@ def main():
             )
         ],
     )
+    rp_before = _resource_profile_snapshot()
+    if isinstance(rp_before, dict) and rp_before:
+        meta_out["resource_profile_before"] = dict(rp_before)
 
-    np.savez_compressed(
-        out_path,
+    # Important for production schemas:
+    # - Optional outputs must be absent when disabled (not stored as `None` which becomes object scalars in NPZ).
+    payload: Dict[str, Any] = {
         # legacy fields (kept)
-        version=VERSION,
-        created_at=meta_out["created_at"],
-        model_name="mediapipe",
-        total_frames=total_frames,
-        frame_indices=np.array(frame_indices, dtype=np.int32),
+        "version": VERSION,
+        "created_at": meta_out["created_at"],
+        "model_name": "mediapipe",
+        "total_frames": total_frames,
+        "frame_indices": np.array(frame_indices, dtype=np.int32),
         # times_s (required by baseline contract: union_timestamps_sec[frame_indices])
-        times_s=times_s,
-        pose_landmarks=pose,
-        hands_landmarks=hands,
-        face_landmarks=face,
-        pose_present=pose_present,
-        hands_present=hands_present,
-        face_present=face_present,
-        has_any_face=np.asarray(has_any_face),
-        has_any_pose=np.asarray(has_any_pose),
-        has_any_hands=np.asarray(has_any_hands),
-        empty_reason=np.asarray(empty_reason, dtype=object),
-        face_empty_reason=np.asarray(face_empty_reason, dtype=object),
-        pose_empty_reason=np.asarray(pose_empty_reason, dtype=object),
-        hands_empty_reason=np.asarray(hands_empty_reason, dtype=object),
+        "times_s": times_s,
+        # FaceMesh outputs (baseline-required)
+        "face_landmarks": face,
+        "face_landmarks_raw": face_raw,
+        "face_present": face_present,
+        # Diagnostics masks (aligned to primary frame_indices)
+        "person_present": person_present_mask,
+        "face_mesh_ran": face_mesh_ran_mask,
+        # Global availability flags
+        "has_any_face": np.asarray(has_any_face),
+        "has_any_pose": np.asarray(has_any_pose),
+        "has_any_hands": np.asarray(has_any_hands),
+        # Empty reasons
+        "empty_reason": np.asarray(empty_reason, dtype=object),
+        "face_empty_reason": np.asarray(face_empty_reason, dtype=object),
+        "pose_empty_reason": np.asarray(pose_empty_reason, dtype=object),
+        "hands_empty_reason": np.asarray(hands_empty_reason, dtype=object),
         # canonical meta (required by artifact_validator)
-        meta=np.asarray(meta_out, dtype=object),
-    )
+        "meta": np.asarray(meta_out, dtype=object),
+    }
+
+    if bool(args.use_pose):
+        payload.update(
+            {
+                "pose_landmarks": pose,
+                "pose_landmarks_raw": pose_raw,
+                "pose_present": pose_present,
+            }
+        )
+    if bool(args.use_hands):
+        payload.update(
+            {
+                "hands_landmarks": hands,
+                "hands_landmarks_raw": hands_raw,
+                "hands_present": hands_present,
+            }
+        )
+
+    np.savez_compressed(out_path, **payload)
 
     LOGGER.info(f"{NAME} | Saved result: {out_path}")
 

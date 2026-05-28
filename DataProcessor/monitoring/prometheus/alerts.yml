@@ -1,0 +1,113 @@
+# Prometheus Alert Rules для DataProcessor API
+#
+# Этот файл содержит правила алертов для мониторинга DataProcessor API.
+#
+# Ссылка: DataProcessor/docs/DATAPROCESSOR_API_ARCHITECTURE.md (строка 2165-2544)
+
+groups:
+  - name: dataprocessor_queue
+    interval: 30s
+    rules:
+      # Алерт: Queue length превышает лимит
+      - alert: DataProcessorQueueLengthHigh
+        expr: |
+          sum(dataprocessor_queue_length) > 100
+        for: 5m
+        labels:
+          severity: warning
+          component: queue
+        annotations:
+          summary: "DataProcessor queue length превышает лимит"
+          description: |
+            Queue length = {{ $value }} (лимит: 100)
+            Это может указывать на перегрузку системы или медленную обработку.
+
+  - name: dataprocessor_processing
+    interval: 30s
+    rules:
+      # Алерт: Crashed runs превышают порог
+      - alert: DataProcessorCrashedRunsHigh
+        expr: |
+          (
+            rate(dataprocessor_crashed_runs_total[5m]) /
+            rate(dataprocessor_processing_seconds_count[5m])
+          ) > 0.1
+        for: 5m
+        labels:
+          severity: critical
+          component: processing
+        annotations:
+          summary: "DataProcessor crashed runs превышают 10%"
+          description: |
+            Процент crashed runs = {{ $value | humanizePercentage }}
+            Это указывает на проблемы с обработкой или ресурсами.
+
+      # Алерт: Processing time превышает baseline × 2
+      - alert: DataProcessorProcessingTimeHigh
+        expr: |
+          histogram_quantile(0.95, 
+            rate(dataprocessor_processing_seconds_bucket[5m])
+          ) > (
+            histogram_quantile(0.95, 
+              rate(dataprocessor_processing_seconds_bucket[1h])
+            ) * 2
+          )
+        for: 10m
+        labels:
+          severity: warning
+          component: processing
+        annotations:
+          summary: "DataProcessor processing time превышает baseline × 2"
+          description: |
+            Текущее время обработки (95th percentile) = {{ $value }}s
+            Baseline (95th percentile за последний час) = {{ $value | humanizeDuration }}
+            Это может указывать на проблемы с производительностью.
+
+  - name: dataprocessor_resources
+    interval: 30s
+    rules:
+      # Алерт: Memory usage превышает лимит
+      - alert: DataProcessorMemoryUsageHigh
+        expr: |
+          sum(dataprocessor_memory_bytes) > 8 * 1024 * 1024 * 1024
+        for: 5m
+        labels:
+          severity: warning
+          component: resources
+        annotations:
+          summary: "DataProcessor memory usage превышает 8GB"
+          description: |
+            Общее использование памяти = {{ $value | humanize1024 }}B
+            Это может привести к OOM и падению процессов.
+
+      # Алерт: Active runs превышают лимит
+      - alert: DataProcessorActiveRunsHigh
+        expr: |
+          dataprocessor_active_runs > 30
+        for: 5m
+        labels:
+          severity: warning
+          component: resources
+        annotations:
+          summary: "DataProcessor active runs превышает лимит"
+          description: |
+            Количество активных run'ов = {{ $value }}
+            Рекомендуемый лимит: 20-30 одновременных run'ов.
+
+  - name: dataprocessor_errors
+    interval: 30s
+    rules:
+      # Алерт: Высокий rate ошибок
+      - alert: DataProcessorFailureRateHigh
+        expr: |
+          rate(dataprocessor_failures_total[5m]) > 0.1
+        for: 5m
+        labels:
+          severity: critical
+          component: errors
+        annotations:
+          summary: "DataProcessor failure rate превышает порог"
+          description: |
+            Rate ошибок = {{ $value }} ошибок/сек
+            Это указывает на системные проблемы.
+

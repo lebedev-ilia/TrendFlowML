@@ -1,0 +1,2 @@
+# Dependencies for ocr_extractor component
+# Add component-specific dependencies here

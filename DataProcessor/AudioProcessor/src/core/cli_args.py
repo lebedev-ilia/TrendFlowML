@@ -91,19 +91,25 @@ def add_asr_arguments(parser: argparse.ArgumentParser) -> None:
 
 def add_diarization_arguments(parser: argparse.ArgumentParser) -> None:
     """Добавляет аргументы для speaker diarization extractor."""
-    parser.add_argument("--diarization-model-size", type=str, default="small", choices=["small", "large"], help="Speaker diarization embedding model size (in-process via ModelManager)")
+    parser.add_argument(
+        "--diarization-model-size",
+        type=str,
+        default="small",
+        choices=["small", "large"],
+        help="Legacy flag (Audit v3 diarization-only uses pyannote_speaker_diarization via ModelManager; size is unused)",
+    )
     parser.add_argument("--diarization-batch-size", type=int, default=None, help="Batch size for diarization inference (None = auto, >100 segments → split)")
     parser.add_argument("--diarization-clustering-method", type=str, default="agglomerative", choices=["agglomerative", "kmeans", "auto"], help="Clustering method (agglomerative=default for training, kmeans=faster, auto=select based on segment count)")
     parser.add_argument("--diarization-speaker-count-method", type=str, default="heuristic", choices=["heuristic", "silhouette", "fixed"], help="Speaker count estimation method (heuristic=default, silhouette=optimal, fixed=use min_speakers)")
     parser.add_argument("--diarization-silence-peak-threshold", type=float, default=1e-3, help="Peak threshold for silence detection")
     parser.add_argument("--diarization-silence-rms-threshold", type=float, default=1e-4, help="RMS threshold for silence detection")
-    # Diarization feature gating flags
-    parser.add_argument("--diar-enable-speaker-segments", action="store_true", help="Enable speaker_segments (timeline with speaker IDs)")
-    parser.add_argument("--diar-enable-speaker-embeddings", action="store_true", help="Enable speaker_embeddings_mean (mean embeddings per speaker)")
-    parser.add_argument("--diar-enable-speaker-stats", action="store_true", help="Enable speaker_stats (statistics per speaker)")
-    parser.add_argument("--diar-enable-speaker-durations", action="store_true", help="Enable speaker_time_ratios (time ratios per speaker)")
-    parser.add_argument("--diar-enable-clustering-metrics", action="store_true", help="Enable clustering_metrics (quality metrics)")
-    parser.add_argument("--diar-enable-segment-embeddings", action="store_true", help="Enable segment_embeddings (all individual embeddings)")
+    # Audit v3: token-ready turns are always-on; embeddings/transcripts are not part of audited contract.
+    parser.add_argument("--diar-enable-speaker-segments", action="store_true", help="Legacy/no-op (turn arrays are always produced in Audit v3)")
+    parser.add_argument("--diar-enable-speaker-embeddings", action="store_true", help="Legacy/no-op (embeddings removed in Audit v3)")
+    parser.add_argument("--diar-enable-speaker-stats", action="store_true", help="Legacy/no-op (structured per-speaker arrays are always produced in Audit v3)")
+    parser.add_argument("--diar-enable-speaker-durations", action="store_true", help="Legacy/no-op (structured per-speaker arrays are always produced in Audit v3)")
+    parser.add_argument("--diar-enable-clustering-metrics", action="store_true", help="Legacy/no-op (not part of audited contract)")
+    parser.add_argument("--diar-enable-segment-embeddings", action="store_true", help="Legacy/no-op (embeddings removed in Audit v3)")
     parser.add_argument("--diar-disable-silence-detection", action="store_true", help="Disable silence detection check")
 
 
@@ -115,18 +121,27 @@ def add_emotion_arguments(parser: argparse.ArgumentParser) -> None:
     parser.add_argument("--emotion-silence-rms-threshold", type=float, default=1e-4, help="RMS threshold for silence detection")
     # Emotion feature gating flags
     parser.add_argument("--emotion-enable-probs", action="store_true", help="Enable emotion_probs (per-window probabilities)")
-    parser.add_argument("--emotion-enable-ids", action="store_true", help="Enable emotion_id (argmax per window)")
-    parser.add_argument("--emotion-enable-confidence", action="store_true", help="Enable emotion_confidence (max prob per window)")
+    # Audit v3 canonical defaults: ids+confidence are enabled by default (model_facing sequences).
+    parser.add_argument("--emotion-disable-ids", dest="emotion_enable_ids", action="store_false", default=True, help="Disable emotion_id (default: enabled in Audit v3)")
+    parser.add_argument("--emotion-disable-confidence", dest="emotion_enable_confidence", action="store_false", default=True, help="Disable emotion_confidence (default: enabled in Audit v3)")
     parser.add_argument("--emotion-enable-mean-probs", action="store_true", help="Enable emotion_mean_probs (mean probabilities)")
-    parser.add_argument("--emotion-enable-entropy", action="store_true", help="Enable emotion_entropy")
-    parser.add_argument("--emotion-enable-dominant", action="store_true", help="Enable dominant_emotion_id/prob")
+    # Audit v3 canonical defaults: entropy+dominant aggregates are always computed; keep disable flags for explicit control.
+    parser.add_argument("--emotion-disable-entropy", dest="emotion_enable_entropy", action="store_false", default=True, help="Disable emotion_entropy aggregate (default: enabled)")
+    parser.add_argument("--emotion-disable-dominant", dest="emotion_enable_dominant", action="store_false", default=True, help="Disable dominant aggregates (default: enabled)")
     parser.add_argument("--emotion-enable-quality-metrics", action="store_true", help="Enable emotion_quality_metrics")
     parser.add_argument("--emotion-disable-silence-detection", action="store_true", help="Disable silence detection check")
-    parser.add_argument("--emotion-process-full-audio", action="store_true", help="Process entire audio as one segment (use run() instead of run_segments())")
+    parser.add_argument("--emotion-process-full-audio", action="store_true", help="(Audit v3: disabled) Legacy full-audio mode; use Segmenter families.emotion windows")
 
 
 def add_source_separation_arguments(parser: argparse.ArgumentParser) -> None:
     """Добавляет аргументы для source separation extractor."""
+    parser.add_argument(
+        "--source-separation-device",
+        type=str,
+        default=None,
+        choices=["cpu", "cuda"],
+        help="Device for source separation only (default: same as --device). Use cpu to avoid VRAM contention with Visual/Triton.",
+    )
     parser.add_argument("--source-separation-model-size", type=str, default="large", choices=["large"], help="Source separation model size (inprocess PyTorch via ModelManager)")
     parser.add_argument("--sep-batch-size", type=int, default=8, help="Batch size for source separation inference")
     parser.add_argument("--sep-silence-peak-threshold", type=float, default=1e-3, help="Peak threshold for silence detection")
@@ -134,7 +149,8 @@ def add_source_separation_arguments(parser: argparse.ArgumentParser) -> None:
     # Source separation feature gating flags
     parser.add_argument("--sep-enable-share-sequence", action="store_true", help="Enable share_sequence (per-segment shares)")
     parser.add_argument("--sep-enable-energy-sequence", action="store_true", help="Enable energy_sequence (per-segment energies)")
-    parser.add_argument("--sep-enable-share-mean", action="store_true", help="Enable share_mean (mean shares)")
+    # Audit v3: share_mean is always saved; keep legacy flag for config compatibility (no-op).
+    parser.add_argument("--sep-enable-share-mean", action="store_true", help="(Audit v3) Legacy no-op; share_mean is always saved")
     parser.add_argument("--sep-enable-share-std", action="store_true", help="Enable share_std (std shares)")
     parser.add_argument("--sep-enable-quality-metrics", action="store_true", help="Enable source_quality_metrics")
     parser.add_argument("--sep-disable-silence-detection", action="store_true", help="Disable silence detection check")
@@ -162,8 +178,9 @@ def add_pitch_arguments(parser: argparse.ArgumentParser) -> None:
     parser.add_argument("--pitch-backend", type=str, default="classic", choices=["classic", "torchcrepe"], help="Backend for pitch extraction")
     parser.add_argument("--pitch-channel-mode", type=str, default="first", choices=["first", "mean", "max"], help="Channel mode for multi-channel audio")
     parser.add_argument("--pitch-torchcrepe-batch-size", type=int, default=1, help="Batch size for torchcrepe")
-    # Pitch feature gating flags
-    parser.add_argument("--pitch-enable-basic-stats", action="store_true", help="Enable basic pitch statistics (f0_mean, f0_std, f0_min, f0_max, f0_median)")
+    # Pitch feature gating flags (Audit v3: basic_stats=True by default)
+    parser.add_argument("--pitch-disable-basic-stats", dest="pitch_enable_basic_stats", action="store_false", default=True, help="Disable basic pitch statistics (Audit v3 default: enabled)")
+    parser.add_argument("--pitch-enable-basic-stats", dest="pitch_enable_basic_stats", action="store_true", help="Enable basic pitch statistics (default in Audit v3)")
     parser.add_argument("--pitch-enable-stability-metrics", action="store_true", help="Enable stability metrics (pitch_variation, pitch_stability, pitch_range)")
     parser.add_argument("--pitch-enable-delta-features", action="store_true", help="Enable delta features (f0_delta_mean, f0_delta_std, f0_delta_abs_mean)")
     parser.add_argument("--pitch-enable-method-stats", action="store_true", help="Enable method-specific statistics (PYIN, YIN, torchcrepe)")
@@ -179,7 +196,8 @@ def add_spectral_arguments(parser: argparse.ArgumentParser) -> None:
     parser.add_argument("--spectral-keep-contrast-bands", action="store_true", help="Keep full contrast bands data")
     parser.add_argument("--spectral-enable-normalization", action="store_true", help="Enable audio normalization before processing")
     # Spectral feature gating flags
-    parser.add_argument("--spectral-enable-basic-features", action="store_true", help="Enable basic spectral features (centroid, bandwidth, flatness, rolloff, ZCR)")
+    parser.add_argument("--spectral-enable-basic-features", action="store_true", default=True, dest="spectral_enable_basic_features", help="Enable basic spectral features (Audit v3 default: enabled)")
+    parser.add_argument("--spectral-disable-basic-features", action="store_false", dest="spectral_enable_basic_features", help="Disable basic spectral features")
     parser.add_argument("--spectral-enable-contrast", action="store_true", help="Enable spectral contrast (contrast stats + contrast_bands)")
     parser.add_argument("--spectral-enable-advanced-features", action="store_true", help="Enable advanced features (slope, flatness_db)")
     parser.add_argument("--spectral-enable-time-series", action="store_true", help="Enable time series for all features")
@@ -193,9 +211,9 @@ def add_quality_arguments(parser: argparse.ArgumentParser) -> None:
     parser.add_argument("--quality-clip-threshold", type=float, default=0.999, help="Clipping threshold (0.0-1.0)")
     parser.add_argument("--quality-average-channels", action="store_true", help="Average channels for multi-channel audio")
     parser.add_argument("--quality-enable-normalization", action="store_true", help="Enable audio normalization before processing")
-    # Quality feature gating flags
-    parser.add_argument("--quality-enable-basic-metrics", action="store_true", help="Enable basic quality metrics (dc_offset, clipping_ratio, crest_factor_db)")
-    parser.add_argument("--quality-enable-dynamic-metrics", action="store_true", help="Enable dynamic metrics (dynamic_range_db, snr_db)")
+    # Quality feature gating flags (Audit v3: basic_metrics=True by default)
+    parser.add_argument("--quality-disable-basic-metrics", dest="quality_enable_basic_metrics", action="store_false", default=True, help="Disable basic quality metrics (Audit v3 default: enabled)")
+    parser.add_argument("--quality-enable-dynamic-metrics", action="store_true", help="Enable dynamic metrics (dynamic_range_db)")
     parser.add_argument("--quality-enable-frame-analysis", action="store_true", help="Enable frame-level analysis metrics")
     parser.add_argument("--quality-enable-time-series", action="store_true", help="Enable time series for all metrics")
 
@@ -210,10 +228,13 @@ def add_voice_quality_arguments(parser: argparse.ArgumentParser) -> None:
     parser.add_argument("--voice-quality-f0-method", type=str, default="yin", choices=["yin", "pyin", "torchcrepe"], help="F0 estimation method")
     parser.add_argument("--voice-quality-average-channels", action="store_true", help="Average channels for multi-channel audio")
     parser.add_argument("--voice-quality-enable-audio-normalization", action="store_true", help="Enable audio normalization before processing")
-    # Voice quality feature gating flags
-    parser.add_argument("--voice-quality-enable-jitter", action="store_true", help="Enable jitter metric (variability of f0)")
-    parser.add_argument("--voice-quality-enable-shimmer", action="store_true", help="Enable shimmer metric (variability of amplitude)")
-    parser.add_argument("--voice-quality-enable-hnr", action="store_true", help="Enable HNR-like metric (harmonic-to-noise ratio)")
+    # Voice quality feature gating flags (Audit v3: jitter+shimmer+hnr enabled by default)
+    parser.add_argument("--voice-quality-enable-jitter", action="store_true", default=True, help="Enable jitter metric (default: True)")
+    parser.add_argument("--voice-quality-disable-jitter", dest="voice_quality_enable_jitter", action="store_false", help="Disable jitter metric")
+    parser.add_argument("--voice-quality-enable-shimmer", action="store_true", default=True, help="Enable shimmer metric (default: True)")
+    parser.add_argument("--voice-quality-disable-shimmer", dest="voice_quality_enable_shimmer", action="store_false", help="Disable shimmer metric")
+    parser.add_argument("--voice-quality-enable-hnr", action="store_true", default=True, help="Enable HNR-like metric (default: True)")
+    parser.add_argument("--voice-quality-disable-hnr", dest="voice_quality_enable_hnr", action="store_false", help="Disable HNR metric")
     parser.add_argument("--voice-quality-enable-f0-stats", action="store_true", help="Enable f0 statistics (mean, std, min, max, stability)")
     parser.add_argument("--voice-quality-enable-time-series", action="store_true", help="Enable time series (f0, amps, hnr values)")
 
@@ -228,8 +249,9 @@ def add_hpss_arguments(parser: argparse.ArgumentParser) -> None:
     parser.add_argument("--hpss-margin", type=float, default=1.0, help="Margin for HPSS boundaries")
     parser.add_argument("--hpss-power", type=float, default=2.0, help="Power for HPSS normalization")
     parser.add_argument("--hpss-enable-audio-normalization", action="store_true", help="Enable audio normalization before processing")
-    # HPSS feature gating flags
-    parser.add_argument("--hpss-enable-energy-metrics", action="store_true", help="Enable energy metrics (shares, energies, stability, separation quality, balance score, dominance)")
+    # HPSS feature gating flags (Audit v3: energy_metrics enabled by default)
+    parser.add_argument("--hpss-enable-energy-metrics", action="store_true", default=True, help="Enable energy metrics (default: True)")
+    parser.add_argument("--hpss-disable-energy-metrics", action="store_true", help="Disable energy metrics")
     parser.add_argument("--hpss-enable-waveforms", action="store_true", help="Enable reconstructed waveforms (harmonic and percussive signals)")
     parser.add_argument("--hpss-enable-spectral-features", action="store_true", help="Enable spectral features from separated components (centroid, bandwidth, rolloff)")
     parser.add_argument("--hpss-enable-time-series", action="store_true", help="Enable time series (harmonic and percussive share series)")
@@ -248,10 +270,11 @@ def add_mfcc_arguments(parser: argparse.ArgumentParser) -> None:
     parser.add_argument("--mfcc-disable-audio-normalization", action="store_true", help="Disable audio normalization before processing")
     parser.add_argument("--mfcc-min-gpu-duration-sec", type=float, default=3.0, help="Minimum duration for GPU usage (seconds)")
     parser.add_argument("--mfcc-min-gpu-file-size-mb", type=float, default=5.0, help="Minimum file size for GPU usage (MB)")
-    # MFCC feature gating flags
-    parser.add_argument("--mfcc-enable-basic-features", action="store_true", help="Enable basic MFCC features (mfcc_features, mfcc_statistics: mean, std, min, max)")
+    # MFCC feature gating flags (Audit v3: basic_features=True by default)
+    parser.add_argument("--mfcc-disable-basic-features", dest="mfcc_enable_basic_features", action="store_false", default=True, help="Disable basic MFCC features (Audit v3 default: enabled)")
+    parser.add_argument("--mfcc-enable-basic-features", dest="mfcc_enable_basic_features", action="store_true", help="Enable basic MFCC features (default in Audit v3)")
     parser.add_argument("--mfcc-enable-deltas", action="store_true", help="Enable deltas (delta_mean, delta_std, delta_delta_mean, delta_delta_std)")
-    parser.add_argument("--mfcc-enable-time-series", action="store_true", help="Enable time series for all features")
+    parser.add_argument("--mfcc-enable-time-series", action="store_true", help="Enable time series (segment-aligned sequences)")
     parser.add_argument("--mfcc-enable-normalization", action="store_true", help="Enable MFCC normalization (z-score)")
 
 
@@ -268,10 +291,13 @@ def add_mel_arguments(parser: argparse.ArgumentParser) -> None:
     parser.add_argument("--mel-no-mix-to-mono", action="store_true", help="Disable mix to mono")
     parser.add_argument("--mel-enable-audio-normalization", action="store_true", help="Enable audio normalization before processing (default: True, use --mel-disable-audio-normalization to disable)")
     parser.add_argument("--mel-disable-audio-normalization", action="store_true", help="Disable audio normalization before processing")
-    # Mel feature gating flags
-    parser.add_argument("--mel-enable-basic-features", action="store_true", help="Enable basic Mel features (mel_spectrogram, mel_shape, mel_elements)")
-    parser.add_argument("--mel-enable-statistics", action="store_true", help="Enable statistics (mel_mean, mel_std, mel_min, mel_max, freq_mean, freq_std)")
-    parser.add_argument("--mel-enable-spectral-features", action="store_true", help="Enable spectral features (spectral_centroid, spectral_bandwidth)")
+    # Audit v3 defaults: basic + spectral features are enabled by default.
+    # Keep legacy enable flags for compatibility; provide disable flags for explicit control.
+    parser.add_argument("--mel-disable-basic-features", dest="mel_enable_basic_features", action="store_false", default=True, help="Disable basic Mel features (Audit v3 default: enabled)")
+    parser.add_argument("--mel-enable-basic-features", dest="mel_enable_basic_features", action="store_true", help="Enable basic Mel features (default: enabled in Audit v3)")
+    parser.add_argument("--mel-enable-statistics", action="store_true", help="Enable statistics (mel_mean, mel_std, mel_min, mel_max)")
+    parser.add_argument("--mel-disable-spectral-features", dest="mel_enable_spectral_features", action="store_false", default=True, help="Disable spectral features (Audit v3 default: enabled)")
+    parser.add_argument("--mel-enable-spectral-features", dest="mel_enable_spectral_features", action="store_true", help="Enable spectral features (default: enabled in Audit v3)")
     parser.add_argument("--mel-enable-time-series", action="store_true", help="Enable time series for all features")
     parser.add_argument("--mel-enable-stats-vector", action="store_true", help="Enable compact stats vector (mel_stats_vector)")
 
@@ -292,8 +318,9 @@ def add_onset_arguments(parser: argparse.ArgumentParser) -> None:
     parser.add_argument("--onset-energy", action="store_true", help="Use energy detector")
     parser.add_argument("--onset-normalize", action="store_true", help="Normalize onset envelope")
     parser.add_argument("--onset-enable-audio-normalization", action="store_true", help="Enable audio normalization before processing")
-    # Onset feature gating flags
-    parser.add_argument("--onset-enable-basic-features", action="store_true", help="Enable basic onset features (onset_times, onset_count)")
+    # Onset feature gating flags (Audit v3: basic_features=True by default)
+    parser.add_argument("--onset-disable-basic-features", dest="onset_enable_basic_features", action="store_false", default=True, help="Disable basic onset features (Audit v3 default: enabled)")
+    parser.add_argument("--onset-enable-basic-features", dest="onset_enable_basic_features", action="store_true", help="Enable basic onset features (default in Audit v3)")
     parser.add_argument("--onset-enable-interval-stats", action="store_true", help="Enable interval statistics (interval_std, interval_min, etc.)")
     parser.add_argument("--onset-enable-rhythmic-metrics", action="store_true", help="Enable rhythmic metrics (regularity, clustering, etc.)")
     parser.add_argument("--onset-enable-time-series", action="store_true", help="Enable time series (onset_times as time series)")
@@ -330,12 +357,17 @@ def add_rhythmic_arguments(parser: argparse.ArgumentParser) -> None:
     parser.add_argument("--rhythmic-ac-size", type=int, default=4, help="Autocorrelation size for librosa")
     parser.add_argument("--rhythmic-max-tempo", type=float, default=None, help="Maximum tempo for librosa")
     parser.add_argument("--rhythmic-enable-audio-normalization", action="store_true", help="Enable audio normalization before processing")
-    # Rhythmic feature gating flags
-    parser.add_argument("--rhythmic-enable-basic-metrics", action="store_true", help="Enable basic metrics (tempo_bpm, beats_count, beat_density)")
-    parser.add_argument("--rhythmic-enable-interval-stats", action="store_true", help="Enable interval statistics (avg_period, std_period, min/max/median)")
-    parser.add_argument("--rhythmic-enable-regularity-metrics", action="store_true", help="Enable regularity metrics (regularity, syncopation, etc.)")
-    parser.add_argument("--rhythmic-enable-beat-times", action="store_true", help="Enable beat times (beat_times array)")
-    parser.add_argument("--rhythmic-enable-tempo-metrics", action="store_true", help="Enable tempo metrics (median_bpm, tempo_variation, etc.)")
+    # Rhythmic feature gating flags (Audit v3 preset: most metrics enabled by default; beat_times remains opt-in)
+    parser.add_argument("--rhythmic-disable-basic-metrics", dest="rhythmic_enable_basic_metrics", action="store_false", default=True, help="Disable basic metrics (Audit v3 default: enabled)")
+    parser.add_argument("--rhythmic-enable-basic-metrics", dest="rhythmic_enable_basic_metrics", action="store_true", help="Enable basic metrics (default: enabled)")
+    parser.add_argument("--rhythmic-disable-interval-stats", dest="rhythmic_enable_interval_stats", action="store_false", default=True, help="Disable interval statistics (Audit v3 default: enabled)")
+    parser.add_argument("--rhythmic-enable-interval-stats", dest="rhythmic_enable_interval_stats", action="store_true", help="Enable interval statistics (default: enabled)")
+    parser.add_argument("--rhythmic-disable-regularity-metrics", dest="rhythmic_enable_regularity_metrics", action="store_false", default=True, help="Disable regularity metrics (Audit v3 default: enabled)")
+    parser.add_argument("--rhythmic-enable-regularity-metrics", dest="rhythmic_enable_regularity_metrics", action="store_true", help="Enable regularity metrics (default: enabled)")
+    parser.add_argument("--rhythmic-disable-tempo-metrics", dest="rhythmic_enable_tempo_metrics", action="store_false", default=True, help="Disable tempo metrics (Audit v3 default: enabled)")
+    parser.add_argument("--rhythmic-enable-tempo-metrics", dest="rhythmic_enable_tempo_metrics", action="store_true", help="Enable tempo metrics (default: enabled)")
+    parser.add_argument("--rhythmic-disable-beat-times", dest="rhythmic_enable_beat_times", action="store_false", default=False, help="Disable beat times (default: disabled)")
+    parser.add_argument("--rhythmic-enable-beat-times", dest="rhythmic_enable_beat_times", action="store_true", help="Enable beat times (beat_times arrays; default: disabled)")
 
 
 def add_key_arguments(parser: argparse.ArgumentParser) -> None:
@@ -345,7 +377,7 @@ def add_key_arguments(parser: argparse.ArgumentParser) -> None:
     parser.add_argument("--key-chroma-type", type=str, default="cqt", choices=["cqt", "stft"], help="Chroma type (cqt or stft)")
     parser.add_argument("--key-use-beat-sync", action="store_true", help="Aggregate chroma per beat (requires beat tracking)")
     parser.add_argument("--key-top-k", type=int, default=3, help="Number of top-K keys to return")
-    parser.add_argument("--key-method", type=str, default="auto", choices=["essentia", "librosa", "auto"], help="Key detection method (essentia, librosa, or auto)")
+    parser.add_argument("--key-method", type=str, default="librosa", choices=["essentia", "librosa", "auto"], help="Key detection method (Audit v3 default: librosa)")
     parser.add_argument("--key-confidence-threshold", type=float, default=0.3, help="Confidence threshold for warnings (0.0-1.0)")
     parser.add_argument("--key-enable-audio-normalization", action="store_true", help="Enable audio normalization before processing")
     # Key feature gating flags
@@ -361,12 +393,29 @@ def add_band_energy_arguments(parser: argparse.ArgumentParser) -> None:
     parser.add_argument("--band-energy-sample-rate", type=int, default=22050, help="Sample rate for band energy extraction (Hz)")
     parser.add_argument("--band-energy-n-fft", type=int, default=2048, help="FFT window size")
     parser.add_argument("--band-energy-hop-length", type=int, default=512, help="Hop length for STFT")
-    parser.add_argument("--band-energy-use-mel-bands", action="store_true", default=True, help="Use mel scale bands (default: True, use --band-energy-no-mel-bands to disable)")
-    parser.add_argument("--band-energy-no-mel-bands", action="store_true", help="Disable mel scale bands (use fixed bands)")
+    # Audit v3 (band_energy): canonical output uses fixed 3 bands (low/mid/high).
+    # Keep mel flags for backwards compatibility, but default is fixed bands.
+    parser.add_argument("--band-energy-use-mel-bands", action="store_true", help="Use mel scale bands (audit v3 default: disabled; fixed 3 bands)")
+    parser.add_argument("--band-energy-no-mel-bands", action="store_true", help="Disable mel scale bands (force fixed bands; default)")
     parser.add_argument("--band-energy-n-mels", type=int, default=3, help="Number of mel bands (if use_mel_bands=True)")
-    parser.add_argument("--band-energy-method", type=str, default="auto", choices=["essentia", "librosa", "auto"], help="Band energy method (essentia, librosa, or auto)")
-    parser.add_argument("--band-energy-average-channels", action="store_true", help="Average channels for multi-channel audio")
-    parser.add_argument("--band-energy-enable-audio-normalization", action="store_true", help="Enable audio normalization before processing")
+    parser.add_argument(
+        "--band-energy-method",
+        type=str,
+        default="librosa",
+        choices=["librosa", "essentia", "auto"],
+        help="Band energy method (audit v3: only librosa is allowed; others fail-fast)",
+    )
+    # Default: average channels (mono mix). Provide explicit opt-out.
+    parser.set_defaults(band_energy_average_channels=True)
+    parser.add_argument("--band-energy-average-channels", action="store_true", help="Average channels for multi-channel audio (default: enabled)")
+    parser.add_argument("--band-energy-no-average-channels", action="store_true", help="Disable channel averaging (use first channel)")
+    # Audit v3: audio normalization enabled by default; provide explicit opt-out.
+    parser.add_argument("--band-energy-disable-audio-normalization", action="store_true", help="Disable audio normalization before processing (default: enabled)")
+    parser.add_argument(
+        "--band-energy-enable-audio-normalization",
+        action="store_true",
+        help="(Deprecated) Enable audio normalization before processing (audit v3: enabled by default)",
+    )
     # Band energy feature gating flags
     parser.add_argument("--band-energy-enable-basic-stats", action="store_true", help="Enable basic statistics (mean, std, median)")
     parser.add_argument("--band-energy-enable-extended-stats", action="store_true", help="Enable extended statistics (min, max, p25, p75)")
@@ -386,13 +435,24 @@ def add_spectral_entropy_arguments(parser: argparse.ArgumentParser) -> None:
     parser.add_argument("--spectral-entropy-use-mel", action="store_true", help="Use mel scale instead of linear")
     parser.add_argument("--spectral-entropy-n-mels", type=int, default=128, help="Number of mel filters (if use_mel=True)")
     parser.add_argument("--spectral-entropy-enable-audio-normalization", action="store_true", help="Enable audio normalization before processing")
-    # Spectral Entropy feature gating flags
-    parser.add_argument("--spectral-entropy-enable-basic-stats", action="store_true", help="Enable basic statistics (mean, std) for entropy")
+    # Audit v3: basic stats enabled by default; provide explicit opt-out.
+    parser.add_argument(
+        "--spectral-entropy-disable-basic-stats",
+        dest="spectral_entropy_enable_basic_stats",
+        action="store_false",
+        default=True,
+        help="Disable basic entropy stats (default: enabled in Audit v3)",
+    )
+    parser.add_argument(
+        "--spectral-entropy-enable-basic-stats",
+        action="store_true",
+        help="(Deprecated) Enable basic stats (audit v3: enabled by default)",
+    )
     parser.add_argument("--spectral-entropy-enable-flatness", action="store_true", help="Enable flatness metrics")
     parser.add_argument("--spectral-entropy-enable-spread", action="store_true", help="Enable spread metrics")
-    parser.add_argument("--spectral-entropy-enable-time-series", action="store_true", help="Enable time series for all metrics")
+    parser.add_argument("--spectral-entropy-enable-time-series", action="store_true", help="Legacy/no-op in Audit v3 (per-segment arrays are always produced)")
     parser.add_argument("--spectral-entropy-enable-extended-stats", action="store_true", help="Enable extended statistics (min, max, p25, p75)")
-    parser.add_argument("--spectral-entropy-enable-dynamics", action="store_true", help="Enable dynamics metrics (for run_segments)")
+    parser.add_argument("--spectral-entropy-enable-dynamics", action="store_true", help="Legacy/no-op in Audit v3")
 
 
 def create_argument_parser() -> argparse.ArgumentParser:

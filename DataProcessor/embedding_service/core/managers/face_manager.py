@@ -15,16 +15,19 @@ class FaceManager(BaseManager):
     """Manager for face embeddings"""
 
     def validate(self, image: np.ndarray) -> bool:
-        """Validate face image"""
+        """Validate face image for search/add.
+
+        Клиенты (например face_identity) часто присылают **уже обрезанные** кропы лица.
+        Повторная детекция в InsightFace на таком кропе часто даёт 0 лиц — это не «битая
+        картинка». Ограничиваемся базовой проверкой; извлечение эмбеддинга само ретраит
+        на upsample/pad в ArcFaceExtractor.
+        """
         if not super().validate(image):
             return False
-
-        # Check if face can be detected
-        try:
-            faces = self.extractor.app.get(image)
-            return len(faces) > 0
-        except Exception:
+        h, w = int(image.shape[0]), int(image.shape[1])
+        if h < 1 or w < 1:
             return False
+        return True
 
     def extract_embedding(self, image: np.ndarray, **kwargs: Any) -> np.ndarray:
         """Extract face embedding"""

@@ -1,5 +1,7 @@
 # `cut_detection` (Visual module, Tier‑0 baseline)
 
+**Контракт NPZ, melt/QA, валидатор:** [docs/FEATURE_DESCRIPTION.md](docs/FEATURE_DESCRIPTION.md) · `utils/validate_cut_detection_npz.py` (`--struct`, `--qa`, `--ranges`, батч `--results-base`).
+
 ## Purpose
 
 Detects **hard cuts** and **soft transitions** (fade/dissolve + motion transitions) on a sampled frame sequence and produces:
@@ -17,13 +19,14 @@ This module is part of the **baseline** stage and is **required**.
 
 ## Dependencies (inputs from other components)
 
-Used for **jump‑cut** detection quality:
-- **Required (baseline)**:
-  - `core_face_landmarks` (`rs_path/core_face_landmarks/landmarks.npz`)
-  - `core_object_detections` (`rs_path/core_object_detections/detections.npz`)
+**Required (baseline)**:
+- `core_optical_flow` (`rs_path/core_optical_flow/flow.npz`) — **REQUIRED** (no-fallback). Module reuses `core_optical_flow/flow.npz` and forbids local flow computation.
 
-Optional (performance / shared motion curve):
-- `core_optical_flow` (`rs_path/core_optical_flow/flow.npz`) — if enabled and aligned sampling, can be reused to avoid duplicate optical flow computation inside cut_detection.
+**Quality deps (soft)**:
+- `core_face_landmarks` (`rs_path/core_face_landmarks/landmarks.npz`) — если нет/битый → jump-cut эвристика отключается, качество хуже (warning).
+- `core_object_detections` (`rs_path/core_object_detections/detections.npz`) — если нет/битый → jump-cut эвристика отключается, качество хуже (warning).
+
+**Note**: The `--prefer-core-optical-flow` and `--require-core-optical-flow` CLI flags are deprecated. Baseline policy: `core_optical_flow` is always required. Use `--no-require-core-optical-flow` only for debugging (not for production/baseline).
 
 The DAG stage must ensure these cores run **before** `cut_detection`.
 
@@ -36,10 +39,21 @@ Additional (recommended) model-facing artifact (schema v1):
 - `result_store/<platform_id>/<video_id>/<run_id>/cut_detection/cut_detection_model_facing_<ts>_<uid>.npz`
   - schema: `VisualProcessor/modules/cut_detection/SCHEMA_MODEL_FACING.md`
 
+### Schema system (Audit v3)
+
+- **Main artifact**:
+  - `schema_version=cut_detection_npz_v1`
+  - Human schema: [SCHEMA.md](./SCHEMA.md)
+  - Machine schema: `DataProcessor/VisualProcessor/schemas/cut_detection_npz_v1.json`
+- **Model-facing artifact**:
+  - `schema_version=cut_detection_model_facing_npz_v1`
+  - Human schema: [SCHEMA_MODEL_FACING.md](./SCHEMA_MODEL_FACING.md)
+  - Machine schema: `DataProcessor/VisualProcessor/schemas/cut_detection_model_facing_npz_v1.json`
+
 Writing policy (MVP):
-- Default: CLI writes the model-facing NPZ **best-effort** (non-fatal).
+- Baseline (Audit v3): CLI writes the model-facing NPZ **required** (fail-fast on write/validation errors).
 - Disable (rare): CLI `--no-write-model-facing-npz`
-- Make it **required** (fail-fast on write problems): CLI `--require-model-facing-npz`
+- Debug override: disable requirement with CLI `--no-require-model-facing-npz`
 
 Hard cuts performance knobs:
 - Default mode computes SSIM + optical flow for **all** frame pairs (higher quality / stable thresholds).
@@ -47,6 +61,7 @@ Hard cuts performance knobs:
   - CLI: `--hard-cuts-cascade --hard-cuts-cascade-keep-top-p 0.25 --hard-cuts-cascade-hist-margin 0.0`
   - Tradeoff: may miss rare cuts where histogram change is extremely low; use only for `fast` experiments.
   - Model-facing NPZ note: in cascade mode `ssim_drop/flow_mag/deep_cosine_dist` may contain `NaN` for pairs where the signal was not computed; use `*_valid_mask` keys.
+  - **Implementation (2026):** pass 1 still evaluates cheap `hist_diff` on every consecutive pair. Pass 2 **does not** walk the full frame list linearly: it loads from `FrameManager` only for candidate pairs (`cand[j]` is true), via `get(frame_indices[j])` and `get(frame_indices[j+1])`. SSIM / optional local Farneback / deep features for a candidate pair are the same as in non-cascade mode—only **frame I/O** is skipped for non-candidates. With required `core_optical_flow`, per-pair flow still comes from **`external_flow_mags`** for all pairs; the main saving is fewer RGB decodes/loads for SSIM (and deep, if enabled).
 
 Hard cuts presets (CLI convenience):
 - `--hard-cuts-preset quality|default|fast`
@@ -56,8 +71,18 @@ Hard cuts presets (CLI convenience):
   - explicit flags `--ssim-max-side/--flow-max-side/--hard-cuts-cascade*` override preset values.
 
 Soft/motion optimizations:
-- If `--prefer-core-optical-flow` is enabled and aligned, soft_cuts and motion_based_cuts reuse the core motion curve for `*_flow_mag` where possible.
+- Baseline: `core_optical_flow` is always reused (required dependency). Soft cuts and motion-based cuts use the core motion curve for `*_flow_mag`.
 - Motion detection uses a cascade when core flow is available: it computes expensive Farneback direction/variance only for motion spike candidates (best-effort).
+
+### Advanced detection parameters
+
+The module supports several advanced parameters for fine-tuning cut detection:
+
+- **`--use-adaptive-thresholds`** (default: `True`): Use adaptive thresholds for cut detection. Can be disabled with `--no-use-adaptive-thresholds`.
+- **`--use-semantic-clustering`** (default: `False`): Use semantic clustering for scene grouping. Requires CLIP embeddings (`--use-clip`).
+- **`--fade-threshold`** (default: `0.02`): Threshold for fade detection in HSV/LAB color space.
+- **`--min-duration-frames`** (default: `4`): Minimum duration in frames for soft transitions (fade/dissolve).
+- **`--use-flow-consistency`** (default: `True`): Use flow consistency check for soft cuts. Can be disabled with `--no-use-flow-consistency`.
 
 NPZ keys (high level):
 - `meta`: dict (required baseline keys + `models_used[]` / `model_signature` when model‑based)
@@ -112,10 +137,11 @@ Rationale:
 
 - `frame_indices` missing/empty → **error**
 - `union_timestamps_sec` missing/invalid/non‑monotonic → **error**
-- `core_face_landmarks` or `core_object_detections` artifact missing (baseline) → **error**
+- `core_optical_flow` artifact missing (baseline) → **error**
+- `core_face_landmarks` / `core_object_detections` missing/invalid → **warning** + jump-cut detection disabled (quality degraded)
 - `len(frame_indices) < 2` → **error**
 
-Valid “empty” is generally **not expected** for this baseline module (it must produce a timeline).
+Valid "empty" is generally **not expected** for this baseline module (it must produce a timeline).
 
 ## Performance characteristics
 
@@ -181,13 +207,18 @@ Rules:
 - If frames are large (e.g., 720p+), SSIM/flow are computed on downscaled grayscale images (aspect ratio preserved).
 - This is not an adaptive heuristic based on content; it is a deterministic performance policy.
 
-### Optional reuse of `core_optical_flow`
+### Reuse of `core_optical_flow` (baseline policy)
 
-If `core_optical_flow` ran before this module and produced an aligned motion curve (`flow.npz`), you can enable reuse:
-- CLI: `--prefer-core-optical-flow` (best-effort)
-- CLI: `--require-core-optical-flow` (fail-fast if missing/mismatch)
+**Baseline**: `core_optical_flow` is **required** (no-fallback). The module always reuses `core_optical_flow/flow.npz` and forbids local Farneback computation.
 
-This avoids duplicate CPU Farneback computation and is consistent with the project plan to share heavy signals via core providers.
+**Deprecated CLI flags** (kept for backward compatibility, but ignored in baseline):
+- `--prefer-core-optical-flow` — deprecated (baseline always prefers core flow)
+- `--require-core-optical-flow` — deprecated (baseline always requires core flow)
+
+**Debug-only flag**:
+- `--no-require-core-optical-flow` — disables baseline requirement (debug only, not for production)
+
+This policy avoids duplicate CPU Farneback computation and is consistent with the project plan to share heavy signals via core providers.
 
 ### Batch Processing (Stage 3)
 
@@ -377,7 +408,7 @@ Render-context может быть использован:
 
 **HTML debug страница** (опционально):
 - Путь: `result_store/.../cut_detection/_render/render.html`
-- Содержит интерактивные графики (Chart.js):
+- Содержит offline SVG графики (без CDN):
   - Timeline: сигналы детекции (hist_diff, ssim_drop, flow_mag, hard_score) по времени с отмеченными cuts
   - Cuts events: таблица со всеми обнаруженными cuts (hard/soft/motion/jump) с временными метками
   - Distributions: статистики по сигналам детекции

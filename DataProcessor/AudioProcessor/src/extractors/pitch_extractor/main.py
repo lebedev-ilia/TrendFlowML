@@ -25,6 +25,12 @@ import librosa
 from src.core.base_extractor import BaseExtractor, ExtractorResult
 from src.core.audio_utils import AudioUtils
 
+from .utils.resource_profile import (
+    prefix_snapshot,
+    resource_profile_enabled,
+    snapshot_process_resources,
+)
+
 logger = logging.getLogger(__name__)
 
 # Contract version for downstream extractors compatibility validation
@@ -33,7 +39,7 @@ PITCH_CONTRACT_VERSION = "pitch_contract_v1"
 
 class PitchExtractor(BaseExtractor):
     name: str = "pitch"
-    version: str = "2.0.0"
+    version: str = "2.0.1"
     description: str = "Оценка основной частоты (f0) с помощью PYIN/YIN/CREPE (опционально)"
     category: str = "spectral"
     dependencies = ["librosa", "numpy"]
@@ -54,8 +60,8 @@ class PitchExtractor(BaseExtractor):
         backend: str = "classic",  # classic | torchcrepe
         channel_mode: str = "first",  # first | mean | max
         torchcrepe_batch_size: int = 1,
-        # Feature gating flags (per-feature control, default: all False)
-        enable_basic_stats: bool = False,
+        # Feature gating flags (Audit v3 default: basic_stats=True)
+        enable_basic_stats: bool = True,
         enable_stability_metrics: bool = False,
         enable_delta_features: bool = False,
         enable_method_stats: bool = False,
@@ -254,6 +260,9 @@ class PitchExtractor(BaseExtractor):
         Progress reporting: обновление прогресса для каждого метода (PYIN, YIN, torchcrepe).
         """
         start_time = time.time()
+        t_total0 = time.perf_counter()
+        stage_timings_ms: Dict[str, float] = {}
+        pitch_resource_profile: Optional[Dict[str, Any]] = None
         try:
             if not self._validate_input(input_uri):
                 error_code = self._classify_error(ValueError("Invalid input"), "audio_load_failed")
@@ -265,11 +274,23 @@ class PitchExtractor(BaseExtractor):
 
             self._log_extraction_start(input_uri)
 
+            if resource_profile_enabled():
+                try:
+                    pitch_resource_profile = {
+                        **prefix_snapshot("at_start", snapshot_process_resources()),
+                    }
+                except Exception:
+                    pitch_resource_profile = None
+
             # Загружаем аудио через общую утилиту (с ресемплингом до sample_rate)
             if self.progress_callback:
                 self.progress_callback("pitch", 0, 4, "Loading audio")
+            t0 = time.perf_counter()
             waveform_t, sr = self.audio_utils.load_audio(input_uri, target_sr=self.sample_rate)
+            stage_timings_ms["load_audio_ms"] = (time.perf_counter() - t0) * 1000.0
+            t0 = time.perf_counter()
             waveform_t = self.audio_utils.normalize_audio(waveform_t)
+            stage_timings_ms["normalize_audio_ms"] = (time.perf_counter() - t0) * 1000.0
 
             # Преобразуем к моно с учетом многоканального входа
             if waveform_t.dim() == 2 and waveform_t.shape[0] > 1:
@@ -286,17 +307,38 @@ class PitchExtractor(BaseExtractor):
             # Извлекаем признаки
             if self.progress_callback:
                 self.progress_callback("pitch", 1, 4, "Extracting pitch features")
+            t0 = time.perf_counter()
             features = self._extract_pitch_features(audio_np, sr)
+            stage_timings_ms["extract_pitch_ms"] = (time.perf_counter() - t0) * 1000.0
+
+            # Audit v3: duration, fmin, fmax, frame_length, hop_length, backend
+            duration = float(audio_np.shape[-1] / sr)
+            features["duration"] = duration
+            features["fmin"] = self.fmin
+            features["fmax"] = self.fmax
+            features["frame_length"] = self.frame_length
+            features["hop_length"] = self.hop_length
+            features["backend"] = self.backend
+
+            # Audit v3: canonical segment axis (empty for run())
+            features["segment_start_sec"] = np.array([], dtype=np.float32)
+            features["segment_end_sec"] = np.array([], dtype=np.float32)
+            features["segment_center_sec"] = np.array([], dtype=np.float32)
+            features["segment_mask"] = np.array([], dtype=bool)
             
-            # Сохраняем большие временные серии в .npy (per-run storage)
+            # Сохраняем f0_series в .npy (debug-only), путь в f0_series_npy
             if self.progress_callback:
                 self.progress_callback("pitch", 2, 4, "Saving artifacts")
+            t0 = time.perf_counter()
             features = self._save_time_series_artifacts(features, input_uri, tmp_path)
+            stage_timings_ms["save_artifacts_ms"] = (time.perf_counter() - t0) * 1000.0
             
             # Валидация выходных данных
             if self.progress_callback:
                 self.progress_callback("pitch", 3, 4, "Validating output")
+            t0 = time.perf_counter()
             is_valid, error_msg = self._validate_output(features)
+            stage_timings_ms["validate_output_ms"] = (time.perf_counter() - t0) * 1000.0
             if not is_valid:
                 error_code = self._classify_error(ValueError(error_msg), "validation_failed")
                 raise ValueError(f"pitch | {error_msg} (error_code={error_code})")
@@ -317,6 +359,19 @@ class PitchExtractor(BaseExtractor):
             if self.enable_time_series:
                 enabled_features.append("time_series")
             features["_features_enabled"] = enabled_features
+
+            stage_timings_ms["total_ms"] = (time.perf_counter() - t_total0) * 1000.0
+            features["stage_timings_ms"] = stage_timings_ms
+
+            if pitch_resource_profile is not None:
+                try:
+                    pitch_resource_profile = {
+                        **(pitch_resource_profile or {}),
+                        **prefix_snapshot("at_end", snapshot_process_resources()),
+                    }
+                except Exception:
+                    pass
+            features["pitch_resource_profile"] = pitch_resource_profile
 
             processing_time = time.time() - start_time
             self._log_extraction_success(input_uri, processing_time)
@@ -343,6 +398,9 @@ class PitchExtractor(BaseExtractor):
         Progress reporting: каждые 10% сегментов (если progress_callback установлен).
         """
         start_time = time.time()
+        t_total0 = time.perf_counter()
+        stage_timings_ms: Dict[str, float] = {"load_segments_ms": 0.0}
+        pitch_resource_profile: Optional[Dict[str, Any]] = None
         try:
             if not self._validate_input(input_uri):
                 error_code = self._classify_error(ValueError("Invalid input"), "audio_load_failed")
@@ -355,16 +413,28 @@ class PitchExtractor(BaseExtractor):
                 raise ValueError("pitch | segments is empty (no-fallback)")
 
             total_segments = len(segments)
+
+            if resource_profile_enabled():
+                try:
+                    pitch_resource_profile = {
+                        **prefix_snapshot("at_start", snapshot_process_resources()),
+                    }
+                except Exception:
+                    pitch_resource_profile = None
             
             # Progress reporting: каждые 10%
             progress_report_interval = max(1, total_segments // 10) if total_segments >= 10 else 1
             last_reported_pct = -1
 
-            # Process segments
+            # Process segments (Audit v3: canonical segment axis, segment_mask)
             f0_series_all: List[float] = []
+            segment_starts: List[float] = []
+            segment_ends: List[float] = []
             segment_centers: List[float] = []
             segment_durations: List[float] = []
+            segment_mask: List[bool] = []
             
+            t0 = time.perf_counter()
             for seg_idx, seg in enumerate(segments):
                 # Progress reporting
                 if self.progress_callback and seg_idx % progress_report_interval == 0:
@@ -377,6 +447,14 @@ class PitchExtractor(BaseExtractor):
                 start_sample = int(seg.get("start_sample", 0))
                 end_sample = int(seg.get("end_sample", 0))
                 center_sec = float(seg.get("center_sec", 0.0))
+                seg_start_sec = float(start_sample / self.sample_rate)
+                seg_end_sec = float(end_sample / self.sample_rate)
+                seg_dur = float((end_sample - start_sample) / self.sample_rate)
+                
+                segment_starts.append(seg_start_sec)
+                segment_ends.append(seg_end_sec)
+                segment_centers.append(center_sec)
+                segment_durations.append(seg_dur)
                 
                 wav_t, _sr = self.audio_utils.load_audio_segment(
                     input_uri,
@@ -387,32 +465,81 @@ class PitchExtractor(BaseExtractor):
                 wav = self.audio_utils.to_numpy(wav_t)
                 wav = wav[0] if wav.ndim == 2 else wav.reshape(-1)
                 
-                # Extract pitch for segment
-                seg_features = self._extract_pitch_features(wav, self.sample_rate)
-                
-                # Aggregate f0_mean from segment
-                if seg_features.get("f0_mean") and seg_features.get("f0_mean") > 0:
+                # Extract pitch for segment (catch empty/silent segments)
+                try:
+                    seg_features = self._extract_pitch_features(wav, self.sample_rate)
+                    has_pitch = bool(seg_features.get("f0_mean")) and float(seg_features.get("f0_mean", 0)) > 0
+                except Exception:
+                    has_pitch = False
+                segment_mask.append(has_pitch)
+                if has_pitch:
                     f0_series_all.append(float(seg_features.get("f0_mean")))
-                    segment_centers.append(center_sec)
-                    segment_durations.append(float((end_sample - start_sample) / self.sample_rate))
+            stage_timings_ms["process_segments_ms"] = (time.perf_counter() - t0) * 1000.0
             
             # Final progress report
             if self.progress_callback:
                 self.progress_callback("pitch", total_segments, total_segments, "Completed")
             
-            # Aggregate results
+            # Audit v3: all segments empty -> status=empty, not error
             if len(f0_series_all) == 0:
-                error_code = self._classify_error(RuntimeError("All segments produced empty pitch"), "all_methods_failed")
-                raise RuntimeError(f"pitch | all segments produced empty pitch (error_code={error_code})")
+                total_duration = float(sum(segment_durations))
+                empty_features: Dict[str, Any] = {
+                    "status": "empty",
+                    "empty_reason": "pitch_all_segments_empty",
+                    "device_used": self.device,
+                    "sample_rate": self.sample_rate,
+                    "segments_count": int(total_segments),
+                    "duration": total_duration,
+                    "fmin": self.fmin,
+                    "fmax": self.fmax,
+                    "frame_length": self.frame_length,
+                    "hop_length": self.hop_length,
+                    "backend": self.backend,
+                    "pitch_contract_version": PITCH_CONTRACT_VERSION,
+                    "segment_start_sec": np.array(segment_starts, dtype=np.float32),
+                    "segment_end_sec": np.array(segment_ends, dtype=np.float32),
+                    "segment_center_sec": np.array(segment_centers, dtype=np.float32),
+                    "segment_mask": np.array(segment_mask, dtype=bool),
+                    "_features_enabled": [],
+                }
+                stage_timings_ms["total_ms"] = (time.perf_counter() - t_total0) * 1000.0
+                empty_features["stage_timings_ms"] = stage_timings_ms
+
+                if pitch_resource_profile is not None:
+                    try:
+                        pitch_resource_profile = {
+                            **(pitch_resource_profile or {}),
+                            **prefix_snapshot("at_end", snapshot_process_resources()),
+                        }
+                    except Exception:
+                        pass
+                empty_features["pitch_resource_profile"] = pitch_resource_profile
+
+                processing_time = time.time() - start_time
+                self._log_extraction_success(input_uri, processing_time)
+                return self._create_result(success=True, payload=empty_features, processing_time=processing_time)
             
+            t0 = time.perf_counter()
             f0_arr = np.asarray(f0_series_all, dtype=np.float32)
+            total_duration = float(sum(segment_durations))
             
             # Build payload (feature-gated)
             features: Dict[str, Any] = {
                 "device_used": self.device,
                 "sample_rate": self.sample_rate,
                 "segments_count": int(total_segments),
+                "duration": total_duration,
+                "fmin": self.fmin,
+                "fmax": self.fmax,
+                "frame_length": self.frame_length,
+                "hop_length": self.hop_length,
+                "backend": self.backend,
+                "f0_method": "aggregated",
                 "pitch_contract_version": PITCH_CONTRACT_VERSION,
+                "segment_start_sec": np.array(segment_starts, dtype=np.float32),
+                "segment_end_sec": np.array(segment_ends, dtype=np.float32),
+                "segment_center_sec": np.array(segment_centers, dtype=np.float32),
+                "segment_mask": np.array(segment_mask, dtype=bool),
             }
             
             # Basic stats (feature-gated)
@@ -484,16 +611,14 @@ class PitchExtractor(BaseExtractor):
                     else:
                         features["pitch_octave_distribution"] = {}
                 
-                # Pitch centroid, skewness, kurtosis
-                if f0_arr.size > 0:
-                    features["pitch_centroid"] = float(np.mean(f0_arr))
-                    if f0_arr.size > 2:
-                        from scipy import stats
-                        features["pitch_skewness"] = float(stats.skew(f0_arr))
-                        features["pitch_kurtosis"] = float(stats.kurtosis(f0_arr))
-                    else:
-                        features["pitch_skewness"] = 0.0
-                        features["pitch_kurtosis"] = 0.0
+                # Pitch skewness, kurtosis (Q6: pitch_centroid removed, duplicate of f0_mean)
+                if f0_arr.size > 2:
+                    from scipy import stats
+                    features["pitch_skewness"] = float(stats.skew(f0_arr))
+                    features["pitch_kurtosis"] = float(stats.kurtosis(f0_arr))
+                else:
+                    features["pitch_skewness"] = 0.0
+                    features["pitch_kurtosis"] = 0.0
             
             # Time series (feature-gated)
             if self.enable_time_series:
@@ -512,12 +637,29 @@ class PitchExtractor(BaseExtractor):
             if self.enable_time_series:
                 enabled_features.append("time_series")
             features["_features_enabled"] = enabled_features
+
+            stage_timings_ms["aggregate_results_ms"] = (time.perf_counter() - t0) * 1000.0
             
             # Валидация выходных данных
+            t0 = time.perf_counter()
             is_valid, error_msg = self._validate_output(features)
+            stage_timings_ms["validate_output_ms"] = (time.perf_counter() - t0) * 1000.0
             if not is_valid:
                 error_code = self._classify_error(ValueError(error_msg), "validation_failed")
                 raise ValueError(f"pitch | {error_msg} (error_code={error_code})")
+
+            stage_timings_ms["total_ms"] = (time.perf_counter() - t_total0) * 1000.0
+            features["stage_timings_ms"] = stage_timings_ms
+
+            if pitch_resource_profile is not None:
+                try:
+                    pitch_resource_profile = {
+                        **(pitch_resource_profile or {}),
+                        **prefix_snapshot("at_end", snapshot_process_resources()),
+                    }
+                except Exception:
+                    pass
+            features["pitch_resource_profile"] = pitch_resource_profile
 
             processing_time = time.time() - start_time
             self._log_extraction_success(input_uri, processing_time)
@@ -537,22 +679,13 @@ class PitchExtractor(BaseExtractor):
         tmp_path: str,
     ) -> Dict[str, Any]:
         """
-        Сохранить большие временные серии в .npy файлы (per-run storage).
-        
-        Args:
-            features: Словарь с признаками
-            input_uri: Путь к входному файлу
-            tmp_path: Временная директория (если artifacts_dir не задан, используется tmp_path)
-        
-        Returns:
-            Обновлённый словарь features с путями к .npy файлам
+        Сохранить f0_series в .npy (debug-only). Q7: f0_series не в NPZ, путь в meta.extra.f0_series_npy.
         """
         if not self.enable_time_series:
             return features
         
         artifacts_dir = Path(self.artifacts_dir) if self.artifacts_dir else Path(tmp_path)
         artifacts_dir.mkdir(parents=True, exist_ok=True)
-        
         stem = Path(input_uri).stem
         
         # Save torchcrepe series if present
@@ -561,10 +694,23 @@ class PitchExtractor(BaseExtractor):
             npy_path = artifacts_dir / f"{stem}_f0_torchcrepe.npy"
             np.save(str(npy_path), np.asarray(series, dtype=np.float32))
             features["f0_series_torchcrepe_npy"] = str(npy_path)
+            features["f0_series_npy"] = str(npy_path)  # canonical path for meta.extra
             features["f0_count_torchcrepe"] = int(len(series))
-            # Убираем саму серию из JSON (если не включена time_series)
-            if not self.enable_time_series:
-                features.pop("f0_series_torchcrepe", None)
+            features.pop("f0_series_torchcrepe", None)
+            return features
+        
+        # Save pyin/yin series (classic backend)
+        for key in ["f0_series_pyin", "f0_series_yin"]:
+            series = features.get(key)
+            if series is not None:
+                arr = np.asarray(series, dtype=np.float32) if isinstance(series, list) else series
+                if arr.size > 0:
+                    suffix = key.replace("f0_series_", "")
+                    npy_path = artifacts_dir / f"{stem}_f0_{suffix}.npy"
+                    np.save(str(npy_path), arr)
+                    features["f0_series_npy"] = str(npy_path)
+                features.pop(key, None)
+                break
         
         return features
 
@@ -776,7 +922,6 @@ class PitchExtractor(BaseExtractor):
                 "pitch_contour_smoothness": 0.0,
                 "pitch_jump_count": 0,
                 "pitch_octave_distribution": {},
-                "pitch_centroid": 0.0,
                 "pitch_skewness": 0.0,
                 "pitch_kurtosis": 0.0,
             }
@@ -805,8 +950,7 @@ class PitchExtractor(BaseExtractor):
         else:
             metrics["pitch_octave_distribution"] = {}
         
-        # Pitch centroid, skewness, kurtosis
-        metrics["pitch_centroid"] = float(np.mean(f0))
+        # Pitch skewness, kurtosis (Q6: pitch_centroid removed, duplicate of f0_mean)
         if f0.size > 2:
             try:
                 from scipy import stats

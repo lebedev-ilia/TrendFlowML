@@ -8,6 +8,12 @@
 **Категория**: text, embeddings  
 **GPU**: опционально (поддерживается CUDA с fp16)
 
+**Диапазоны и валидатор среза** (`text_features.npz`): [`docs/FEATURE_DESCRIPTION.md`](docs/FEATURE_DESCRIPTION.md) · [`utils/validate_title_embedder_text_npz.py`](utils/validate_title_embedder_text_npz.py)
+
+**Контракт Audit v3 (`features_flat`)**: [`SCHEMA.md`](SCHEMA.md) · machine: [`../../../schemas/title_embedder_output_v1.json`](../../../schemas/title_embedder_output_v1.json) · отчёт: [`../../../docs/audit_v3/components/title_embedder_AUDIT_V3_REPORT.md`](../../../docs/audit_v3/components/title_embedder_AUDIT_V3_REPORT.md) · **Audit v4:** [`../../../../docs/audit_v4/components/text_processor/title_embedder_audit_v4.md`](../../../../docs/audit_v4/components/text_processor/title_embedder_audit_v4.md) · **L2 stats:** [`../../../../storage/audit_v4/title_embedder_l2/title_embedder_audit_v4_stats.json`](../../../../storage/audit_v4/title_embedder_l2/title_embedder_audit_v4_stats.json) (tooling: `scripts/audit_v4_npz_stats.py`)
+
+**Audit v3 preflight**: каноническая модель эмбеддингов — **`intfloat/multilingual-e5-large`** (задаётся профилем/`model_name` в прогоне; см. `TEXTPROCESSOR_AUDIT_V3_PREFLIGHT_RULES.md`).
+
 ### Входы
 
 - **`doc.title`** (str): заголовок видео
@@ -29,13 +35,18 @@
 - `tp_titleemb_dim`
 - `tp_titleemb_norm_raw`
 - `tp_titleemb_l2_norm`
-
-Дополнительные метрики (опционально, `emit_extra_metrics=true`):
-- `tp_titleemb_cache_hit`, `tp_titleemb_cache_enabled`
-- `tp_titleemb_fp16`, `tp_titleemb_device_cuda`
-- `tp_titleemb_model_digest_u24`
-- `tp_titleemb_encode_ms`
-- `tp_titleemb_artifact_written`, `tp_titleemb_compute_raw_norm`
+- `tp_titleemb_title_present` (0/1)
+- `tp_titleemb_require_title_enabled` (0/1)
+- `tp_titleemb_compute_enabled` (0/1)
+- `tp_titleemb_write_artifact_enabled` (0/1)
+- `tp_titleemb_artifact_written` (0/1)
+- `tp_titleemb_cache_enabled` (0/1)
+- `tp_titleemb_cache_hit` (0/1 или NaN если кеш выключен)
+- `tp_titleemb_fp16` (0/1)
+- `tp_titleemb_device_cuda` (0/1)
+- `tp_titleemb_model_digest_u24` (int)
+- `tp_titleemb_encode_ms` (float, миллисекунды)
+- `tp_titleemb_compute_raw_norm` (0/1)
 
 Для детерминированного доступа downstream‑экстракторами в рамках этого же run используется in-memory реестр (только если `write_artifact=true`):
 `doc.tp_artifacts["embeddings"]["title"]["relpath"]` (`title_embedding.npy`).
@@ -85,9 +96,11 @@ TitleEmbedder(
     write_artifact=True,                                   # писать ли per-run `.npy` артефакт (и регистрировать relpath)
     write_embedding_artifact=True,                         # (deprecated alias)
     compute_raw_norm=True,                                # Считать ли norm_raw (иначе NaN)
-    emit_extra_metrics=False,                              # Доп. метрики в features_flat (опционально)
+    emit_extra_metrics=False,                              # Зарезервировано: в v1.2.0 не меняет features_flat (см. SCHEMA.md)
 )
 ```
+
+**`emit_extra_metrics`:** принимается конструктором / YAML для совместимости API; **`tp_titleemb_encode_ms`** и остальные ключи `features_flat` на успешном пути заполняются **независимо** от этого флага. Дополнительных ключей при `True` не появляется.
 
 ### Поддерживаемые модели
 
@@ -137,6 +150,9 @@ cache_dir/
 Возвращает кортеж `(embeddings, norms)`:
 - `embeddings`: нормализованные эмбеддинги, shape `(N, D)`
 - `norms`: L2-нормы необработанных векторов, shape `(N,)` (если `return_norms=True`)
+
+#### `extract_batch(docs: List[VideoDocument]) -> List[Dict[str, Any]]`
+Батчевая обработка нескольких документов. Оптимизирует кодирование через единый батч, сохраняя per-document артефакты и метрики. Поддерживается через `supports_batch=True`.
 
 ### Особенности
 

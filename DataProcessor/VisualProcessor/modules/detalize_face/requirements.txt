@@ -1,0 +1,2 @@
+# Dependencies for detalize_face module
+# Add module-specific dependencies here

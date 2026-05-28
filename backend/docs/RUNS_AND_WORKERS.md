@@ -1,61 +1,61 @@
-# Runs and workers
+# Runs, analysis jobs и Celery workers
 
-## 1) Run lifecycle
+Документ описывает **текущую** фактическую реализацию фоновой обработки в пакете `backend/app/tasks/` (`analysis.py`, `ingestion.py`, `events.py`, `manifest.py`) и связанные HTTP-маршруты. Legacy-модель отдельного `process_run` для старых `runs` в этом тексте не используется — актуальные задачи: **`process_analysis_job`**, **`process_ingestion_run`**, **`sync_ingestion_run_status`**.
 
-`POST /api/runs`:
+См. также: [OVERVIEW.md](OVERVIEW.md), [FETCHER_INTEGRATION.md](FETCHER_INTEGRATION.md), [reference/DATAPROCESSOR_CONTRACT.md](reference/DATAPROCESSOR_CONTRACT.md). Архитектурное обоснование очереди, Redis pub/sub и **manifest как source of truth:** [adr/0001-celery-redis-pubsub-manifest-source-of-truth.md](adr/0001-celery-redis-pubsub-manifest-source-of-truth.md).
 
-- проверяет, что видео принадлежит пользователю (`user_video_links`)
-- создаёт `runs` со статусом `queued`
-- создаёт минимальные `run_components` для UI (`segmenter`, `visual`)
-- запускает Celery task `process_run(run_id)`
+---
 
-## 2) Celery task `process_run`
+## 1) Analysis Job (путь: workspace → video → analysis)
 
-Код: `backend/app/tasks.py`
+**HTTP:** `POST /api/workspaces/{workspace_id}/videos/{video_id}/analysis` — создаёт запись **AnalysisJob** (`core.analysis_jobs`), ставит в очередь Celery.
 
-Основные шаги:
+**Задача:** `process_analysis_job(analysis_job_id)` (`app/tasks/analysis.py`)
 
-1. Загружает `Run`, `Video`, `VideoSource`, `VideoFile`.
-2. Строит профиль (если нет `visual.cfg_path` и `processors`).
-3. Переводит run в `running`, ставит `stage="segmenter"`.
-4. Стартует tailer `state_events.jsonl` (DataProcessor пишет progress).
-5. Запускает `DataProcessor/main.py` через subprocess.
-6. Стримит stdout/stderr в `run_logs` и WebSocket события.
-7. После завершения:
-   - читает `manifest.json`
-   - регистрирует артефакты
-   - запускает demo quality scripts
-   - финализирует run со статусом `succeeded`/`failed`
+Назначение: преобразовать контекст v2 в payload для DataProcessor (адаптер `dataprocessor_adapter`), запустить обработку (HTTP API DataProcessor и/или subprocess — см. код и `dataprocessor.py`), стримить логи и события, по завершении разобрать `manifest.json`, обновить job, при необходимости создать **Prediction** и зарегистрировать артефакты.
 
-## 3) DataProcessor запуск
+Отмена: **`POST /api/analysis/{analysis_job_id}/cancel`** — для `queued` сразу `canceled` в БД; для `processing` — вызов **DataProcessor** `POST /api/v1/runs/{run_id}/cancel` (`run_id` = id job); терминальные статусы — **noop**. Детали: [OPERATIONS.md](OPERATIONS.md) §6, [GAPS_AND_ALIGNMENT.md](GAPS_AND_ALIGNMENT.md) §5.
 
-Команда запуска:
+---
 
-- `--video-path <raw_video_path>`
-- `--output <frames_dir_base>`
-- `--visual-cfg-path <visual_cfg_default>`
-- `--profile-path <profiles_cache/run_id/profile.yaml>`
-- `--dag-path <DataProcessor/docs/reference/component_graph.yaml>`
-- `--dag-stage baseline`
-- `--platform-id`, `--video-id`, `--run-id`
-- `--sampling-policy-version v1`
-- `--dataprocessor-version dev`
-- `--rs-base <result_store_base>`
+## 2) Ingestion run (путь: URL → Fetcher → DataProcessor)
 
-## 4) Cancel semantics (текущая реализация)
+**HTTP:**
 
-`POST /api/runs/{run_id}/cancel`:
+- `POST /api/runs` — создаёт **IngestionRun**, вызывает Fetcher (`fetcher_client`), при необходимости **Idempotency-Key**.
+- `GET /api/runs`, `GET /api/runs/{run_id}` — статус и детали.
+- `POST /api/runs/{run_id}/trigger-processing` — вызов **от Fetcher** после finalize; ставит `process_ingestion_run` (опционально защита `X-API-Key`, см. `TF_BACKEND_RUN_TRIGGER_API_KEY`).
 
-- ставит `cancel_requested_at`
-- **не останавливает** текущий DataProcessor процесс
+**Задача:** `process_ingestion_run(run_id)` — получает manifest/артефакты из Fetcher, собирает payload с `video_url`, запускает DataProcessor.
 
-Если нужна строгая отмена — это TODO в `GAPS_AND_ALIGNMENT.md`.
+**Периодическая синхронизация:** `sync_ingestion_run_status` — опрос Fetcher, обновление полей run в БД, события. Расписание в `app/worker.py` (`beat_schedule`); требуется процесс **`celery -A app.worker:celery_app beat`**. В `backend/docker-compose.yml` **beat по умолчанию не запущен** — только `worker` и `api`.
 
-## 5) Quality reports
+---
 
-После успешного run backend ищет
-`**/quality_report/demo_*_quality.py` и запускает их.
+## 3) DataProcessor: прогресс и логи
 
-HTML отчёты регистрируются как `artifacts` и доступны через
-`GET /api/runs/{run_id}/artifact`.
+При работе воркера:
 
+- DataProcessor может писать **`state_events.jsonl`** — backend tail’ит и публикует события (`run.stage_changed`, `component.*`) в Redis.
+- stdout/stderr могут попадать в **run_logs** (legacy) и транслироваться в WebSocket.
+
+Детали payload командной строки и путей: см. код `app/tasks/`, [STORAGE_LAYOUT.md](STORAGE_LAYOUT.md), [DATAPROCESSOR_CONTRACT.md](reference/DATAPROCESSOR_CONTRACT.md).
+
+---
+
+## 4) Quality reports
+
+После успешного прогона analysis job backend может искать скрипты вида `**/quality_report/demo_*_quality.py` и запускать их (см. `app/services/quality.py` и `app/tasks/analysis.py`).
+
+---
+
+## 5) Запуск воркера и beat (локально)
+
+Из каталога **`backend/`**:
+
+```bash
+celery -A app.worker:celery_app worker --loglevel=INFO
+celery -A app.worker:celery_app beat --loglevel=INFO
+```
+
+Docker: см. [README.md](../README.md) и [OPERATIONS.md](OPERATIONS.md).

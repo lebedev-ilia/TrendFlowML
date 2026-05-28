@@ -1,0 +1,54 @@
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: fetcher-config
+  labels:
+    app: fetcher
+data:
+  # S3/MinIO configuration
+  s3-endpoint-url: "http://minio-service:9000"
+  s3-bucket-raw: "video-analytics-raw"
+  s3-bucket-processed: "video-analytics-processed"
+  s3-bucket-temp: "video-analytics-temp"
+  
+  # DataProcessor API
+  dataprocessor-api-url: "http://dataprocessor-api:8000"
+  
+  # Logging
+  log-level: "INFO"
+  
+  # Platform configuration
+  enabled-platforms: "youtube"
+  youtube-enabled: "true"
+  
+  # Rate limiting (YouTube)
+  youtube-metadata-limit-per-window: "400"
+  youtube-metadata-window-sec: "3600"
+  youtube-download-limit-per-window: "80"
+  youtube-download-window-sec: "3600"
+  
+  # Backpressure
+  backpressure-threshold: "1000"
+  
+  # Lifecycle policies
+  raw-video-retention-days: "30"
+  temp-files-retention-days: "7"
+  failed-runs-retention-days: "90"
+  raw-comments-retention-days: "90"
+  raw-comments-hard-cap-days: "365"
+  
+  # Feature flags
+  enable-pii-filtering: "true"
+  enable-snapshots: "true"
+  enable-proxies: "false"
+  retain-raw-comments: "true"
+  retain-raw-meta: "true"
+  
+  # Centralized logging (опционально)
+  # logging-backend: "loki"  # или "elasticsearch", "cloudwatch"
+  # logging-loki-url: "http://loki:3100"
+  # logging-elasticsearch-url: "http://elasticsearch:9200"
+  # logging-elasticsearch-index: "fetcher-logs"
+  # logging-cloudwatch-log-group: "/aws/fetcher"
+  # logging-cloudwatch-region: "us-east-1"
+

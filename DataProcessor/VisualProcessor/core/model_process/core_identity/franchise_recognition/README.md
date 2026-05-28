@@ -1,4 +1,60 @@
-## Component: `franchise_recognition` (semantic head, v1)
+## Component: `franchise_recognition` (semantic head, Audit v3)
+
+**Version**: `0.2` (Audit v3)  
+**Schema**: `franchise_recognition_npz_v2`  
+**Audit v3 Status**: `passed`  
+
+**Док. фич / melt / QA:** `docs/FEATURE_DESCRIPTION.md` · `utils/validate_franchise_recognition.py`
+
+### Changelog
+
+#### v0.2 (Audit v3, schema v2) — 2026-02-XX
+
+**Критические изменения**:
+- **Schema bump**: `franchise_recognition_npz_v1` → `franchise_recognition_npz_v2`
+- **Детерминированный label-space**: добавлены `semantic_label_names` и `semantic_object_ids` для стабильного отображения UUID → int32
+  - Компонент получает полный список labels из Embedding Service заранее (через `get_labels()`)
+  - Используется канонический label space для обеспечения стабильности `label_id` между запусками
+  - Результаты поиска маппятся к каноническому label space через UUID
+- **DB provenance**: добавлены `db_name`, `db_version`, `db_digest` в meta для reproducibility
+  - `db_digest`: SHA256 хеш от канонического списка labels (стабильный в пределах версии базы)
+  - `db_name`: "embedding_service"
+  - `db_version`: "v1"
+- **meta_json**: добавлен cross-venv safe JSON representation meta
+- **Embedding Service client**: добавлен метод `get_labels()` для получения канонического списка labels
+
+**Улучшения**:
+- **Стабильность label space**: использование канонического label space из Embedding Service вместо динамического построения из результатов поиска
+- **Оптимизация с каноническим label space**: при использовании embeddings напрямую маппинг к каноническому label space происходит до вычисления similarity
+- **Render system**: полностью переписан HTML рендер на offline vanilla JS + SVG
+  - Offline render (без CDN), графики — SVG
+  - Добавлен SVG timeline график (offline)
+  - Mini-dashboard с секциями: Overview, QA (top/anti-top), Timeline, Tables, Meta
+  - Интерактивность на vanilla JS: поиск, фильтры, сортировка таблиц
+  - Навигация с якорями между секциями
+- **Документация**: 
+  - Добавлен `SCHEMA.md` (human schema) с полным описанием всех полей, tiers, required/optional
+  - Создана JSON схема `franchise_recognition_npz_v2.json` в `VisualProcessor/schemas/`
+  - Обновлен README с разделом "Render (dev-only)" согласно требованиям аудита
+- **Расширенный render context**: добавлены `key_facts`, `config_highlights`, `qa_hints`, `top_examples`, `anti_top_examples`
+
+**Breaking changes**:
+- `frame_topk_ids` и `track_topk_ids` теперь содержат int32 индексы из `semantic_label_names` вместо динамических индексов (детерминированное отображение)
+- Структура NPZ изменена: добавлены обязательные поля `semantic_object_ids`, `meta_json`
+- Обязательные meta поля: добавлены `db_name`, `db_version`, `db_digest`, `embedding_service_url`, `franchise_category`, `topk`, `similarity_threshold`, `threshold_global`, `num_franchises`, `num_frames`
+
+**Технические детали**:
+- Канонический label space строится из `labels_canon` (полученного через `get_labels()`), отсортированного по UUID
+- `uuid_to_int` маппинг обеспечивает стабильность `label_id` между запусками (при одинаковом `db_digest`)
+- При использовании embeddings напрямую: маппинг к каноническому label space происходит до построения embeddings matrix
+- При fallback (image-based search): результаты поиска маппятся к каноническому label space через UUID
+
+#### v0.1 (initial) — до Audit v3
+
+- Базовая реализация franchise recognition
+- Schema v1 без детерминированного label-space
+- Динамическое построение label space из результатов поиска
+- HTML render — полностью offline (без CDN)
 
 ### Назначение
 
@@ -31,10 +87,11 @@
 
 Путь: `result_store/<platform_id>/<video_id>/<run_id>/franchise_recognition/franchise_recognition.npz`
 
-Ключи (v1, совместимо с `SCHEMA_SEMANTIC_HEADS_NPZ.md`):
+Ключи (v2, совместимо с `SCHEMA_SEMANTIC_HEADS_NPZ.md`):
 - `frame_indices (N,) int32` (строго = `core_clip.frame_indices`)
 - `times_s (N,) float32` — `union_timestamps_sec[frame_indices]`
-- `semantic_label_names (A,) str` (`"id:name"`)
+- `semantic_label_names (A,) str` (`"id:name"`) — канонический label space из Embedding Service (стабильный в пределах `db_digest`)
+- `semantic_object_ids (A,) str` — UUID из Embedding Service, aligned с `semantic_label_names` (для reproducibility)
 - `threshold_per_label_arr (A,) float32` (NaN если нет)
 - `track_ids (1,) int32` (=0, video-level aggregate)
 - `track_present_mask (1,) bool`
@@ -43,7 +100,10 @@
 - `track_topk_evidence_frame_indices (1,5) int32` — union frame index, где similarity максимальна
 - `frame_topk_ids (N,5) int32`, `frame_topk_scores (N,5) float32`
 - `frame_is_confident_top1 (N,) bool`
-- `meta` (object dict): стандарт + Embedding Service URL, OCR stats, `models_used`/`model_signature` (+ chaining от `core_clip`)
+- `meta` (object dict): стандарт + DB provenance (`db_name`, `db_version`, `db_digest`), Embedding Service URL, OCR stats, `models_used`/`model_signature` (+ chaining от `core_clip`)
+- `meta_json` (str): meta как JSON string (cross-venv safe)
+
+**Важно (v2)**: `semantic_label_names` и `semantic_object_ids` строятся из канонического списка labels, полученного из Embedding Service заранее. Это обеспечивает стабильность `label_id` между запусками при одинаковом `db_digest`.
 
 ### Early validation (Embedding Service)
 
@@ -230,37 +290,124 @@
 - **Стабильность**: одинаковые франшизы должны иметь похожие similarity scores на соседних кадрах
 - **Coverage**: проверка, что распознавание покрывает разные части видео (начало/середина/конец)
 
-### Human-friendly визуализация (Render System)
+### Render (dev-only)
 
-`franchise_recognition` генерирует **render-context JSON** для каждого запуска:
+**Важно**: Render генерируется только в dev-режиме для проверки качества. В production рендеры не используются. NPZ остаётся source-of-truth.
 
-- Путь: `result_store/<platform_id>/<video_id>/<run_id>/franchise_recognition/_render/render_context.json`
+#### Файлы рендера
 
-Этот JSON содержит:
-- **Summary**: статистики по распознаванию (frames_count, unique_franchises_count, confident_predictions_count/ratio, top1_score_mean/std/min/max/median, video_franchise)
-- **Timeline**: данные по каждому кадру (frame_index, time_sec, top1_franchise_id, top1_franchise_name, top1_score, is_confident, topk_scores)
-- **Distributions**: распределения top1_scores и topk_scores (min, max, mean, std, median, percentiles)
-- **Top franchises**: топ франшизы по количеству кадров и среднему score
+`franchise_recognition` генерирует следующие файлы рендера:
 
-Render-context может быть использован:
-- **LLM** для генерации текстовых описаний распознанных франшиз в видео
-- **Frontend** для построения графиков и визуализаций (timeline charts, distributions, franchise pie charts)
-- **Debugging**: быстрая проверка качества распознавания без загрузки NPZ
+- **Render-context JSON**: `result_store/<platform_id>/<video_id>/<run_id>/franchise_recognition/_render/render_context.json`
+  - Содержит структурированные данные для генерации HTML и анализа
+  - Включает: summary, key_facts, config_highlights, qa_hints, timeline, distributions, top_examples, anti_top_examples
+- **HTML mini-dashboard**: `result_store/.../franchise_recognition/_render/render.html`
+  - Offline страница (без CDN-зависимостей)
+  - Интерактивные таблицы с поиском и сортировкой (vanilla JS)
+  - SVG графики для timeline (offline)
 
-**HTML debug страница** (опционально):
-- Путь: `result_store/.../franchise_recognition/_render/render.html`
-- Содержит интерактивные графики (Chart.js):
-  - Timeline: top-1 franchise scores по времени с цветовой кодировкой франшиз
-  - Distributions: статистики по top1_scores и topk_scores
-  - Top franchises: таблица с топ франшизами и их метриками
-  - Summary metrics: ключевые показатели в удобном формате
+#### Как читать выход
 
-**Конфигурация** (в `global_config.yaml`):
+**Key facts** (блок вверху страницы):
+- `schema_version`: версия схемы NPZ (должна быть `franchise_recognition_npz_v2`)
+- `producer_version`: версия компонента (должна быть `0.2`)
+- `franchise_category`: категория в Embedding Service (должна быть `franchise`)
+- `num_frames`: количество обработанных кадров
+- `num_franchises`: количество уникальных франшиз, найденных в видео
+- `stage_timings_ms`: время выполнения стадий (initialization, load_deps, process_frames, saving, total)
+
+**Config highlights** (важные параметры):
+- `topk`: количество top результатов (всегда 5 для semantic-head contract)
+- `similarity_threshold`: минимальный порог similarity (не гейтит top-K, только для фильтрации)
+- `threshold_global`: глобальный порог для `is_confident` флагов (по умолчанию 0.23)
+- `use_ocr_filtering`: используется ли OCR для фильтрации кандидатов
+
+**Timeline график**:
+- Показывает top-1 franchise score по времени
+- Ось X: время в секундах
+- Ось Y: similarity score (0.0-1.0)
+- Нормальные значения: 0.3-0.9 для корректных распознаваний
+- Аномалии: score < 0.2 может указывать на отсутствие франшизы или плохое качество
+
+**Top franchises таблица**:
+- Показывает топ франшизы по частоте появления в кадрах
+- Колонки: Franchise Name, Count (количество кадров), Ratio (доля от общего числа кадров)
+- Сортировка: по умолчанию по Count (убывание)
+- Интерактивность: поиск по имени франшизы, сортировка по клику на заголовок
+
+**Top / Anti-top примеры**:
+- **Top examples**: кадры с наивысшими similarity scores (лучшие распознавания)
+- **Anti-top examples**: кадры с низкими scores, но с найденной франшизой (подозрительные случаи)
+- Каждый пример показывает: frame_index, time_sec, franchise_name, top1_score, is_confident
+
+**Timeline таблица** (все кадры):
+- Показывает данные по каждому кадру
+- Колонки: frame_index, time_sec, franchise_name, top1_score, is_confident
+- Интерактивность: поиск по frame_index/time_sec/franchise_name, фильтр по is_confident, сортировка
+- Ограничение: показываются первые 3000 кадров (для производительности)
+
+#### Типовые распределения и аномалии
+
+**Нормальные распределения**:
+- `top1_score_mean`: 0.4-0.7 (типично для видео с четкими франшизами)
+- `top1_score_std`: < 0.3 (стабильное распознавание)
+- `confident_predictions_ratio`: > 0.5 (для видео с четким контентом франшиз)
+- `unique_franchises_count`: 1-3 (обычно одна основная франшиза)
+
+**Аномалии для проверки**:
+- `top1_score_mean < 0.2`: возможно, в видео нет франшиз или качество очень низкое
+- `top1_score_std > 0.3`: нестабильное распознавание, возможно проблемы с качеством кадров
+- `confident_predictions_ratio < 0.3`: мало уверенных предсказаний, возможно нужно снизить `threshold_global`
+- `unique_franchises_count > 10`: слишком много разных франшиз, возможно ложные срабатывания
+
+#### Связь с NPZ (source-of-truth)
+
+Рендер является **человекочитаемой интерпретацией** NPZ артефакта:
+- Все данные в рендере берутся из NPZ (`franchise_recognition.npz`)
+- NPZ остаётся единственным source-of-truth для downstream компонентов
+- Рендер может иметь упрощения/агрегации для удобства чтения
+- При расхождении всегда используйте данные из NPZ
+
+**Ключевые поля NPZ**:
+- `frame_topk_ids/scores`: per-frame top-K результаты
+- `track_topk_ids/scores`: video-level aggregate (max over time)
+- `frame_is_confident_top1`: флаги уверенности для каждого кадра
+- `track_is_confident_top1`: флаг уверенности для всего видео
+- `semantic_label_names`: каноническое пространство меток (`"id:name"`)
+
+#### Время выполнения
+
+Время выполнения компонента отображается в блоке **Key facts** → `stage_timings_ms`:
+- `initialization`: обычно < 100ms (загрузка metadata.json)
+- `load_deps`: зависит от размера embeddings (обычно 50-200ms)
+- `process_frames`: основное время (зависит от количества кадров и режима):
+  - **Оптимизированный режим** (embeddings напрямую): ~0.1-0.6 секунды для 115 кадров
+  - **Fallback режим** (image-based search): ~6-7 секунд для 115 кадров
+- `saving`: обычно < 50ms (запись NPZ)
+- `total`: сумма всех стадий
+
+#### Параметры конфига, влияющие на результат и стоимость
+
+**Параметры, влияющие на качество**:
+- `--threshold-global`: влияет на `is_confident` флаги (не влияет на top-K результаты)
+- `--similarity-threshold`: минимальный порог для результатов (не гейтит top-K, только фильтрация)
+
+**Параметры, влияющие на стоимость**:
+- `--use-ocr-filtering`: может ускорить на ~20-30% при базах >500 франшиз (за счет фильтрации кандидатов)
+- `--batch-size`: влияет на throughput при использовании batch API (если доступен)
+
+**Параметры, не влияющие на результат**:
+- `--topk`: фиксировано на 5 (semantic-head contract)
+- `--ocr-npz`: опционально, используется только для фильтрации
+
+#### Конфигурация
+
+В `global_config.yaml`:
 ```yaml
 franchise_recognition:
   render:
     enable_render: true  # Генерировать render-context JSON
-    enable_html_render: true  # Генерировать HTML debug страницу
+    enable_html_render: true  # Генерировать HTML mini-dashboard
 ```
 
 **Примечание**: Render генерируется автоматически после успешной обработки компонента (best-effort: ошибки render не валят основной процесс).
@@ -282,14 +429,21 @@ python quality_report/demo_franchise_recognition_quality.py \
 
 1. **Категория**: `franchise` (может быть расширена)
 2. **Модель**: CLIP (определяется Embedding Service, обычно `clip_224` или `clip_336`)
-3. **Использование** (два режима):
+3. **Канонический label space** (v2, Audit v3):
+   - Компонент получает полный список labels из Embedding Service заранее через `GET /categories/franchise/labels`
+   - Строится канонический label space (отсортированный по UUID) для обеспечения стабильности `label_id` между запусками
+   - Вычисляется `db_digest` (SHA256 хеш от канонического списка labels) для reproducibility
+   - Результаты поиска маппятся к каноническому label space через UUID
+4. **Использование** (два режима):
    - **Оптимизированный режим** (рекомендуется):
      - Получение всех franchise embeddings через `GET /categories/franchise/embeddings` (один запрос)
+     - Маппинг embeddings к каноническому label space по UUID
      - Локальное сравнение через cosine similarity (без HTTP запросов для каждого кадра)
      - Автоматически активируется, если в базе есть franchise объекты
      - **Ускорение: 10-50x**
    - **Fallback режим** (если база пуста):
      - Поиск похожих франшиз через Embedding Service (`POST /search`)
+     - Результаты маппятся к каноническому label space через UUID
      - Batch search для уменьшения количества HTTP запросов
      - Параллельная обработка батчей
      - **Ускорение: 3-10x** по сравнению с последовательным поиском
@@ -305,8 +459,10 @@ python quality_report/demo_franchise_recognition_quality.py \
 **Требования к Embedding Service**:
 - Должен быть доступен (fail-fast при недоступности)
 - Должен поддерживать категорию `franchise`
+- Должен поддерживать endpoint `GET /categories/{category}/labels` (для получения канонического label space)
 - Должен поддерживать endpoint `GET /categories/{category}/embeddings` (для оптимизированного режима)
-- Должен возвращать результаты в формате: `[{"id": str, "name": str, "similarity": float, "metadata": dict}, ...]`
+- Должен возвращать результаты поиска в формате: `[{"id": str, "name": str, "similarity": float, "metadata": dict}, ...]`
+- Должен возвращать labels в формате: `[{"id": str, "name": str, "embedding_model": str, "embedding_dim": int, "updated_at": str}, ...]`
 
 **Добавление franchise объектов**:
 ```bash
@@ -360,9 +516,9 @@ result = client.add_object(
 Компонент измеряет время выполнения ключевых стадий и сохраняет их в `meta.stage_timings_ms`:
 
 - `initialization` — загрузка `metadata.json`, валидация `frame_indices`
-- `load_deps` — загрузка `core_clip` embeddings, инициализация Embedding Service клиента, получение franchise embeddings (если используется оптимизация)
-- `process_frames` — поиск франшиз (локальное сравнение embeddings или через Embedding Service)
-- `saving` — формирование `meta` и атомарная запись NPZ
+- `load_deps` — загрузка `core_clip` embeddings, инициализация Embedding Service клиента, получение канонического label space (через `get_labels()`), получение franchise embeddings (если используется оптимизация)
+- `process_frames` — поиск франшиз (локальное сравнение embeddings или через Embedding Service), маппинг результатов к каноническому label space
+- `saving` — формирование `meta` (включая `db_digest`), `meta_json`, и атомарная запись NPZ
 - `total` — общее время работы компонента
 
 **Логирование таймингов**:
@@ -372,6 +528,23 @@ result = client.add_object(
 Компонент публикует прогресс в `state_events.jsonl`:
 - Стадии: `start → load_deps → process_frames → save → done`
 - Гранулярный прогресс во время `process_frames` (≥10 обновлений по кадрам)
+
+### Schema и версионирование
+
+**Schema version**: `franchise_recognition_npz_v2`
+
+**Human schema**: `SCHEMA.md` (рядом с компонентом)  
+**Machine schema**: `VisualProcessor/schemas/franchise_recognition_npz_v2.json`
+
+**Версионирование**:
+- `producer_version`: версия компонента (текущая: `0.2`)
+- `schema_version`: версия схемы NPZ (текущая: `franchise_recognition_npz_v2`)
+- `db_digest`: SHA256 хеш канонического списка labels (для reproducibility)
+
+**Правила обратной совместимости**:
+- Любое существенное изменение ключей/dtype/shape → bump `schema_version`
+- Изменения в структуре meta (добавление required полей) → bump `schema_version`
+- `allow_extra_keys=false` в схеме (fail-fast при неизвестных ключах)
 
 ### Troubleshooting
 

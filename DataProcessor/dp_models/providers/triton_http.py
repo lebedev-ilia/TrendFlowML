@@ -33,7 +33,8 @@ class TritonHttpProvider:
 
         triton_http_url = str(rp.get("triton_http_url") or "").strip()
         triton_model_name = str(rp.get("triton_model_name") or "").strip()
-        timeout_sec = float(rp.get("triton_timeout_sec") or 10.0)
+        # 10s is too tight for JSON /infer with large tensors; specs should set triton_timeout_sec explicitly.
+        timeout_sec = float(rp.get("triton_timeout_sec") or 60.0)
 
         if not triton_http_url:
             raise ModelManagerError(

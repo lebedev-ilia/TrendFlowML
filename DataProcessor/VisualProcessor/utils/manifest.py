@@ -40,9 +40,9 @@ class ManifestComponent:
 
 
 class RunManifest:
-    def __init__(self, path: str, run_meta: Dict[str, Any]):
+    def __init__(self, path: str, run_meta: Optional[Dict[str, Any]] = None):
         self.path = path
-        self.run_meta = dict(run_meta)
+        self.run_meta = dict(run_meta or {})
         self.components: Dict[str, ManifestComponent] = {}
 
         # If a manifest already exists, load it so multiple pipeline stages
@@ -92,6 +92,29 @@ class RunManifest:
         self.flush()
 
     def flush(self) -> None:
+        run_dir = os.path.dirname(os.path.abspath(self.path))
+        root_path = self.run_meta.get("root_path")
+        root_path_norm = str(root_path).rstrip("/\\") if isinstance(root_path, str) and root_path else ""
+
+        def _normalize_artifact_path(p: Any) -> Any:
+            if not isinstance(p, str) or not p:
+                return p
+            if not os.path.isabs(p):
+                return p
+            abs_p = os.path.abspath(p)
+            # Prefer run-local relative paths: <run_dir>/<component>/file.npz -> <component>/file.npz
+            run_prefix = run_dir.rstrip("/\\") + os.sep
+            if abs_p.startswith(run_prefix):
+                rel = abs_p[len(run_prefix) :]
+                return rel.replace("\\", "/")
+            # Fallback: strip repository root if present (helps with portability, but less ideal than run-local)
+            if root_path_norm:
+                rp = root_path_norm + os.sep
+                if abs_p.startswith(rp):
+                    rel = abs_p[len(rp) :]
+                    return rel.replace("\\", "/")
+            return p
+
         payload: Dict[str, Any] = {
             "run": {
                 **self.run_meta,
@@ -106,7 +129,12 @@ class RunManifest:
                     "started_at": c.started_at,
                     "finished_at": c.finished_at,
                     "duration_ms": c.duration_ms,
-                    "artifacts": c.artifacts,
+                    "artifacts": [
+                        {**a, "path": _normalize_artifact_path(a.get("path"))}
+                        if isinstance(a, dict) and "path" in a
+                        else a
+                        for a in (c.artifacts or [])
+                    ],
                     "producer_version": c.producer_version,
                     "schema_version": c.schema_version,
                     "device_used": c.device_used,
