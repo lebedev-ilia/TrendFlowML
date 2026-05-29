@@ -125,6 +125,99 @@ stages:
         soft_dependencies: []
         wait_on_checkpoints: []
 
+      # --- Visual semantic heads (core_identity) ---
+      - component_name: brand_semantics
+        owner_processor: visual
+        depends_on_components: [segmenter, core_object_detections, core_clip]
+        soft_dependencies: []
+        wait_on_checkpoints: []
+
+      - component_name: car_semantics
+        owner_processor: visual
+        depends_on_components: [segmenter, core_object_detections, core_clip]
+        soft_dependencies: []
+        wait_on_checkpoints: []
+
+      - component_name: place_semantics
+        owner_processor: visual
+        depends_on_components: [segmenter, core_object_detections, core_clip]
+        soft_dependencies: []
+        wait_on_checkpoints: []
+
+      - component_name: face_identity
+        owner_processor: visual
+        depends_on_components: [segmenter, core_face_landmarks]
+        soft_dependencies: []
+        wait_on_checkpoints: []
+
+      # --- Visual modules (extended baseline) ---
+      - component_name: color_light
+        owner_processor: visual
+        depends_on_components: [segmenter, scene_classification]
+        soft_dependencies: []
+        wait_on_checkpoints: []
+
+      - component_name: action_recognition
+        owner_processor: visual
+        depends_on_components: [segmenter, core_object_detections]
+        soft_dependencies: []
+        wait_on_checkpoints: []
+
+      - component_name: behavioral
+        owner_processor: visual
+        depends_on_components: [segmenter, core_face_landmarks]
+        soft_dependencies: []
+        wait_on_checkpoints: []
+
+      - component_name: emotion_face
+        owner_processor: visual
+        depends_on_components: [segmenter, core_face_landmarks]
+        soft_dependencies: []
+        wait_on_checkpoints: []
+
+      - component_name: detalize_face
+        owner_processor: visual
+        depends_on_components: [segmenter, core_face_landmarks]
+        soft_dependencies: []
+        wait_on_checkpoints: []
+
+      - component_name: micro_emotion
+        owner_processor: visual
+        depends_on_components: [segmenter, core_face_landmarks]
+        soft_dependencies: []
+        wait_on_checkpoints: []
+
+      - component_name: frames_composition
+        owner_processor: visual
+        depends_on_components: [segmenter, core_object_detections, core_face_landmarks, core_depth_midas]
+        soft_dependencies: []
+        wait_on_checkpoints: []
+
+      - component_name: high_level_semantic
+        owner_processor: visual
+        depends_on_components: [segmenter, core_clip, cut_detection, emotion_face]
+        soft_dependencies: []
+        wait_on_checkpoints: []
+
+      - component_name: optical_flow
+        owner_processor: visual
+        # Module-level analytics over core_optical_flow (not core provider itself).
+        depends_on_components: [segmenter, core_optical_flow]
+        soft_dependencies: []
+        wait_on_checkpoints: []
+
+      - component_name: similarity_metrics
+        owner_processor: visual
+        depends_on_components: [segmenter, core_clip]
+        soft_dependencies: []
+        wait_on_checkpoints: []
+
+      - component_name: text_scoring
+        owner_processor: visual
+        depends_on_components: [segmenter]
+        soft_dependencies: [ocr_extractor, core_face_landmarks]
+        wait_on_checkpoints: []
+
       # --- Audio tier-0 (optional in baseline profile) ---
       - component_name: clap_extractor
         owner_processor: audio
@@ -147,6 +240,13 @@ stages:
   # --- Audio non-baseline / prod-important (audited, but not in baseline DAG) ---
   audio_extended:
     nodes:
+      # segmenter duplicated per-stage (validator requires deps in same stage)
+      - component_name: segmenter
+        owner_processor: segmenter
+        depends_on_components: []
+        soft_dependencies: []
+        wait_on_checkpoints: []
+
       - component_name: asr_extractor
         owner_processor: audio
         depends_on_components: [segmenter]

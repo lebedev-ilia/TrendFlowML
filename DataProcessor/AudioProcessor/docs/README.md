@@ -8,6 +8,8 @@
 
 | Документ | Описание |
 |----------|----------|
+| [NORMALIZATION_WAVE2.md](NORMALIZATION_WAVE2.md) | **Wave 2** — план нормализации AudioProcessor (portfolio + prod) |
+| [EXTRACTOR_DEPENDENCIES.md](EXTRACTOR_DEPENDENCIES.md) | Зависимости extractors, Segmenter families, prod smoke checklist |
 | [MAIN_INDEX.md](MAIN_INDEX.md) | Индекс всех 21 extractors с ссылками на README |
 | [TESTING_GUIDE.md](TESTING_GUIDE.md) | **Руководство по тестированию** — smoke, full, валидация |
 | [TESTING_STRUCTURE.md](TESTING_STRUCTURE.md) | Структура папок extractors (docs, scripts, utils) |

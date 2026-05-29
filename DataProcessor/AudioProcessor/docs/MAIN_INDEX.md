@@ -41,7 +41,7 @@
 ### hpss_extractor
 **Краткое описание**: Извлекает Harmonic-Percussive Source Separation (HPSS) признаки — разложение аудио на гармоническую и перкуссионную компоненты. Audit v3: только `run_segments()` по `families.hpss`, strict-aligned `segment_start_sec`/`segment_end_sec`/`segment_center_sec`/`segment_mask`, `hpss_harmonic_share_by_segment`/`hpss_percussive_share_by_segment` (NaN для failed), waveform paths в meta.extra (без массивов в NPZ), offline HTML renderer. `enable_energy_metrics=True` по умолчанию. CPU-only, schema `hpss_extractor_npz_v1`, версия 2.1.0 (Audit v3).
 
-**Полный документ**: [src/extractors/hpss_extractor/README.md](../src/extractors/hpss_extractor/README.md)
+**Полный документ**: [src/extractors/hpss_extractor/docs/README.md](../src/extractors/hpss_extractor/docs/README.md)
 
 ### key_extractor
 **Краткое описание**: Определяет тональность (ключ) аудио — основной тональный центр и лад (мажор/минор). Audit v3: только `run_segments()` (run отключён), strict alignment через `segment_start_sec`/`segment_end_sec`/`segment_center_sec`/`segment_mask`, `key_id_by_segment`/`key_confidence_by_segment`, `key_id` (0–23) model-facing. Default `key_method=librosa`. Offline HTML render (vanilla canvas). CPU-only, schema `key_extractor_npz_v1`, версия 2.1.0 (Audit v3).
@@ -61,7 +61,7 @@
 ### mfcc_extractor
 **Краткое описание**: Извлекает MFCC (Mel-frequency cepstral coefficients). Audit v3: `mfcc_extractor_npz_v2`, каноническая ось сегментов `segment_start_sec`/`segment_end_sec`/`segment_center_sec` + `segment_mask` (strict alignment), segment-aligned sequences (`mfcc_mean_by_segment`, `mfcc_energy_by_segment`) при `--mfcc-enable-time-series`, offline HTML render (vanilla canvas, без CDN), float32 без autocast, full MFCC только в debug .npy. Версия 2.1.0 (Audit v3).
 
-**Полный документ**: [src/extractors/mfcc_extractor/README.md](../src/extractors/mfcc_extractor/README.md)
+**Полный документ**: [src/extractors/mfcc_extractor/docs/README.md](../src/extractors/mfcc_extractor/docs/README.md)
 
 ### onset_extractor
 **Краткое описание**: Определяет онсеты (атаки звука). Audit v3: `onset_extractor_npz_v2`, каноническая ось сегментов (aggregation semantics), onset_times только в debug .npy, offline HTML render (vanilla canvas), basic_features=True по умолчанию, units="frames" исправлен. Версия 2.0.0, CPU-only.
@@ -76,7 +76,7 @@
 ### quality_extractor
 **Краткое описание**: Извлекает базовые метрики качества аудио для оценки технического состояния записи. Audit v3: `quality_extractor_npz_v2`, каноническая ось сегментов, `enable_basic_metrics=True` по умолчанию, empty при `quality_all_segments_empty`, snr_db/dc_offset_abs удалены, time series только в .npy, offline HTML render (vanilla canvas). Версия 2.0.0, CPU-only.
 
-**Полный документ**: [src/extractors/quality_extractor/README.md](../src/extractors/quality_extractor/README.md)
+**Полный документ**: [src/extractors/quality_extractor/docs/README.md](../src/extractors/quality_extractor/docs/README.md)
 
 ### rhythmic_extractor
 **Краткое описание**: Ритмические метрики (beat tracking/regularity). Audit v3: `rhythmic_extractor_npz_v2`, required family `tempo`, canonical axis (`segment_*_sec` + `segment_mask`), no-beats = `status=ok` (NaN policy), beat events token-ready (`beat_times_sec` + `beat_segment_index`) с `.npy` fallback, offline HTML render (vanilla canvas). Версия 2.0.0, CPU-only.

@@ -1,5 +1,7 @@
 # Описание компонентов DataProcessor
 
+Старт нормализации для портфолио: `DataProcessor/docs/PORTFOLIO_NORMALIZATION_PLAN.md`
+
 Для быстрого поиска - DataProcessor/docs/COMPONENTS_DESC_INDEX.md
 
 ## AudioProcessor

@@ -2,6 +2,8 @@
 
 AudioProcessor — процессор аудио модальности. Он извлекает **аудио признаки** из аудио дорожки видео и сохраняет результат в **per‑run `result_store`**.
 
+**Нормализация (portfolio + prod):** [docs/NORMALIZATION_WAVE2.md](docs/NORMALIZATION_WAVE2.md) · [docs/EXTRACTOR_DEPENDENCIES.md](docs/EXTRACTOR_DEPENDENCIES.md) · [docs/PORTFOLIO_PROGRESS_LOG.md](../docs/PORTFOLIO_PROGRESS_LOG.md)
+
 ## Контракт входа
 
 - **Единица обработки**: `audio/audio.wav` (Segmenter) + `audio/segments.json` (contract `audio_segments_v1`).

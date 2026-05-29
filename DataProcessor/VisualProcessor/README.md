@@ -2,6 +2,8 @@
 
 VisualProcessor — процессор визуальной модальности. Он извлекает **визуальные признаки** из кадров видео и сохраняет результат в **per‑run `result_store`**.
 
+**Нормализация (portfolio + prod):** [docs/NORMALIZATION_WAVE4.md](docs/NORMALIZATION_WAVE4.md) · [docs/PORTFOLIO_PROGRESS_LOG.md](../docs/PORTFOLIO_PROGRESS_LOG.md)
+
 ## Контракт входа
 
 - **Единица обработки**: `frames_dir` с кадрами видео + `metadata.json` (contract `video_metadata_v1`).

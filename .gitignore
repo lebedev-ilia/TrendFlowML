@@ -49,5 +49,6 @@ wav2vec2_checkpoint
 
 dp_output/
 dp_results/
+_profiles_cache/
 
 *.png

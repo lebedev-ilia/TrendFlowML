@@ -2,6 +2,12 @@
 
 Этот документ служит единой точкой входа для навигации по всей документации проекта. Каждый раздел содержит краткое описание документов и ссылки на полные версии.
 
+**Старт (портфолио + prod):** [../README.md](../README.md) · [PORTFOLIO_INTERVIEW_GUIDE.md](PORTFOLIO_INTERVIEW_GUIDE.md) · [Итог сессии 2026-05-29](PORTFOLIO_SESSION_SUMMARY_2026-05-29.md)
+
+**Нормализация:** [PORTFOLIO_NORMALIZATION_PLAN.md](PORTFOLIO_NORMALIZATION_PLAN.md) · [PORTFOLIO_PROGRESS_LOG.md](PORTFOLIO_PROGRESS_LOG.md)
+
+**Карта корня:** [TOP_LEVEL_LAYOUT.md](TOP_LEVEL_LAYOUT.md) · **Ops:** [NORMALIZATION_WAVE5.md](NORMALIZATION_WAVE5.md)
+
 **Главный индекс проекта**: [../../docs/MAIN_INDEX.md](../../docs/MAIN_INDEX.md) — навигация по всей документации TrendFlowML (DataProcessor, Backend, DynamicBatch, Models, Fetcher)
 
 ---

@@ -2,6 +2,8 @@
 
 Этот документ служит единой точкой входа для навигации по всей документации TextProcessor. Каждый раздел содержит краткое описание документов и ссылки на полные версии.
 
+**Wave 3 нормализация (portfolio + prod):** [NORMALIZATION_WAVE3.md](NORMALIZATION_WAVE3.md) · [EXTRACTOR_DEPENDENCIES.md](EXTRACTOR_DEPENDENCIES.md) · [PORTFOLIO_PROGRESS_LOG.md](../../docs/PORTFOLIO_PROGRESS_LOG.md)
+
 ---
 
 ## Документация
