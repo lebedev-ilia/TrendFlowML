@@ -327,3 +327,15 @@
   - CI: [dataprocessor-smoke.yml](../../.github/workflows/dataprocessor-smoke.yml)
   - [CI_SMOKE.md](CI_SMOKE.md)
 - Next: `git commit` Phase 8 на `system-testing`
+
+### Entry 023 — push + E2E runbook
+
+- Stage: `Phase 8` P3
+- Status: `done` (push); P3.4 E2E — runbook, runtime pending
+- Git:
+  - `git pull --rebase origin system-testing` (merge fetcher `9e397a4`)
+  - `git push origin system-testing` → `f187912`
+- E2E:
+  - создан [E2E_PREFLIGHT.md](E2E_PREFLIGHT.md)
+  - полный `start_e2e_stack.sh` не запускался (CVAT/docker на портах; тяжёлый прогон)
+- Next: поднять E2E infra в чистом shell; P3.4 checklist в E2E_PREFLIGHT §4

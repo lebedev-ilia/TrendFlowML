@@ -55,6 +55,7 @@ flowchart LR
 | Env alignment (local/docker/E2E) | [docs/ENV_ALIGNMENT.md](docs/ENV_ALIGNMENT.md) |
 | Configs index | [configs/README.md](configs/README.md) |
 | CI smoke (GitHub Actions) | [docs/CI_SMOKE.md](docs/CI_SMOKE.md) |
+| E2E preflight / runbook | [docs/E2E_PREFLIGHT.md](docs/E2E_PREFLIGHT.md) |
 
 ### Зависимости по процессорам
 
