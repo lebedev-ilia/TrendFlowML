@@ -239,3 +239,91 @@
   - **Документационно и для портфолио — готово**
   - **Runtime — рекомендуется один smoke по DEMO_RUNBOOK**
   - **Git — commit не выполнялся в сессии**
+
+## 2026-05-29 — Phase 8: production hardening (старт)
+
+### Entry 017 — PRODUCTION_HARDENING_PLAN
+
+- Stage: `Phase 8`
+- Status: `in_progress`
+- Сделано:
+  - создан [PRODUCTION_HARDENING_PLAN.md](PRODUCTION_HARDENING_PLAN.md) (P0–P4)
+  - ссылка из PORTFOLIO_NORMALIZATION_PLAN.md
+- Next:
+  - **P0.1–P0.2:** preflight + `run_smoke_all_components.sh` на этом ПК
+
+### Entry 018 — P0.1 + P0.2 audio smoke (основной ПК)
+
+- Stage: `Phase 8` P0
+- Status: `done` (с оговоркой по emotion_diarization)
+- Ветка: `system-testing`
+- P0.1 Preflight:
+  - `DP_MODELS_ROOT=/media/ilya/Новый том/TrendFlowML/DataProcessor/dp_models/bundled_models`
+  - ключевые артефакты: whisper, clap, source_separation, pyannote, wavlm — OK
+  - `prepare_hf_cache.sh` — OK
+  - `dp_models_selftest.py` — 3/3 OK
+- P0.2 Smoke (`run_smoke_all_components.sh`, ~27 мин):
+  - скрипт: **21/21 exit 0**
+  - `validate_smoke_results.sh`: **20/21 NPZ**
+  - **emotion_diarization**: AudioProcessor exit 1 (`No CUDA GPUs are available`), NPZ нет; extractor `required: false` → `main.py` всё равно exit 0
+- Результаты: `DataProcessor/dp_results/smoke_test/`
+- Заметки:
+  - `AudioProcessor/.env` указывает старый путь (`Рабочий стол/...`) — для этого диска экспортировать `DP_MODELS_ROOT` явно или обновить `.env`
+  - для prod-gate smoke: после прогона всегда `validate_smoke_results.sh`
+- Next: P0.3 text smoke, P0.4 visual minimal; P4: smoke script → fail если NPZ нет
+
+### Entry 019 — P0.3 text smoke + P0.4 visual (частично)
+
+- Stage: `Phase 8` P0
+- Status: `done` (P0.3 полный; P0.4 частичный)
+- P0.3 Text smoke (`smoke_each_extractor_audit_v3.py --scenario-index 0`):
+  - **22/22 OK**, ~158 s, exit 0
+  - venv: `TextProcessor/.tp_venv`
+- P0.4 Visual minimal:
+  - **Segmenter:** `storage/frames_dir/-Q6fnPIybEI/video/` — 48 union frames (~67 s)
+  - **core_object_detections:** `detections.npz` OK (~3 min, ultralytics CPU)
+  - **action_recognition:** FAIL `No CUDA GPUs are available` (SlowFast, `device: cuda` в YAML)
+  - Артефакты: `storage/result_store_ar_minimal/youtube/-Q6fnPIybEI/ar_minimal_cli_001/`
+  - `VisualProcessor/main.py` exit 0 при падении AR (как audio optional)
+- Блокеры GPU на этом ПК: `emotion_diarization` (audio), `action_recognition` (visual)
+- Next: P0.5 закрыт; P1; на GPU-машине повторить AR + emotion; P4: exit code / NPZ gate
+
+### Entry 020 — после краша ПК: выводы + P1.1
+
+- Stage: `Phase 8` (recovery)
+- Status: `done`
+- Проверка после краша:
+  - ветка `system-testing`, smoke NPZ на диске — **OK**
+  - незакоммичены: docs Phase 8, `PRODUCTION_HARDENING_PLAN.md`
+- Выводы: см. § «Уроки после OOM/краша» в PRODUCTION_HARDENING_PLAN.md
+- Доработки:
+  - `configs/portfolio_demo.yaml` — tier-0 audio (clap/tempo/loudness), без GPU extractors
+  - `run_smoke_all_components.sh` — NPZ validate gate, skip `emotion_diarization` без CUDA
+  - `.gitignore` — `storage/frames_dir/`, `storage/result_store*/`, `storage/state/`
+- Проверка `portfolio_demo.yaml`: run_1 OK (~8 min, clap+tempo+loudness), `dp_results/portfolio_demo/`
+- Next: P1.2 env alignment; commit doc+config changes; GPU-машина — AR + emotion
+
+### Entry 021 — P1.2 env + P1.3 text_processor_full + configs README
+
+- Stage: `Phase 8` P1
+- Status: `done`
+- P1.2 Env alignment:
+  - создан [ENV_ALIGNMENT.md](ENV_ALIGNMENT.md) — local vs docker vs E2E, матрица переменных
+  - обновлён [env.example](../env.example) — блок local dev + ссылка на guide
+- P1.3 DAG:
+  - stage `text_processor_full` в [component_graph.yaml](reference/component_graph.yaml) — **22 nodes**, topo OK
+  - обновлён [COMPONENT_GRAPH_INDEX.md](reference/COMPONENT_GRAPH_INDEX.md)
+  - [EXTRACTOR_DEPENDENCIES.md](../TextProcessor/docs/EXTRACTOR_DEPENDENCIES.md) — ссылка на full stage
+- P2.1 (частично): [configs/README.md](../configs/README.md)
+- P1.4: удалён дубль `DATAPROCESSOR_API_ARCHITECTURE` / `API_DEVELOPMENT_CHECKLIST` в [MAIN_INDEX.md](MAIN_INDEX.md)
+- Next: commit Phase 8; GPU — emotion + AR; P3 CI smoke
+
+### Entry 022 — commit prep + CI smoke workflow
+
+- Stage: `Phase 8` P3
+- Status: `done`
+- Сделано:
+  - восстановлен [configs/README.md](../configs/README.md) (index + global config reference)
+  - CI: [dataprocessor-smoke.yml](../../.github/workflows/dataprocessor-smoke.yml)
+  - [CI_SMOKE.md](CI_SMOKE.md)
+- Next: `git commit` Phase 8 на `system-testing`

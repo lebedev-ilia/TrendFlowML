@@ -2,7 +2,7 @@
 
 Этот документ служит единой точкой входа для навигации по всей документации проекта. Каждый раздел содержит краткое описание документов и ссылки на полные версии.
 
-**Старт (портфолио + prod):** [../README.md](../README.md) · [PORTFOLIO_INTERVIEW_GUIDE.md](PORTFOLIO_INTERVIEW_GUIDE.md) · [Итог сессии 2026-05-29](PORTFOLIO_SESSION_SUMMARY_2026-05-29.md)
+**Старт (портфолио + prod):** [../README.md](../README.md) · [PORTFOLIO_INTERVIEW_GUIDE.md](PORTFOLIO_INTERVIEW_GUIDE.md) · [PRODUCTION_HARDENING_PLAN.md](PRODUCTION_HARDENING_PLAN.md) · [ENV_ALIGNMENT.md](ENV_ALIGNMENT.md)
 
 **Нормализация:** [PORTFOLIO_NORMALIZATION_PLAN.md](PORTFOLIO_NORMALIZATION_PLAN.md) · [PORTFOLIO_PROGRESS_LOG.md](PORTFOLIO_PROGRESS_LOG.md)
 
@@ -33,16 +33,6 @@
 **Краткое описание**: Определяет правила биллинга, ценообразования и списания кредитов для компонентов обработки. Содержит комбинированную формулу расчета стоимости (base_cost + compute_time + gpu_time + markup), правила частичного списания, структуру прайс-листа компонентов, механизм оценки стоимости до запуска и калибровку цен на основе реальных метрик.
 
 **Полный документ**: [docs/architecture/BILLING_AND_PRICING.md](architecture/BILLING_AND_PRICING.md)
-
-### DATAPROCESSOR_API_ARCHITECTURE.md
-**Краткое описание**: Финальные рекомендации по production-ready архитектуре HTTP API для DataProcessor. Содержит анализ текущей архитектуры, source of truth модель (Storage = source of truth, Redis = cache/queue), архитектурные риски и предупреждения, эволюционный путь (MVP → Redis Streams → Production), критически обязательные компоненты (Redis Streams queue, subprocess isolation, heartbeat + recovery, strict state machine, idempotency, backpressure), детальную спецификацию всех endpoints, технические детали реализации, Docker конфигурацию, интеграцию с backend (hybrid: webhook + polling fallback), безопасность, мониторинг, failure handling и recovery, план реализации по этапам. Оценка архитектуры: надёжность 9.5/10, масштабируемость 9/10, production readiness 9.5/10.
-
-**Полный документ**: [docs/DATAPROCESSOR_API_ARCHITECTURE.md](DATAPROCESSOR_API_ARCHITECTURE.md)
-
-### API_DEVELOPMENT_CHECKLIST.md
-**Краткое описание**: Подробный чеклист разработки API для DataProcessor с указанием ссылок на конкретные строки документа DATAPROCESSOR_API_ARCHITECTURE.md. Содержит разбивку по этапам (MVP, Redis + Worker, Мониторинг, Production-ready, Failure Handling, Backend Integration), конкретные задачи с ссылками на строки документа, критерии готовности, зависимости между задачами, приоритеты и метрики прогресса. Используется для отслеживания прогресса разработки и гарантирует реализацию всех критически обязательных компонентов.
-
-**Полный документ**: [docs/API_DEVELOPMENT_CHECKLIST.md](API_DEVELOPMENT_CHECKLIST.md)
 
 ---
 

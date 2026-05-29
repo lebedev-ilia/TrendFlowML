@@ -12,6 +12,7 @@ Runtime loader: `DataProcessor/dag/component_graph.py`
 | `baseline` | Segmenter + visual core/modules + audio tier-0 | полный visual DAG + clap/loudness/tempo |
 | `audio_extended` | segmenter + ASR, diarization, emotion, source_separation, speech_analysis | 6 |
 | `text_processor_tier0` | tags → lexico / embedders (часть text) | 5 |
+| `text_processor_full` | все 22 text extractors (MainProcessor DAG) | 22 |
 | `v1`, `v2` | зарезервированы | 0 |
 
 **Важно:** hard deps проверяются **внутри одного stage**. Cross-stage зависимости не валидируются автоматически.
@@ -35,7 +36,7 @@ Runtime loader: `DataProcessor/dag/component_graph.py`
 Полный порядок text (22) — [TextProcessor/docs/EXTRACTOR_DEPENDENCIES.md](../../TextProcessor/docs/EXTRACTOR_DEPENDENCIES.md)  
 Расширенный audio — stage `audio_extended`
 
-**Prod TODO:** stage `text_processor_full` со всеми 22 узлами и deps в одном stage.
+**Prod TODO:** ~~stage `text_processor_full`~~ — добавлен (Phase 8, Entry 021). Cross-stage soft deps: `asr_extractor`, `speaker_diarization_extractor`.
 
 ---
 
@@ -50,7 +51,7 @@ from dag.component_graph import ComponentGraph
 
 path = Path("docs/reference/component_graph.yaml")
 data = yaml.safe_load(path.read_text(encoding="utf-8"))
-for stage in ("baseline", "audio_extended", "text_processor_tier0"):
+for stage in ("baseline", "audio_extended", "text_processor_tier0", "text_processor_full"):
     g = ComponentGraph.from_yaml_dict(data, stage=stage)
     print(f"{stage}: {len(g.nodes)} nodes, topo_ok")
 PY

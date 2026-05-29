@@ -1,9 +1,14 @@
 #!/bin/bash
 # Валидация результатов smoke-теста (проверка NPZ для каждого компонента)
 
-set -e
+set -euo pipefail
 
 DP_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)/DataProcessor"
+HAS_CUDA=0
+if command -v nvidia-smi >/dev/null 2>&1 && nvidia-smi >/dev/null 2>&1; then
+    HAS_CUDA=1
+fi
+GPU_ONLY_KEYS=(emotion_diarization)
 RS_BASE="$DP_ROOT/dp_results/smoke_test/youtube"
 PYTHON="${PYTHON:-$DP_ROOT/.data_venv/bin/python3}"
 
@@ -39,8 +44,18 @@ echo ""
 
 valid=0
 invalid=0
+skipped=0
 
 for key in asr band_energy chroma clap emotion_diarization hpss key loudness mel mfcc onset pitch quality rhythmic source_separation speaker_diarization spectral spectral_entropy speech_analysis tempo voice_quality; do
+    if [ "$HAS_CUDA" -eq 0 ]; then
+        for gpu_key in "${GPU_ONLY_KEYS[@]}"; do
+            if [ "$key" = "$gpu_key" ]; then
+                echo "⏭️  $key: SKIP (no CUDA)"
+                ((skipped++)) || true
+                continue 2
+            fi
+        done
+    fi
     run_id="smoke_${key}_shortest"
     npz_path="$RS_BASE/$run_id/$run_id"
     # Get component name from validators
@@ -75,4 +90,5 @@ for key in asr band_energy chroma clap emotion_diarization hpss key loudness mel
 done
 
 echo ""
-echo "Итого: ✅ $valid валидных, ❌ $invalid невалидных/отсутствуют"
+echo "Итого: ✅ $valid валидных, ⏭️  $skipped пропущено, ❌ $invalid невалидных/отсутствуют"
+[ "$invalid" -eq 0 ]

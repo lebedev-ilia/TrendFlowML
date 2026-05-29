@@ -40,6 +40,9 @@ DataProcessor/VisualProcessor/modules/micro_emotion/OpenFace/
 DataProcessor/VisualProcessor/state/
 DataProcessor/VisualProcessor/result_store/
 storage/embedding_faiss/
+storage/frames_dir/
+storage/result_store*/
+storage/state/
 
 example/
 

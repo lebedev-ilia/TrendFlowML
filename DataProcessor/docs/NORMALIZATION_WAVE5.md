@@ -133,4 +133,4 @@ Processors (Audio/Text/Visual) имеют свои dependency docs:
 | `S3_*`, `AWS_*` | storage S3 + boto3 | Общие для MinIO |
 | `CELERY_*` | `dp_queue/` | Queue mode |
 
-**Prod:** при E2E задавать оба слоя согласованно (см. `backend/scripts/e2e_env.sh`). Полный список API vars: [ENVIRONMENT_VARIABLES.md](../api/docs/ENVIRONMENT_VARIABLES.md).
+**Prod:** при E2E задавать оба слоя согласованно (см. `backend/scripts/e2e_env.sh`). Полный guide: [ENV_ALIGNMENT.md](ENV_ALIGNMENT.md). API vars: [ENVIRONMENT_VARIABLES.md](../api/docs/ENVIRONMENT_VARIABLES.md).

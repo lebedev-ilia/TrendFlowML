@@ -111,8 +111,8 @@ export DP_MODELS_ROOT=/abs/path/to/dp_models/bundled_models
 cd "/media/ilya/Новый том/TrendFlowML"
 
 python3 DataProcessor/main.py \
-  --video-path "example/example_videos/video1.mp4" \
-  --global-config DataProcessor/configs/global_config.yaml \
+  --video-path "example/example_videos/-Q6fnPIybEI.mp4" \
+  --global-config DataProcessor/configs/portfolio_demo.yaml \
   --run-audio \
   --run-visual \
   --platform-id youtube \

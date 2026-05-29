@@ -51,6 +51,10 @@ flowchart LR
 | Контракты (NPZ, no-fallback) | [docs/contracts/CONTRACTS_OVERVIEW.md](docs/contracts/CONTRACTS_OVERVIEW.md) |
 | Прогресс нормализации | [docs/PORTFOLIO_PROGRESS_LOG.md](docs/PORTFOLIO_PROGRESS_LOG.md) |
 | Итог сессии (полный отчёт) | [docs/PORTFOLIO_SESSION_SUMMARY_2026-05-29.md](docs/PORTFOLIO_SESSION_SUMMARY_2026-05-29.md) |
+| Production hardening (Phase 8) | [docs/PRODUCTION_HARDENING_PLAN.md](docs/PRODUCTION_HARDENING_PLAN.md) |
+| Env alignment (local/docker/E2E) | [docs/ENV_ALIGNMENT.md](docs/ENV_ALIGNMENT.md) |
+| Configs index | [configs/README.md](configs/README.md) |
+| CI smoke (GitHub Actions) | [docs/CI_SMOKE.md](docs/CI_SMOKE.md) |
 
 ### Зависимости по процессорам
 

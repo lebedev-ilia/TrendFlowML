@@ -7,6 +7,8 @@
 
 **Phase 7 (post):** [PORTFOLIO_DEMO_RUNBOOK.md](PORTFOLIO_DEMO_RUNBOOK.md) · [reference/COMPONENT_GRAPH_INDEX.md](reference/COMPONENT_GRAPH_INDEX.md)
 
+**Phase 8+ (production):** [PRODUCTION_HARDENING_PLAN.md](PRODUCTION_HARDENING_PLAN.md) · [ENV_ALIGNMENT.md](ENV_ALIGNMENT.md)
+
 ## Цели для портфолио
 
 - Понятная архитектура: как проходит данные от входа до `result_store`.

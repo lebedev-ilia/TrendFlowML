@@ -1,0 +1,72 @@
+# DataProcessor CI smoke (no GPU, no bundled_models).
+# Validates DAG, script syntax, and lightweight unit checks.
+# Full audio/text runtime smoke runs locally — see DataProcessor/docs/PRODUCTION_HARDENING_PLAN.md P0.
+
+name: DataProcessor Smoke
+
+on:
+  push:
+    branches: [main, master, system-testing]
+    paths:
+      - 'DataProcessor/**'
+      - 'configs/**'
+      - '.github/workflows/dataprocessor-smoke.yml'
+  pull_request:
+    branches: [main, master, system-testing]
+    paths:
+      - 'DataProcessor/**'
+      - 'configs/**'
+      - '.github/workflows/dataprocessor-smoke.yml'
+
+defaults:
+  run:
+    working-directory: .
+
+jobs:
+  smoke:
+    name: DAG + scripts (no GPU)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+
+      - name: Validate component_graph stages
+        run: |
+          python - <<'PY'
+          import yaml
+          from pathlib import Path
+          import sys
+          sys.path.insert(0, "DataProcessor")
+          from dag.component_graph import ComponentGraph
+
+          path = Path("DataProcessor/docs/reference/component_graph.yaml")
+          data = yaml.safe_load(path.read_text(encoding="utf-8"))
+          for stage in (
+              "baseline",
+              "audio_extended",
+              "text_processor_tier0",
+              "text_processor_full",
+          ):
+              g = ComponentGraph.from_yaml_dict(data, stage=stage)
+              order = g.topo_order()
+              print(f"OK {stage}: {len(g.nodes)} nodes, topo {order[0]} -> {order[-1]}")
+          PY
+
+      - name: Bash syntax (audio smoke scripts)
+        run: |
+          bash -n DataProcessor/scripts/run_smoke_all_components.sh
+          bash -n DataProcessor/scripts/validate_smoke_results.sh
+
+      - name: Python compile (smoke / preflight helpers)
+        run: |
+          python -m py_compile DataProcessor/scripts/dp_models_selftest.py
+          python -m py_compile DataProcessor/dag/component_graph.py
+
+      - name: dp_models_selftest (unit, no weights)
+        run: |
+          cd DataProcessor
+          DP_MODELS_SELFTEST_NO_NETWORK=0 python3 scripts/dp_models_selftest.py

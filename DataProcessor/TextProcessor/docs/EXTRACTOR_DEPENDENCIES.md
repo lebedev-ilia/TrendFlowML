@@ -81,7 +81,7 @@ src/extractors/<name>/
 | 21 | `embedding_shift_indicator_extractor` |
 | 22 | `embedding_source_id_extractor` |
 
-Полный DAG для tier0 в коде: `component_graph.yaml` → `text_processor_tier0`. Остальные tiers — в `MainProcessor` / runtime config.
+Полный DAG для tier0 в коде: `component_graph.yaml` → `text_processor_tier0`. **Все 22:** stage `text_processor_full` (Phase 8). Runtime order — `MainProcessor` / smoke script.
 
 ---
 

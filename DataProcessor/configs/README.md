@@ -1,6 +1,53 @@
-# Global Configuration для DataProcessor
+# DataProcessor — Configs Index
 
-Единый глобальный конфиг для всех процессоров (AudioProcessor, TextProcessor, VisualProcessor) и их компонентов.
+Классификация YAML в `DataProcessor/configs/` (Phase 8 / P2.1).
+
+---
+
+## Stable / entry configs
+
+| Файл | Назначение |
+|------|------------|
+| [global_config.yaml](global_config.yaml) | Полный multimodal профиль (audio/text/visual flags) |
+| [portfolio_demo.yaml](portfolio_demo.yaml) | **Лёгкий** prod-like demo: tier-0 audio (clap/tempo/loudness) |
+| [e2e_audio_smoke.yaml](e2e_audio_smoke.yaml) | E2E: минимальный audio tier |
+| [audio_all_extractors.yaml](audio_all_extractors.yaml) | Все audio extractors enabled |
+
+---
+
+## Audit v3 (per-component profiles)
+
+`audit_v3/audio/profile_*.yaml` — **21** изолированных audio smoke/full профилей.  
+`audit_v3/visual/visual_*.yaml` — visual minimal / single-module runs.
+
+Используются скриптами:
+
+- `./DataProcessor/scripts/run_smoke_all_components.sh` → `configs/audit_v3/audio/`
+- `VisualProcessor/main.py --cfg-path configs/audit_v3/visual/...`
+
+---
+
+## Как выбрать конфиг
+
+| Цель | Конфиг |
+|------|--------|
+| Портфолио / быстрый прогон | `portfolio_demo.yaml` |
+| Полный пайплайн | `global_config.yaml` |
+| Audio regression 21/21 | `run_smoke_all_components.sh` (не один YAML) |
+| Visual YOLO → AR | `audit_v3/visual/visual_minimal_object_detections_action_recognition.yaml` |
+| Text 22 extractors | `TextProcessor/scripts/smoke_each_extractor_audit_v3.py` |
+
+---
+
+## Связанные документы
+
+- [../docs/PORTFOLIO_DEMO_RUNBOOK.md](../docs/PORTFOLIO_DEMO_RUNBOOK.md)
+- [../docs/ENV_ALIGNMENT.md](../docs/ENV_ALIGNMENT.md)
+- [../docs/PRODUCTION_HARDENING_PLAN.md](../docs/PRODUCTION_HARDENING_PLAN.md)
+
+---
+
+## Global Configuration (reference)
 
 ## Использование
 

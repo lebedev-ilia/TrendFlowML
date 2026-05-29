@@ -310,6 +310,145 @@ stages:
         soft_dependencies: []
         wait_on_checkpoints: []
 
+  # --- TextProcessor: all 22 extractors (Audit v3 MainProcessor DEPENDENCIES) ---
+  text_processor_full:
+    nodes:
+      - component_name: tags_extractor
+        owner_processor: text
+        depends_on_components: []
+        soft_dependencies: []
+        wait_on_checkpoints: []
+
+      - component_name: lexico_static_features
+        owner_processor: text
+        depends_on_components: [tags_extractor]
+        soft_dependencies: []
+        wait_on_checkpoints: []
+
+      - component_name: asr_text_proxy_audio_features
+        owner_processor: text
+        depends_on_components: [tags_extractor]
+        soft_dependencies: [asr_extractor]
+        wait_on_checkpoints: []
+
+      - component_name: title_embedder
+        owner_processor: text
+        depends_on_components: [tags_extractor]
+        soft_dependencies: []
+        wait_on_checkpoints: []
+
+      - component_name: description_embedder
+        owner_processor: text
+        depends_on_components: [tags_extractor]
+        soft_dependencies: []
+        wait_on_checkpoints: []
+
+      - component_name: hashtag_embedder
+        owner_processor: text
+        depends_on_components: [tags_extractor]
+        soft_dependencies: []
+        wait_on_checkpoints: []
+
+      - component_name: transcript_chunk_embedder
+        owner_processor: text
+        depends_on_components: []
+        soft_dependencies: [asr_extractor]
+        wait_on_checkpoints: []
+
+      - component_name: comments_embedder
+        owner_processor: text
+        depends_on_components: []
+        soft_dependencies: []
+        wait_on_checkpoints: []
+
+      - component_name: speaker_turn_embeddings_aggregator
+        owner_processor: text
+        depends_on_components: []
+        soft_dependencies: [asr_extractor, speaker_diarization_extractor]
+        wait_on_checkpoints: []
+
+      - component_name: transcript_aggregator
+        owner_processor: text
+        depends_on_components: [transcript_chunk_embedder]
+        soft_dependencies: []
+        wait_on_checkpoints: []
+
+      - component_name: comments_aggregator
+        owner_processor: text
+        depends_on_components: [comments_embedder]
+        soft_dependencies: []
+        wait_on_checkpoints: []
+
+      - component_name: qa_embedding_pairs_extractor
+        owner_processor: text
+        depends_on_components: [transcript_chunk_embedder]
+        soft_dependencies: []
+        wait_on_checkpoints: []
+
+      - component_name: embedding_pair_topk_extractor
+        owner_processor: text
+        depends_on_components: [title_embedder, description_embedder]
+        soft_dependencies: []
+        wait_on_checkpoints: []
+
+      - component_name: semantics_topics_keyphrases
+        owner_processor: text
+        depends_on_components: [transcript_chunk_embedder]
+        soft_dependencies: []
+        wait_on_checkpoints: []
+
+      - component_name: embedding_stats_extractor
+        owner_processor: text
+        depends_on_components: [transcript_chunk_embedder]
+        soft_dependencies: []
+        wait_on_checkpoints: []
+
+      - component_name: cosine_metrics_extractor
+        owner_processor: text
+        depends_on_components:
+          - title_embedder
+          - description_embedder
+          - transcript_aggregator
+          - comments_embedder
+        soft_dependencies: []
+        wait_on_checkpoints: []
+
+      - component_name: title_embedding_cluster_entropy_extractor
+        owner_processor: text
+        depends_on_components: [title_embedder]
+        soft_dependencies: []
+        wait_on_checkpoints: []
+
+      - component_name: title_to_hashtag_cosine_extractor
+        owner_processor: text
+        depends_on_components: [title_embedder, hashtag_embedder]
+        soft_dependencies: []
+        wait_on_checkpoints: []
+
+      - component_name: semantic_cluster_extractor
+        owner_processor: text
+        depends_on_components: [title_embedder, description_embedder, hashtag_embedder]
+        soft_dependencies: []
+        wait_on_checkpoints: []
+
+      - component_name: topk_similar_titles_extractor
+        owner_processor: text
+        depends_on_components: [title_embedder]
+        soft_dependencies: []
+        wait_on_checkpoints: []
+
+      - component_name: embedding_shift_indicator_extractor
+        owner_processor: text
+        depends_on_components: [transcript_chunk_embedder]
+        soft_dependencies: []
+        wait_on_checkpoints: []
+
+      - component_name: embedding_source_id_extractor
+        owner_processor: text
+        depends_on_components: [title_embedder, description_embedder, transcript_aggregator]
+        soft_dependencies: []
+        wait_on_checkpoints: []
+
   v1:
     nodes: []
   v2:

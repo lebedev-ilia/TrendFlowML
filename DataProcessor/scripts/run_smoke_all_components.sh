@@ -3,7 +3,7 @@
 # Цель: быстро проверить, что все компоненты запускаются без ошибок.
 # Результаты: DataProcessor/dp_results/smoke_test/
 
-set -e
+set -euo pipefail
 
 REPO_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
 DP_ROOT="$REPO_ROOT/DataProcessor"
@@ -13,7 +13,15 @@ RS_BASE="$(cd "$DP_ROOT" && pwd)/dp_results/smoke_test"
 OUTPUT_BASE="$RS_BASE"
 PYTHON="${PYTHON:-$DP_ROOT/.data_venv/bin/python3}"
 MAIN_SCRIPT="$DP_ROOT/main.py"
-CONFIGS_DIR="$REPO_ROOT/configs/audit_v3/audio"
+CONFIGS_DIR="${CONFIGS_DIR:-$REPO_ROOT/configs/audit_v3/audio}"
+VALIDATE_SCRIPT="$DP_ROOT/scripts/validate_smoke_results.sh"
+
+# Компоненты, требующие CUDA (на CPU-only машине — ожидаемый skip, не считаем за PASS)
+GPU_ONLY_KEYS=(emotion_diarization)
+HAS_CUDA=0
+if command -v nvidia-smi >/dev/null 2>&1 && nvidia-smi >/dev/null 2>&1; then
+    HAS_CUDA=1
+fi
 
 # Все 21 компонент: (key, profile_file)
 COMPONENTS=(
@@ -57,6 +65,7 @@ echo "=============================================="
 
 ok=0
 fail=0
+skip=0
 
 for item in "${COMPONENTS[@]}"; do
     key="${item%%:*}"
@@ -68,6 +77,17 @@ for item in "${COMPONENTS[@]}"; do
         echo "⚠️  $key: профиль не найден $profile_path, пропуск"
         ((fail++)) || true
         continue
+    fi
+
+    if [ "$HAS_CUDA" -eq 0 ]; then
+        for gpu_key in "${GPU_ONLY_KEYS[@]}"; do
+            if [ "$key" = "$gpu_key" ]; then
+                echo ""
+                echo "[$key] ⏭️  SKIP (no CUDA; см. validate_smoke / GPU-машину)"
+                ((skip++)) || true
+                continue
+            fi
+        done
     fi
 
     echo ""
@@ -95,6 +115,18 @@ done
 
 echo ""
 echo "=============================================="
-echo "Итого: ✅ $ok успешно, ❌ $fail с ошибками"
+echo "Итого: ✅ $ok успешно, ⏭️  $skip пропущено, ❌ $fail с ошибками"
 echo "=============================================="
-[ $fail -eq 0 ]
+
+if [ -x "$VALIDATE_SCRIPT" ]; then
+    echo ""
+    echo "=== NPZ validation (обязательный gate) ==="
+    if ! "$VALIDATE_SCRIPT"; then
+        echo "❌ validate_smoke_results.sh failed"
+        exit 1
+    fi
+else
+    echo "⚠️  validate_smoke_results.sh not found, пропуск NPZ gate"
+fi
+
+[ "$fail" -eq 0 ]
