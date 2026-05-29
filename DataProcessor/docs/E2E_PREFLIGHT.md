@@ -55,8 +55,18 @@ python3 DataProcessor/main.py \
 ```bash
 cd backend
 source scripts/e2e_env.sh
-.venv/bin/python scripts/e2e_dataprocessor_audio_smoke.py --fetcher-run-id <uuid>
+# DP_MODELS_ROOT задаётся в e2e_env.sh (override при необходимости)
+
+.venv/bin/python -u scripts/e2e_run_to_complete.py \
+  --source-url "https://www.youtube.com/watch?v=-Q6fnPIybEI" \
+  --with-dataprocessor \
+  --fetcher-url http://localhost:8000 \
+  --timeout 2400 \
+  --verbose
 ```
+
+> Флаг `--timeout` (секунды), не `--timeout-sec`.  
+> Дефолтный профиль DP в E2E может прогнать только **segmenter** (`aud- vis- tex-`). Для audio tier-0 задайте `TF_BACKEND_DATAPROCESSOR_GLOBAL_CONFIG` → `DataProcessor/configs/portfolio_demo.yaml`.
 
 ### C) Full-max (тяжёлый, GPU/Triton)
 
@@ -70,9 +80,11 @@ source scripts/e2e_env.sh
 
 ## 4. Критерий «P3.4 green»
 
-- [ ] `start_e2e_stack.sh --with-infra` — все PID живы, health endpoints OK
-- [ ] Минимум один прогон: Fetcher finalize → DP worker → `manifest.json` status success
-- [ ] Запись в [PORTFOLIO_PROGRESS_LOG.md](PORTFOLIO_PROGRESS_LOG.md) (run_id, дата, ветка)
+- [x] `setup_e2e_infra.sh` — Postgres/Redis/MinIO/Prometheus (2026-05-29)
+- [x] `start_e2e_stack.sh` — health 8000/8001/8002/8005 OK
+- [x] `e2e_run_to_complete.py --with-dataprocessor` — ingestion **completed** (run `63048b78-…`, segmenter-only ~16s)
+- [ ] Полный multimodal (audio+visual) — нужен `global_config` / GPU / Triton
+- [ ] Запись в [PORTFOLIO_PROGRESS_LOG.md](PORTFOLIO_PROGRESS_LOG.md) — Entry 024
 
 ---
 

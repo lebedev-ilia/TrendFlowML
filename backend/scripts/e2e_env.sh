@@ -81,6 +81,10 @@ export POSTGRES_PASSWORD="${POSTGRES_PASSWORD:-fetcher_password}"
 export TRITON_BASE_URL="${TRITON_BASE_URL:-${TRITON_HTTP_URL}}"
 export FAISS_INDEX_PATH="${FAISS_INDEX_PATH:-${E2E_STORAGE_ROOT}/embedding_faiss}"
 export STORAGE_LOCAL_PATH="${STORAGE_LOCAL_PATH:-${E2E_STORAGE_ROOT}/embedding_service_uploads}"
+# ModelManager (Segmenter / Audio / Text / Visual workers) — override if bundled_models elsewhere
+export DP_MODELS_ROOT="${DP_MODELS_ROOT:-${E2E_REPO_ROOT}/DataProcessor/dp_models/bundled_models}"
+export TORCH_HOME="${TORCH_HOME:-${DP_MODELS_ROOT}/torch_cache}"
+export HF_HOME="${HF_HOME:-${DP_MODELS_ROOT}/hf_cache}"
 # Полный E2E с global_config (см. backend/scripts/e2e_full_max_run.py): маркер
 #   storage/e2e_full_max/active_global_config → путь к YAML; либо TF_BACKEND_DATAPROCESSOR_GLOBAL_CONFIG.
 export TF_BACKEND_DATAPROCESSOR_TIMEOUT_SECONDS="${TF_BACKEND_DATAPROCESSOR_TIMEOUT_SECONDS:-7200}"

@@ -50,6 +50,8 @@ export STORAGE_ROOT="${REPO_ROOT}/storage"
 
 **Не использовать** старый путь из `AudioProcessor/.env` (`Рабочий стол/...`) на другом диске.
 
+E2E: `backend/scripts/e2e_env.sh` задаёт те же переменные по умолчанию (`DP_MODELS_ROOT` → `DataProcessor/dp_models/bundled_models`).
+
 ---
 
 ## 3. Docker Compose (DataProcessor stack)

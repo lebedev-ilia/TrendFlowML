@@ -339,3 +339,17 @@
   - создан [E2E_PREFLIGHT.md](E2E_PREFLIGHT.md)
   - полный `start_e2e_stack.sh` не запускался (CVAT/docker на портах; тяжёлый прогон)
 - Next: поднять E2E infra в чистом shell; P3.4 checklist в E2E_PREFLIGHT §4
+
+### Entry 024 — E2E infra + stack + run (P3.4 partial)
+
+- Stage: `Phase 8` P3.4
+- Status: `done` (segmenter-only E2E); multimodal — pending GPU/profile
+- Infra: `setup_e2e_infra.sh` OK (postgres/redis/minio, prometheus :9091)
+- Stack: `start_e2e_stack.sh` — 8000/8001/8002/8005 healthy
+- E2E run: `e2e_run_to_complete.py --with-dataprocessor --timeout 2400`
+  - run_id: `63048b78-74ac-457b-97bd-fa5f8a772a5c`
+  - video: `-Q6fnPIybEI` (mock download)
+  - result: ingestion **completed**, DP **segmenter success** (~6s), audio/visual/text off in default profile
+- Code: `backend/scripts/e2e_env.sh` — default `DP_MODELS_ROOT`, `TORCH_HOME`, `HF_HOME`
+- Logs: `backend/.e2e/logs/20260529-135506/`
+- Next: E2E with `portfolio_demo.yaml` or `global_config`; GPU AR/emotion; commit Entry 024
