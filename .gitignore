@@ -52,3 +52,7 @@ dp_results/
 _profiles_cache/
 
 *.png
+
+Fetcher/fetcher/dataset_collector/keys/
+Fetcher/fetcher/dataset_collector/cookies/
+Fetcher/fetcher/dataset_collector/proxies/

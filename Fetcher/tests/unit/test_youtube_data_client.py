@@ -5,6 +5,8 @@ from fetcher.services.youtube_data_client import (
     YouTubeDataClient,
     VideoMetadataDto,
     CommentDto,
+    YouTubeSearchResult,
+    ChannelMetadataDto,
     QuotaExceededError,
 )
 
@@ -92,4 +94,53 @@ class TestYouTubeDataClient:
 
         with pytest.raises(QuotaExceededError):
             client.quota_tracker.consume(2)
+
+    def test_search_videos_parses_response(self, client, mock_http_client):
+        response = MagicMock()
+        response.status_code = 200
+        response.json.return_value = {
+            "items": [
+                {
+                    "id": {"videoId": "video123"},
+                    "snippet": {
+                        "title": "Found",
+                        "channelId": "chan1",
+                        "channelTitle": "Channel",
+                        "publishedAt": "2024-01-01T00:00:00Z",
+                    },
+                }
+            ],
+            "nextPageToken": "next",
+        }
+        mock_http_client.get.return_value = response
+
+        result = client.search_videos("sports")
+
+        assert isinstance(result, YouTubeSearchResult)
+        assert result.items[0].video_id == "video123"
+        assert result.next_page_token == "next"
+
+    def test_get_channels_metadata_batch_parses_response(self, client, mock_http_client):
+        response = MagicMock()
+        response.status_code = 200
+        response.json.return_value = {
+            "items": [
+                {
+                    "id": "chan1",
+                    "snippet": {"title": "Channel"},
+                    "statistics": {
+                        "subscriberCount": "10",
+                        "videoCount": "2",
+                        "viewCount": "100",
+                    },
+                }
+            ]
+        }
+        mock_http_client.get.return_value = response
+
+        channels = client.get_channels_metadata_batch(["chan1"])
+
+        assert isinstance(channels[0], ChannelMetadataDto)
+        assert channels[0].subscriber_count == 10
+        assert channels[0].video_count == 2
 

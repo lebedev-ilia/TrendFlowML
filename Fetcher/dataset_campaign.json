@@ -1,0 +1,305 @@
+{
+  "name": "dataset-100k",
+  "output_dir": "dataset_runs/dataset-100k",
+  "categories": [
+    {
+      "name": "Avto_i_transport",
+      "keywords": [
+        "sports"
+      ],
+      "target_count": 5500,
+      "collect_count": 6000,
+      "platform_weights": {
+        "youtube": 1.0
+      },
+      "filters": {}
+    },
+    {
+      "name": "Deti",
+      "keywords": [
+        "travel"
+      ],
+      "target_count": 5500,
+      "collect_count": 6000,
+      "platform_weights": {
+        "youtube": 1.0
+      },
+      "filters": {}
+    },
+    {
+      "name": "Dom_i_sad",
+      "keywords": [
+        "education"
+      ],
+      "target_count": 5500,
+      "collect_count": 6000,
+      "platform_weights": {
+        "youtube": 1.0
+      },
+      "filters": {}
+    },
+    {
+      "name": "Eda_i_napitki",
+      "keywords": [
+        "science"
+      ],
+      "target_count": 5500,
+      "collect_count": 6000,
+      "platform_weights": {
+        "youtube": 1.0
+      },
+      "filters": {}
+    },
+    {
+      "name": "Finansy_i_biznes",
+      "keywords": [
+        "technology"
+      ],
+      "target_count": 5500,
+      "collect_count": 6000,
+      "platform_weights": {
+        "youtube": 1.0
+      },
+      "filters": {}
+    },
+    {
+      "name": "Igry",
+      "keywords": [
+        "gaming"
+      ],
+      "target_count": 5500,
+      "collect_count": 6000,
+      "platform_weights": {
+        "youtube": 1.0
+      },
+      "filters": {}
+    },
+    {
+      "name": "Iumor",
+      "keywords": [
+        "music"
+      ],
+      "target_count": 5500,
+      "collect_count": 6000,
+      "platform_weights": {
+        "youtube": 1.0
+      },
+      "filters": {}
+    },
+    {
+      "name": "Kino_i_serialy",
+      "keywords": [
+        "movies"
+      ],
+      "target_count": 5500,
+      "collect_count": 6000,
+      "platform_weights": {
+        "youtube": 1.0
+      },
+      "filters": {}
+    },
+    {
+      "name": "Moda_i_krasota",
+      "keywords": [
+        "news"
+      ],
+      "target_count": 5500,
+      "collect_count": 6000,
+      "platform_weights": {
+        "youtube": 1.0
+      },
+      "filters": {}
+    },
+    {
+      "name": "Muzyka",
+      "keywords": [
+        "comedy"
+      ],
+      "target_count": 5500,
+      "collect_count": 6000,
+      "platform_weights": {
+        "youtube": 1.0
+      },
+      "filters": {}
+    },
+    {
+      "name": "Nauka",
+      "keywords": [
+        "food"
+      ],
+      "target_count": 5500,
+      "collect_count": 6000,
+      "platform_weights": {
+        "youtube": 1.0
+      },
+      "filters": {}
+    },
+    {
+      "name": "Novosti_i_politika",
+      "keywords": [
+        "fashion"
+      ],
+      "target_count": 5500,
+      "collect_count": 6000,
+      "platform_weights": {
+        "youtube": 1.0
+      },
+      "filters": {}
+    },
+    {
+      "name": "Obrazovanie",
+      "keywords": [
+        "beauty"
+      ],
+      "target_count": 5500,
+      "collect_count": 6000,
+      "platform_weights": {
+        "youtube": 1.0
+      },
+      "filters": {}
+    },
+    {
+      "name": "Puteshestvia",
+      "keywords": [
+        "fitness"
+      ],
+      "target_count": 5500,
+      "collect_count": 6000,
+      "platform_weights": {
+        "youtube": 1.0
+      },
+      "filters": {}
+    },
+    {
+      "name": "Sport",
+      "keywords": [
+        "business"
+      ],
+      "target_count": 5500,
+      "collect_count": 6000,
+      "platform_weights": {
+        "youtube": 1.0
+      },
+      "filters": {}
+    },
+    {
+      "name": "Tehnologii",
+      "keywords": [
+        "finance"
+      ],
+      "target_count": 5500,
+      "collect_count": 6000,
+      "platform_weights": {
+        "youtube": 1.0
+      },
+      "filters": {}
+    },
+    {
+      "name": "Zdorovie_i_fitnes",
+      "keywords": [
+        "cars"
+      ],
+      "target_count": 5500,
+      "collect_count": 6000,
+      "platform_weights": {
+        "youtube": 1.0
+      },
+      "filters": {}
+    },
+    {
+      "name": "Zivotnye",
+      "keywords": [
+        "pets"
+      ],
+      "target_count": 5500,
+      "collect_count": 6000,
+      "platform_weights": {
+        "youtube": 1.0
+      },
+      "filters": {}
+    }
+  ],
+  "snapshot_schedule_days": [
+    0,
+    7,
+    14,
+    21,
+    28
+  ],
+  "default_filters": {
+    "duration_min_seconds": 4,
+    "duration_max_seconds": 1500,
+    "view_count_max": 100000000,
+    "channel_video_cap": 100,
+    "outlier_policy": "reject"
+  },
+  "platform_weights": {
+    "youtube": 0.75,
+    "tiktok": 0.15,
+    "twitch": 0.05,
+    "rutube": 0.05
+  },
+  "time_interval_buckets": [
+    {
+      "name": "lt_1d",
+      "min_age_days": 0,
+      "max_age_days": 1,
+      "weight": 0.2
+    },
+    {
+      "name": "1d_1w",
+      "min_age_days": 1,
+      "max_age_days": 7,
+      "weight": 0.2
+    },
+    {
+      "name": "1w_1m",
+      "min_age_days": 7,
+      "max_age_days": 30,
+      "weight": 0.12
+    },
+    {
+      "name": "1m_3m",
+      "min_age_days": 30,
+      "max_age_days": 90,
+      "weight": 0.16
+    },
+    {
+      "name": "3m_6m",
+      "min_age_days": 90,
+      "max_age_days": 180,
+      "weight": 0.14
+    },
+    {
+      "name": "6m_1y",
+      "min_age_days": 180,
+      "max_age_days": 365,
+      "weight": 0.08
+    },
+    {
+      "name": "1y_3y",
+      "min_age_days": 365,
+      "max_age_days": 1095,
+      "weight": 0.06
+    },
+    {
+      "name": "gt_3y",
+      "min_age_days": 1095,
+      "max_age_days": null,
+      "weight": 0.04
+    }
+  ],
+  "shard_size": 100,
+  "comments_per_snapshot": 100,
+  "hf_repo_id": null,
+  "hf_token_env": "HF_TOKEN",
+  "hf_upload_enabled": false,
+  "hf_upload_every_shards": 10,
+  "hf_path_prefix": "",
+  "cookie_files_dir": "fetcher/dataset_collector/cookies",
+  "cookie_file_glob": "*.txt",
+  "youtube_keys_file": "fetcher/dataset_collector/keys/keys.txt",
+  "proxies_file": "fetcher/dataset_collector/proxies/proxies.txt",
+  "proxy_default_scheme": "http",
+  "include_local_proxies_for_discovery": false
+}
