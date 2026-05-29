@@ -55,6 +55,8 @@ python3 DataProcessor/main.py \
 ```bash
 cd backend
 source scripts/e2e_env.sh
+export E2E_USE_PORTFOLIO_DEMO_CONFIG=1   # tier-0 audio: clap/tempo/loudness
+./scripts/start_e2e_stack.sh --no-stop     # или --with-infra при первом запуске
 # DP_MODELS_ROOT задаётся в e2e_env.sh (override при необходимости)
 
 .venv/bin/python -u scripts/e2e_run_to_complete.py \
@@ -66,7 +68,10 @@ source scripts/e2e_env.sh
 ```
 
 > Флаг `--timeout` (секунды), не `--timeout-sec`.  
-> Дефолтный профиль DP в E2E может прогнать только **segmenter** (`aud- vis- tex-`). Для audio tier-0 задайте `TF_BACKEND_DATAPROCESSOR_GLOBAL_CONFIG` → `DataProcessor/configs/portfolio_demo.yaml`.
+> Дефолтный профиль DP в E2E прогоняет только **segmenter** (`aud- vis- tex-`).  
+> Для audio tier-0: `export E2E_USE_PORTFOLIO_DEMO_CONFIG=1` перед `start_e2e_stack.sh`  
+> (устанавливает `TF_BACKEND_DATAPROCESSOR_GLOBAL_CONFIG_PATH` → `portfolio_demo.yaml`).  
+> Альтернатива: маркер `storage/e2e_full_max/active_global_config` или явный export пути.
 
 ### C) Full-max (тяжёлый, GPU/Triton)
 
@@ -83,8 +88,9 @@ source scripts/e2e_env.sh
 - [x] `setup_e2e_infra.sh` — Postgres/Redis/MinIO/Prometheus (2026-05-29)
 - [x] `start_e2e_stack.sh` — health 8000/8001/8002/8005 OK
 - [x] `e2e_run_to_complete.py --with-dataprocessor` — ingestion **completed** (run `63048b78-…`, segmenter-only ~16s)
-- [ ] Полный multimodal (audio+visual) — нужен `global_config` / GPU / Triton
-- [ ] Запись в [PORTFOLIO_PROGRESS_LOG.md](PORTFOLIO_PROGRESS_LOG.md) — Entry 024
+- [x] E2E с **audio tier-0** (`E2E_USE_PORTFOLIO_DEMO_CONFIG=1`) — run `203b6361-…`, segmenter+clap/tempo/loudness ~4 min
+- [ ] Полный multimodal (visual+text) — нужен `global_config` / GPU / Triton
+- [x] Запись в [PORTFOLIO_PROGRESS_LOG.md](PORTFOLIO_PROGRESS_LOG.md) — Entry 024–025
 
 ---
 

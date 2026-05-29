@@ -85,6 +85,10 @@ export STORAGE_LOCAL_PATH="${STORAGE_LOCAL_PATH:-${E2E_STORAGE_ROOT}/embedding_s
 export DP_MODELS_ROOT="${DP_MODELS_ROOT:-${E2E_REPO_ROOT}/DataProcessor/dp_models/bundled_models}"
 export TORCH_HOME="${TORCH_HOME:-${DP_MODELS_ROOT}/torch_cache}"
 export HF_HOME="${HF_HOME:-${DP_MODELS_ROOT}/hf_cache}"
+# Tier-0 audio E2E (clap/tempo/loudness): export E2E_USE_PORTFOLIO_DEMO_CONFIG=1 before start_e2e_stack
+if [ "${E2E_USE_PORTFOLIO_DEMO_CONFIG:-0}" = "1" ]; then
+  export TF_BACKEND_DATAPROCESSOR_GLOBAL_CONFIG_PATH="${E2E_REPO_ROOT}/DataProcessor/configs/portfolio_demo.yaml"
+fi
 # Полный E2E с global_config (см. backend/scripts/e2e_full_max_run.py): маркер
 #   storage/e2e_full_max/active_global_config → путь к YAML; либо TF_BACKEND_DATAPROCESSOR_GLOBAL_CONFIG.
 export TF_BACKEND_DATAPROCESSOR_TIMEOUT_SECONDS="${TF_BACKEND_DATAPROCESSOR_TIMEOUT_SECONDS:-7200}"

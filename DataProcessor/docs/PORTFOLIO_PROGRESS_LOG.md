@@ -353,3 +353,19 @@
 - Code: `backend/scripts/e2e_env.sh` — default `DP_MODELS_ROOT`, `TORCH_HOME`, `HF_HOME`
 - Logs: `backend/.e2e/logs/20260529-135506/`
 - Next: E2E with `portfolio_demo.yaml` or `global_config`; GPU AR/emotion; commit Entry 024
+
+### Entry 025 — E2E audio tier-0 (portfolio_demo)
+
+- Stage: `Phase 8` P3.4
+- Status: `done` (segmenter + audio tier-0)
+- Config: `E2E_USE_PORTFOLIO_DEMO_CONFIG=1` → `TF_BACKEND_DATAPROCESSOR_GLOBAL_CONFIG_PATH` в `e2e_env.sh`
+- Stack: `start_e2e_stack.sh --no-stop` (run id `20260529-140304`)
+- E2E run: `e2e_run_to_complete.py --with-dataprocessor --timeout 3600`
+  - run_id: `203b6361-870d-4c45-8362-89ce3dbfa4ba`
+  - video: `-Q6fnPIybEI` (mock)
+  - segmenter: **success** (~5.9s)
+  - audio: **success** (~189s) — clap 33s, loudness 9s, tempo 0.9s
+  - ingestion: **completed** (~4 min total)
+- Code: `backend/scripts/e2e_env.sh` — toggle `E2E_USE_PORTFOLIO_DEMO_CONFIG`
+- Logs: `backend/.e2e/logs/e2e_portfolio_audio_*.log`, stack `20260529-140304`
+- Next: full multimodal (`global_config` + GPU/Triton); GPU — emotion + AR; commit Entry 025
