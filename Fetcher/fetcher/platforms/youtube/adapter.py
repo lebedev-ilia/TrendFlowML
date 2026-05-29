@@ -16,6 +16,7 @@ from yt_dlp.utils import DownloadError
 from fetcher.checksums import compute_sha256
 from fetcher.circuit_breaker import get_circuit_breaker
 from fetcher.config import settings
+from fetcher.cookies import apply_cookiefile
 from fetcher.db import session_scope
 from fetcher.metrics import fetcher_youtube_403_total, fetcher_youtube_429_total
 from fetcher.models import Artifact, ChannelMetadata, Comment, Video, VideoMetadata
@@ -176,6 +177,7 @@ class YouTubeAdapter(PlatformAdapter):
                 "quiet": True,
                 "proxy": proxy,
             }
+            apply_cookiefile(ydl_opts)
             start_time = time.time()
             try:
                 with yt_dlp.YoutubeDL(ydl_opts) as ydl:
@@ -433,6 +435,7 @@ class YouTubeAdapter(PlatformAdapter):
             "quiet": True,
             "proxy": proxy,
         }
+        apply_cookiefile(ydl_opts)
         start_time = time.time()
         try:
             with yt_dlp.YoutubeDL(ydl_opts) as ydl:
@@ -513,6 +516,7 @@ class YouTubeAdapter(PlatformAdapter):
             "merge_output_format": "mp4",
             "proxy": proxy,
         }
+        apply_cookiefile(ydl_download_opts)
         download_start_time = time.time()
         try:
             with yt_dlp.YoutubeDL(ydl_download_opts) as ydl:
@@ -643,6 +647,7 @@ class YouTubeAdapter(PlatformAdapter):
                 "quiet": True,
                 "proxy": proxy,
             }
+            apply_cookiefile(ydl_opts)
             comments_start_time = time.time()
             try:
                 with yt_dlp.YoutubeDL(ydl_opts) as ydl:

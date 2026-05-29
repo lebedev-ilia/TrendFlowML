@@ -1,0 +1,122 @@
+from __future__ import annotations
+
+import json
+from pathlib import Path
+from typing import Iterable, List
+
+from fetcher.dataset_collector.age_buckets import DEFAULT_TIME_INTERVAL_BUCKETS
+from fetcher.dataset_collector.schemas import CampaignConfig, CategoryConfig
+from fetcher.dataset_collector.state import jsonable
+
+
+DEFAULT_CATEGORY_NAMES = [
+    "sports",
+    "travel",
+    "education",
+    "science",
+    "technology",
+    "gaming",
+    "music",
+    "movies",
+    "news",
+    "comedy",
+    "food",
+    "fashion",
+    "beauty",
+    "fitness",
+    "business",
+    "finance",
+    "cars",
+    "pets",
+]
+
+
+def default_campaign_config(
+    *,
+    name: str = "dataset-100k",
+    output_dir: str = "dataset_runs/dataset-100k",
+    categories: Iterable[str] | None = None,
+) -> CampaignConfig:
+    category_names = list(categories or DEFAULT_CATEGORY_NAMES)
+    return CampaignConfig(
+        name=name,
+        output_dir=output_dir,
+        categories=[
+            CategoryConfig(
+                name=category,
+                keywords=[category],
+                target_count=5500,
+                collect_count=6000,
+                platform_weights={"youtube": 1.0},
+            )
+            for category in category_names
+        ],
+        default_filters={
+            "duration_min_seconds": 10,
+            "duration_max_seconds": 3600,
+            "view_count_max": 100_000_000,
+            "channel_video_cap": 100,
+            "outlier_policy": "reject",
+        },
+        platform_weights={"youtube": 0.75, "tiktok": 0.15, "twitch": 0.05, "rutube": 0.05},
+        time_interval_buckets=[
+            {
+                "name": bucket.name,
+                "min_age_days": bucket.min_age_days,
+                "max_age_days": bucket.max_age_days,
+                "weight": bucket.weight,
+            }
+            for bucket in DEFAULT_TIME_INTERVAL_BUCKETS
+        ],
+        snapshot_schedule_days=[0, 7, 14, 21, 28],
+        hf_upload_enabled=False,
+        hf_upload_every_shards=10,
+        youtube_keys_file="fetcher/dataset_collector/keys/keys.txt",
+        proxies_file="fetcher/dataset_collector/proxies/proxies.txt",
+        cookie_files_dir="fetcher/dataset_collector/cookies",
+        cookie_file_glob="*.txt",
+        proxy_default_scheme="http",
+        include_local_proxies_for_discovery=False,
+    )
+
+
+def load_campaign_config(path: str | Path) -> CampaignConfig:
+    config_path = Path(path)
+    data = json.loads(config_path.read_text(encoding="utf-8"))
+    config = CampaignConfig.parse_obj(data)
+    from fetcher.dataset_collector.keyword_presets import apply_keyword_presets
+
+    return apply_keyword_presets(config)
+
+
+def write_campaign_template(path: str | Path, *, overwrite: bool = False) -> Path:
+    config_path = Path(path)
+    if config_path.exists() and not overwrite:
+        raise FileExistsError(f"Campaign config already exists: {config_path}")
+    config_path.parent.mkdir(parents=True, exist_ok=True)
+    config = default_campaign_config()
+    from fetcher.dataset_collector.keyword_presets import apply_keyword_presets
+
+    config = apply_keyword_presets(config)
+    config_path.write_text(
+        json.dumps(jsonable(config.dict()), ensure_ascii=False, indent=2),
+        encoding="utf-8",
+    )
+    return config_path
+
+
+def merged_filters(config: CampaignConfig, category: CategoryConfig) -> dict:
+    merged = dict(config.default_filters)
+    merged.update(category.filters)
+    return merged
+
+
+__all__ = [
+    "CampaignConfig",
+    "CategoryConfig",
+    "DEFAULT_CATEGORY_NAMES",
+    "default_campaign_config",
+    "load_campaign_config",
+    "merged_filters",
+    "write_campaign_template",
+]

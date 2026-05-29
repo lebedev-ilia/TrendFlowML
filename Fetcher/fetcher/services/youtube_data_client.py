@@ -3,7 +3,7 @@ from __future__ import annotations
 import time
 from dataclasses import dataclass
 from datetime import datetime, timedelta, timezone
-from typing import Dict, Iterator, Optional, Tuple
+from typing import Dict, Iterable, Iterator, List, Optional, Tuple
 
 import httpx
 from pydantic import BaseModel, ValidationError
@@ -46,8 +46,33 @@ class CommentDto(BaseModel):
     author_display_name: str
     text_original: str
     like_count: int
+    replies_count: int = 0
     published_at: datetime
     updated_at: Optional[datetime] = None
+    raw_json: dict
+
+
+class YouTubeSearchItemDto(BaseModel):
+    video_id: str
+    title: str = ""
+    channel_id: str = ""
+    channel_title: str = ""
+    published_at: Optional[datetime] = None
+    raw_json: dict
+
+
+class YouTubeSearchResult(BaseModel):
+    items: List[YouTubeSearchItemDto]
+    next_page_token: Optional[str] = None
+    raw_json: dict
+
+
+class ChannelMetadataDto(BaseModel):
+    channel_id: str
+    title: str = ""
+    subscriber_count: Optional[int] = None
+    video_count: Optional[int] = None
+    view_count: Optional[int] = None
     raw_json: dict
 
 
@@ -94,13 +119,17 @@ class YouTubeDataClient:
         timeout: float = 10.0,
         rate_limit_rps: Optional[int] = None,
         daily_quota_limit: Optional[int] = None,
+        proxy: Optional[str] = None,
     ) -> None:
         self.api_key = api_key or settings.youtube_data_api_key
         if not self.api_key:
             raise ValueError("YouTube Data API key is not configured")
 
         self.timeout = timeout
-        self.client = httpx.Client(timeout=timeout)
+        client_kwargs: dict[str, object] = {"timeout": timeout}
+        if proxy:
+            client_kwargs["proxy"] = proxy
+        self.client = httpx.Client(**client_kwargs)
         self.rate_limit_rps = rate_limit_rps or settings.youtube_rate_limit_rps
         self._min_interval = 1.0 / float(self.rate_limit_rps) if self.rate_limit_rps > 0 else 0.0
         self._last_request_ts: float = 0.0
@@ -110,9 +139,10 @@ class YouTubeDataClient:
         )
         # Простой in‑memory кэш метадаты в пределах одного процесса.
         self._metadata_cache: Dict[str, Tuple[VideoMetadataDto, datetime]] = {}
-        self._metadata_cache_ttl = timedelta(
-            seconds=getattr(settings, "youtube_metadata_cache_ttl_seconds", 24 * 60 * 60)
-        )
+        cache_ttl_seconds = getattr(settings, "youtube_metadata_cache_ttl_seconds", 24 * 60 * 60)
+        if not isinstance(cache_ttl_seconds, (int, float)):
+            cache_ttl_seconds = 24 * 60 * 60
+        self._metadata_cache_ttl = timedelta(seconds=cache_ttl_seconds)
 
     # --------------------------------------------------------------------- #
     # Public API
@@ -126,11 +156,8 @@ class YouTubeDataClient:
             if datetime.now(timezone.utc) - fetched_at < self._metadata_cache_ttl:
                 return dto
 
-        # videos.list стоит 1 unit за вызов
-        self.quota_tracker.consume(1)
-
         params = {
-            "part": "snippet,contentDetails,statistics",
+            "part": "snippet,contentDetails,statistics,status,recordingDetails",
             "id": video_id,
             "key": self.api_key,
         }
@@ -172,6 +199,128 @@ class YouTubeDataClient:
         self._metadata_cache[video_id] = (dto, datetime.now(timezone.utc))
         return dto
 
+    def get_videos_metadata_batch(self, video_ids: Iterable[str]) -> List[VideoMetadataDto]:
+        """Получить метаданные видео батчами YouTube videos.list до 50 ID."""
+        ids = [video_id for video_id in dict.fromkeys(video_ids) if video_id]
+        result: List[VideoMetadataDto] = []
+        for start in range(0, len(ids), 50):
+            chunk = ids[start : start + 50]
+            if not chunk:
+                continue
+            data = self._request_json(
+                "videos",
+                params={
+                    "part": "snippet,contentDetails,statistics,status,recordingDetails",
+                    "id": ",".join(chunk),
+                    "key": self.api_key,
+                },
+                quota_units=1,
+                operation="metadata",
+            )
+            for item in data.get("items") or []:
+                dto = self._parse_video_metadata_item(item)
+                self._metadata_cache[dto.video_id] = (dto, datetime.now(timezone.utc))
+                result.append(dto)
+        return result
+
+    def search_videos(
+        self,
+        query: str,
+        *,
+        page_token: Optional[str] = None,
+        max_results: int = 50,
+        order: str = "relevance",
+        published_after: Optional[datetime] = None,
+        published_before: Optional[datetime] = None,
+        relevance_language: Optional[str] = None,
+        region_code: Optional[str] = None,
+        safe_search: str = "none",
+    ) -> YouTubeSearchResult:
+        """Search YouTube videos with search.list. Costs 100 quota units."""
+        params: dict[str, object] = {
+            "part": "snippet",
+            "q": query,
+            "type": "video",
+            "maxResults": max(1, min(max_results, 50)),
+            "order": order,
+            "safeSearch": safe_search,
+            "key": self.api_key,
+        }
+        if page_token:
+            params["pageToken"] = page_token
+        if published_after:
+            params["publishedAfter"] = published_after.astimezone(timezone.utc).isoformat().replace("+00:00", "Z")
+        if published_before:
+            params["publishedBefore"] = published_before.astimezone(timezone.utc).isoformat().replace("+00:00", "Z")
+        if relevance_language:
+            params["relevanceLanguage"] = relevance_language
+        if region_code:
+            params["regionCode"] = region_code
+
+        data = self._request_json("search", params=params, quota_units=100, operation="search")
+        items = []
+        for item in data.get("items") or []:
+            video_id = ((item.get("id") or {}).get("videoId")) or ""
+            if not video_id:
+                continue
+            snippet = item.get("snippet") or {}
+            published_at = snippet.get("publishedAt")
+            items.append(
+                YouTubeSearchItemDto(
+                    video_id=video_id,
+                    title=snippet.get("title") or "",
+                    channel_id=snippet.get("channelId") or "",
+                    channel_title=snippet.get("channelTitle") or "",
+                    published_at=(
+                        datetime.fromisoformat(published_at.replace("Z", "+00:00"))
+                        if isinstance(published_at, str)
+                        else None
+                    ),
+                    raw_json=item,
+                )
+            )
+        return YouTubeSearchResult(
+            items=items,
+            next_page_token=data.get("nextPageToken"),
+            raw_json=data,
+        )
+
+    def get_channels_metadata_batch(self, channel_ids: Iterable[str]) -> List[ChannelMetadataDto]:
+        """Получить статистику каналов батчами channels.list до 50 ID."""
+        ids = [channel_id for channel_id in dict.fromkeys(channel_ids) if channel_id]
+        result: List[ChannelMetadataDto] = []
+        for start in range(0, len(ids), 50):
+            chunk = ids[start : start + 50]
+            if not chunk:
+                continue
+            data = self._request_json(
+                "channels",
+                params={
+                    "part": "snippet,statistics",
+                    "id": ",".join(chunk),
+                    "key": self.api_key,
+                },
+                quota_units=1,
+                operation="channels",
+            )
+            for item in data.get("items") or []:
+                statistics = item.get("statistics") or {}
+                snippet = item.get("snippet") or {}
+                hidden_subs = bool(statistics.get("hiddenSubscriberCount"))
+                result.append(
+                    ChannelMetadataDto(
+                        channel_id=item.get("id") or "",
+                        title=snippet.get("title") or "",
+                        subscriber_count=(
+                            None if hidden_subs else int(statistics.get("subscriberCount") or 0)
+                        ),
+                        video_count=int(statistics.get("videoCount") or 0),
+                        view_count=int(statistics.get("viewCount") or 0),
+                        raw_json=item,
+                    )
+                )
+        return result
+
     def iter_comments(self, video_id: str, *, max_count: int) -> Iterator[CommentDto]:
         """Итерировать комментарии к видео через commentThreads.list.
 
@@ -186,17 +335,15 @@ class YouTubeDataClient:
             if consumed >= max_count:
                 return
 
-            # commentThreads.list — 1 unit
-            self.quota_tracker.consume(1)
-
             params = {
                 "part": "snippet",
                 "videoId": video_id,
                 "maxResults": 100,
-                "pageToken": page_token,
                 "textFormat": "plainText",
                 "key": self.api_key,
             }
+            if page_token:
+                params["pageToken"] = page_token
 
             try:
                 data = self._request_json(
@@ -244,6 +391,7 @@ class YouTubeDataClient:
     ) -> dict:
         """Сделать HTTP‑запрос к YouTube Data API с retry и backoff."""
         url = f"{BASE_URL}/{path}"
+        self.quota_tracker.consume(quota_units)
 
         # Простое client-side rate limiting
         if self._min_interval > 0:
@@ -333,11 +481,38 @@ class YouTubeDataClient:
             num = ""
         return seconds
 
+    @classmethod
+    def _parse_video_metadata_item(cls, item: dict) -> VideoMetadataDto:
+        snippet = item.get("snippet") or {}
+        content_details = item.get("contentDetails") or {}
+        statistics = item.get("statistics") or {}
+        duration_iso = content_details.get("duration") or "PT0S"
+        published_at_str = snippet.get("publishedAt")
+        published_at = (
+            datetime.fromisoformat(published_at_str.replace("Z", "+00:00"))
+            if isinstance(published_at_str, str)
+            else datetime.now(timezone.utc)
+        )
+        return VideoMetadataDto(
+            video_id=item.get("id") or "",
+            title=snippet.get("title") or "",
+            description=snippet.get("description") or "",
+            channel_id=snippet.get("channelId") or "",
+            channel_title=snippet.get("channelTitle") or "",
+            duration_seconds=cls._parse_iso8601_duration(duration_iso),
+            view_count=int(statistics.get("viewCount") or 0),
+            like_count=int(statistics.get("likeCount") or 0),
+            comment_count=int(statistics.get("commentCount") or 0),
+            published_at=published_at,
+            raw_json=item,
+        )
+
     @staticmethod
     def _parse_comment_thread(item: dict) -> CommentDto:
         """Распарсить одну commentThread запись в CommentDto."""
         snippet = (item.get("snippet") or {}).get("topLevelComment") or {}
         top_snippet = snippet.get("snippet") or {}
+        thread_snippet = item.get("snippet") or {}
 
         published_at = top_snippet.get("publishedAt")
         updated_at = top_snippet.get("updatedAt")
@@ -358,6 +533,7 @@ class YouTubeDataClient:
             author_display_name=top_snippet.get("authorDisplayName") or "",
             text_original=top_snippet.get("textOriginal") or "",
             like_count=int(top_snippet.get("likeCount") or 0),
+            replies_count=int(thread_snippet.get("totalReplyCount") or 0),
             published_at=published_dt,
             updated_at=updated_dt,
             raw_json=item,
@@ -368,6 +544,9 @@ __all__ = [
     "YouTubeDataClient",
     "VideoMetadataDto",
     "CommentDto",
+    "YouTubeSearchItemDto",
+    "YouTubeSearchResult",
+    "ChannelMetadataDto",
     "VideoNotFoundError",
     "QuotaExceededError",
     "YouTubeAPIError",

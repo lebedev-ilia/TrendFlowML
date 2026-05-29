@@ -15,6 +15,7 @@ from sqlalchemy.exc import IntegrityError
 from fetcher.checksums import compute_sha256
 from fetcher.circuit_breaker import get_circuit_breaker
 from fetcher.config import settings
+from fetcher.cookies import apply_cookiefile
 from fetcher.db import session_scope
 from fetcher.models import Artifact, ChannelMetadata, Video, VideoMetadata
 from fetcher.platforms.base import PlatformAdapter
@@ -49,6 +50,7 @@ class TikTokAdapter(PlatformAdapter):
 
         proxy = get_next_proxy() if settings.enable_proxies else None
         ydl_opts = {"skip_download": True, "quiet": True, "proxy": proxy}
+        apply_cookiefile(ydl_opts)
 
         start_time = time.time()
         try:
@@ -214,6 +216,7 @@ class TikTokAdapter(PlatformAdapter):
 
         proxy = get_next_proxy() if settings.enable_proxies else None
         ydl_opts = {"skip_download": True, "quiet": True, "proxy": proxy}
+        apply_cookiefile(ydl_opts)
 
         start_time = time.time()
         try:
@@ -279,6 +282,7 @@ class TikTokAdapter(PlatformAdapter):
             "merge_output_format": "mp4",
             "proxy": proxy,
         }
+        apply_cookiefile(ydl_download_opts)
 
         download_start_time = time.time()
         try:
@@ -377,6 +381,7 @@ class TikTokAdapter(PlatformAdapter):
         try:
             proxy = get_next_proxy() if settings.enable_proxies else None
             ydl_opts = {"skip_download": True, "quiet": True, "proxy": proxy}
+            apply_cookiefile(ydl_opts)
             with yt_dlp.YoutubeDL(ydl_opts) as ydl:
                 info = ydl.extract_info(source, download=False)
             if isinstance(info, dict) and info.get("id"):

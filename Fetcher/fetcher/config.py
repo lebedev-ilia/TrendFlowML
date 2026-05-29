@@ -2,7 +2,12 @@ from __future__ import annotations
 
 from typing import List, Union
 
-from pydantic import AnyHttpUrl, BaseSettings, Field, validator
+from pydantic import AnyHttpUrl, Field, validator
+
+try:
+    from pydantic_settings import BaseSettings
+except ImportError:  # pragma: no cover - pydantic v1 compatibility
+    from pydantic import BaseSettings
 
 
 class FetcherSettings(BaseSettings):
@@ -248,6 +253,14 @@ class FetcherSettings(BaseSettings):
     proxy_auth_password: str | None = Field(
         None,
         description="Password для proxy authentication (если не указан в proxy URL).",
+    )
+    cookie_files_dir: str | None = Field(
+        None,
+        description="Директория с Netscape cookie .txt файлами для yt-dlp; файлы ротируются между запросами.",
+    )
+    cookie_file_glob: str = Field(
+        "*.txt",
+        description="Glob-шаблон cookie-файлов внутри cookie_files_dir.",
     )
 
     # Privacy / PII & snapshots
