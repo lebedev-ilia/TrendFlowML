@@ -369,3 +369,15 @@
 - Code: `backend/scripts/e2e_env.sh` — toggle `E2E_USE_PORTFOLIO_DEMO_CONFIG`
 - Logs: `backend/.e2e/logs/e2e_portfolio_audio_*.log`, stack `20260529-140304`
 - Next: full multimodal (`global_config` + GPU/Triton); GPU — emotion + AR; commit Entry 025
+
+### Entry 026 — P4 smoke gates + visual validate
+
+- Stage: `Phase 8` P4
+- Status: `done` (CPU-only scope)
+- Fixes:
+  - `run_smoke_all_components.sh` — **`continue 2`** для GPU-only skip (раньше `emotion_diarization` всё равно запускался на CPU)
+  - новый `validate_visual_minimal.sh` — frames_dir + `detections.npz` schema; AR skip без CUDA
+- Проверка: validate visual на артефактах Entry 019 — **OK** (detections ✅, AR skip)
+- `.gitignore` — `storage/videos/`, `storage/__health_check__/`
+- CI: `bash -n validate_visual_minimal.sh` в dataprocessor-smoke workflow
+- Next: GPU-машина — полный audio 21/21 + AR; E2E `global_config`; optional `--strict` exit в `main.py`

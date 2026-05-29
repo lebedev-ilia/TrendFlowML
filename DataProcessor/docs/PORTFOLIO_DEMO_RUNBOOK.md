@@ -61,6 +61,9 @@ VisualProcessor/.vp_venv/bin/python VisualProcessor/main.py \
 
 # 3) Артефакты
 ls -la ../storage/result_store_ar_minimal/youtube/*/ar_minimal_cli_001/
+
+# 4) NPZ gate (CPU: detections OK, AR skip без CUDA)
+../scripts/validate_visual_minimal.sh
 ```
 
 **Рассказ:** hard dep `core_object_detections` → `action_recognition`, NPZ + schema_version в meta.

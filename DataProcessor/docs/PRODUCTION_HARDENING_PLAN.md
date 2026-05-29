@@ -128,6 +128,7 @@ P0 smoke ──► P1 ops/config ──► P2 contracts ──► P3 CI/E2E
 - [x] P1.4 dedupe MAIN_INDEX run paths — удалён дубль API architecture/checklist блоков
 - [x] P2.1 configs README — [configs/README.md](../configs/README.md)
 - [x] P3.3 smoke in CI — [.github/workflows/dataprocessor-smoke.yml](../../.github/workflows/dataprocessor-smoke.yml), [CI_SMOKE.md](CI_SMOKE.md)
-- [x] P3.4 E2E stack green (partial: segmenter path) — [E2E_PREFLIGHT.md](E2E_PREFLIGHT.md)
+- [x] P3.4 E2E stack green — segmenter (Entry 024) + **audio tier-0** (Entry 025, `E2E_USE_PORTFOLIO_DEMO_CONFIG`)
+- [x] P4 smoke gates (partial) — `continue 2` GPU skip fix, `validate_visual_minimal.sh`
 
 Журнал: [PORTFOLIO_PROGRESS_LOG.md](PORTFOLIO_PROGRESS_LOG.md)

@@ -56,10 +56,11 @@ jobs:
               print(f"OK {stage}: {len(g.nodes)} nodes, topo {order[0]} -> {order[-1]}")
           PY
 
-      - name: Bash syntax (audio smoke scripts)
+      - name: Bash syntax (smoke / validate scripts)
         run: |
           bash -n DataProcessor/scripts/run_smoke_all_components.sh
           bash -n DataProcessor/scripts/validate_smoke_results.sh
+          bash -n DataProcessor/scripts/validate_visual_minimal.sh
 
       - name: Python compile (smoke / preflight helpers)
         run: |

@@ -85,7 +85,7 @@ for item in "${COMPONENTS[@]}"; do
                 echo ""
                 echo "[$key] ⏭️  SKIP (no CUDA; см. validate_smoke / GPU-машину)"
                 ((skip++)) || true
-                continue
+                continue 2
             fi
         done
     fi
