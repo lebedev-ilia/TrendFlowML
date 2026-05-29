@@ -381,3 +381,14 @@
 - `.gitignore` — `storage/videos/`, `storage/__health_check__/`
 - CI: `bash -n validate_visual_minimal.sh` в dataprocessor-smoke workflow
 - Next: GPU-машина — полный audio 21/21 + AR; E2E `global_config`; optional `--strict` exit в `main.py`
+
+### Entry 027 — P2.2 profiles + P2.5 API worker + GPU runbook
+
+- Stage: `Phase 8` P2
+- Status: `done` (docs)
+- Новые документы:
+  - [PROFILES_MAPPING.md](PROFILES_MAPPING.md) — profile JSON ↔ global_config ↔ visual cfg; E2E toggles
+  - [API_WORKER_RUNBOOK.md](API_WORKER_RUNBOOK.md) — POST /process → Redis → worker → main.py → result_store
+  - [GPU_MACHINE_RUNBOOK.md](GPU_MACHINE_RUNBOOK.md) — чеклист 21/21 audio + AR + full E2E на CUDA
+- CI: `py_compile preflight_triton.py` в dataprocessor-smoke
+- Next: выполнить GPU_MACHINE_RUNBOOK на ноутбуке/GPU-ПК; Entry 028 с результатами

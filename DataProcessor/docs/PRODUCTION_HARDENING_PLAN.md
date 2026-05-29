@@ -130,5 +130,9 @@ P0 smoke ──► P1 ops/config ──► P2 contracts ──► P3 CI/E2E
 - [x] P3.3 smoke in CI — [.github/workflows/dataprocessor-smoke.yml](../../.github/workflows/dataprocessor-smoke.yml), [CI_SMOKE.md](CI_SMOKE.md)
 - [x] P3.4 E2E stack green — segmenter (Entry 024) + **audio tier-0** (Entry 025, `E2E_USE_PORTFOLIO_DEMO_CONFIG`)
 - [x] P4 smoke gates (partial) — `continue 2` GPU skip fix, `validate_visual_minimal.sh`
+- [x] P2.2 profiles mapping — [PROFILES_MAPPING.md](PROFILES_MAPPING.md)
+- [x] P2.5 API worker runbook — [API_WORKER_RUNBOOK.md](API_WORKER_RUNBOOK.md)
+- [x] GPU closure checklist — [GPU_MACHINE_RUNBOOK.md](GPU_MACHINE_RUNBOOK.md)
+- [ ] P3.1 Triton preflight in local gate (script exists; runtime — на GPU-машине)
 
 Журнал: [PORTFOLIO_PROGRESS_LOG.md](PORTFOLIO_PROGRESS_LOG.md)

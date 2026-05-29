@@ -12,6 +12,7 @@ Workflow: [`.github/workflows/dataprocessor-smoke.yml`](../../.github/workflows/
 | bash -n | `run_smoke_all_components.sh`, `validate_smoke_results.sh`, `validate_visual_minimal.sh` |
 | py_compile | `dp_models_selftest.py`, `dag/component_graph.py` |
 | dp_models_selftest | unit tests ModelManager (без весов) |
+| preflight_triton | `py_compile scripts/preflight_triton.py` (runtime — с поднятым Triton) |
 
 ---
 

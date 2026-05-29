@@ -101,3 +101,5 @@ PY
 - [ ] `STORAGE_ROOT` == `TREND_FS_ROOT` (или оба S3 с одним bucket)
 - [ ] `TRITON_HTTP_URL` задан в том же shell, что API/worker (если visual)
 - [ ] `source backend/scripts/e2e_env.sh` для полного стека
+
+См. также [PROFILES_MAPPING.md](PROFILES_MAPPING.md), [GPU_MACHINE_RUNBOOK.md](GPU_MACHINE_RUNBOOK.md).

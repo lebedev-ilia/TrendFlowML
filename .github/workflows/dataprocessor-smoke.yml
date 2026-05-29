@@ -65,6 +65,7 @@ jobs:
       - name: Python compile (smoke / preflight helpers)
         run: |
           python -m py_compile DataProcessor/scripts/dp_models_selftest.py
+          python -m py_compile DataProcessor/scripts/preflight_triton.py
           python -m py_compile DataProcessor/dag/component_graph.py
 
       - name: dp_models_selftest (unit, no weights)

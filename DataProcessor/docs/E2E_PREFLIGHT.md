@@ -89,7 +89,7 @@ source scripts/e2e_env.sh
 - [x] `start_e2e_stack.sh` — health 8000/8001/8002/8005 OK
 - [x] `e2e_run_to_complete.py --with-dataprocessor` — ingestion **completed** (run `63048b78-…`, segmenter-only ~16s)
 - [x] E2E с **audio tier-0** (`E2E_USE_PORTFOLIO_DEMO_CONFIG=1`) — run `203b6361-…`, segmenter+clap/tempo/loudness ~4 min
-- [ ] Полный multimodal (visual+text) — нужен `global_config` / GPU / Triton
+- [ ] Полный multimodal (visual+text) — нужен `global_config` / GPU / Triton → [GPU_MACHINE_RUNBOOK.md](GPU_MACHINE_RUNBOOK.md)
 - [x] Запись в [PORTFOLIO_PROGRESS_LOG.md](PORTFOLIO_PROGRESS_LOG.md) — Entry 024–025
 
 ---

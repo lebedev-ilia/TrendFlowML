@@ -2,7 +2,7 @@
 
 Этот документ служит единой точкой входа для навигации по всей документации проекта. Каждый раздел содержит краткое описание документов и ссылки на полные версии.
 
-**Старт (портфолио + prod):** [../README.md](../README.md) · [PORTFOLIO_INTERVIEW_GUIDE.md](PORTFOLIO_INTERVIEW_GUIDE.md) · [PRODUCTION_HARDENING_PLAN.md](PRODUCTION_HARDENING_PLAN.md) · [ENV_ALIGNMENT.md](ENV_ALIGNMENT.md)
+**Старт (портфолио + prod):** [../README.md](../README.md) · [PORTFOLIO_INTERVIEW_GUIDE.md](PORTFOLIO_INTERVIEW_GUIDE.md) · [PRODUCTION_HARDENING_PLAN.md](PRODUCTION_HARDENING_PLAN.md) · [ENV_ALIGNMENT.md](ENV_ALIGNMENT.md) · [PROFILES_MAPPING.md](PROFILES_MAPPING.md) · [GPU_MACHINE_RUNBOOK.md](GPU_MACHINE_RUNBOOK.md)
 
 **Нормализация:** [PORTFOLIO_NORMALIZATION_PLAN.md](PORTFOLIO_NORMALIZATION_PLAN.md) · [PORTFOLIO_PROGRESS_LOG.md](PORTFOLIO_PROGRESS_LOG.md)
 

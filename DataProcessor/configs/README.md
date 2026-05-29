@@ -43,6 +43,7 @@
 
 - [../docs/PORTFOLIO_DEMO_RUNBOOK.md](../docs/PORTFOLIO_DEMO_RUNBOOK.md)
 - [../docs/ENV_ALIGNMENT.md](../docs/ENV_ALIGNMENT.md)
+- [../docs/PROFILES_MAPPING.md](../docs/PROFILES_MAPPING.md)
 - [../docs/PRODUCTION_HARDENING_PLAN.md](../docs/PRODUCTION_HARDENING_PLAN.md)
 
 ---
