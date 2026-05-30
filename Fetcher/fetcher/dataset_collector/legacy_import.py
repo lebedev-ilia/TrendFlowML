@@ -48,4 +48,9 @@ def import_seen_ids(state: DatasetState, path: str | Path, *, platform: str = "y
             continue
         state.mark_seen(key, category=category)
         imported += 1
+    manifest = state.load_manifest()
+    manifest.legacy_seen_imported = int(manifest.legacy_seen_imported or 0) + imported
+    if manifest.baseline_accepted == 0 and state.config.baseline_accepted:
+        manifest.baseline_accepted = state.config.baseline_accepted
+    state.save_manifest(manifest)
     return imported

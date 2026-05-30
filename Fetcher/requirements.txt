@@ -22,11 +22,13 @@ boto3>=1.28.0
 # Observability
 prometheus-client>=0.17.0
 
-# HTTP client (webhooks, backpressure)
-httpx>=0.24.0
+# HTTP client (webhooks, backpressure; [socks] for socks5:// in discover/enrich)
+httpx[socks]>=0.24.0
+PySocks>=1.7.1
 
 # YouTube
 yt-dlp>=2023.0.0
+pytubefix==8.13.1
 
 # Alembic (migrations)
 alembic>=1.12.0

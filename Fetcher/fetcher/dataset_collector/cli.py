@@ -7,6 +7,14 @@ from pathlib import Path
 from typing import Dict
 
 from fetcher.dataset_collector.collector import DatasetCollector
+from fetcher.dataset_collector.metrics import (
+    start_metrics_server,
+    update_gauges,
+    update_inventory_gauges,
+)
+from fetcher.dataset_collector.inventory import rebuild_inventory_from_disk, refresh_summary
+from fetcher.dataset_collector.progress import ProgressReporter
+from fetcher.dataset_collector.status_report import build_status_report
 from fetcher.dataset_collector.config import load_campaign_config, write_campaign_template
 from fetcher.dataset_collector.cookies import CookieRotator
 from fetcher.dataset_collector.discovery.base import DiscoveryAdapter
@@ -15,12 +23,23 @@ from fetcher.dataset_collector.discovery.tiktok import TikTokDiscoveryAdapter
 from fetcher.dataset_collector.discovery.twitch import TwitchDiscoveryAdapter
 from fetcher.dataset_collector.discovery.youtube import YouTubeDiscoveryAdapter, YouTubeKeyPool
 from fetcher.dataset_collector.downloads import run_download_queue
+from fetcher.dataset_collector.hf_queues import (
+    run_hf_shard_upload_queue,
+    run_hf_video_upload_queue,
+    scan_downloaded_videos_for_hf_upload,
+    scan_shards_for_hf_upload,
+)
+from fetcher.dataset_collector.metadata_enrichment import (
+    run_metadata_enrich_queue,
+    scan_shards_for_enrichment,
+)
 from fetcher.dataset_collector.export import export_legacy_json, validate_export
 from fetcher.dataset_collector.hf_upload import upload_paths
 from fetcher.dataset_collector.legacy_import import import_seen_ids
 from fetcher.dataset_collector.proxy import ProxyRotator, configured_proxies
 from fetcher.dataset_collector.snapshots import SnapshotRunner
-from fetcher.dataset_collector.state import DatasetState
+from fetcher.dataset_collector.state import DatasetState, jsonable
+from fetcher.dataset_collector.timing_log import reset_timing_stats
 from fetcher.config import settings
 
 
@@ -44,18 +63,25 @@ def load_youtube_keys(path: str | None) -> list[str]:
     return [item.strip() for item in (env_value or "").split(",") if item.strip()]
 
 
-def build_adapters(state: DatasetState, args: argparse.Namespace) -> Dict[str, DiscoveryAdapter]:
+def build_adapters(
+    state: DatasetState,
+    args: argparse.Namespace,
+    *,
+    key_pool: YouTubeKeyPool | None = None,
+) -> Dict[str, DiscoveryAdapter]:
     adapters: Dict[str, DiscoveryAdapter] = {}
     config = getattr(args, "_campaign_config", None)
     cookie_rotator = CookieRotator.from_config(config) if config is not None else None
-    keys_path = getattr(args, "youtube_keys", None) or (config.youtube_keys_file if config else None)
-    youtube_keys = load_youtube_keys(keys_path)
-    if youtube_keys:
-        key_pool = YouTubeKeyPool(
-            youtube_keys,
-            state_path=state.api_keys_path,
-            proxy_rotator=ProxyRotator(config=config, include_local=False),
-        )
+    if key_pool is None:
+        keys_path = getattr(args, "youtube_keys", None) or (config.youtube_keys_file if config else None)
+        youtube_keys = load_youtube_keys(keys_path)
+        if youtube_keys:
+            key_pool = YouTubeKeyPool(
+                youtube_keys,
+                state_path=state.api_keys_path,
+                proxy_rotator=ProxyRotator(config=config, include_local=False),
+            )
+    if key_pool is not None:
         adapters["youtube"] = YouTubeDiscoveryAdapter(key_pool)
     if getattr(args, "enable_tiktok", False):
         adapters["tiktok"] = TikTokDiscoveryAdapter(
@@ -76,19 +102,56 @@ def command_init(args: argparse.Namespace) -> None:
     print(f"Wrote campaign template: {path}")
 
 
+def _youtube_key_pool(state: DatasetState, args: argparse.Namespace):
+    config = args._campaign_config
+    keys_path = getattr(args, "youtube_keys", None) or (config.youtube_keys_file if config else None)
+    youtube_keys = load_youtube_keys(keys_path)
+    if not youtube_keys:
+        return None
+    return YouTubeKeyPool(
+        youtube_keys,
+        state_path=state.api_keys_path,
+        proxy_rotator=ProxyRotator(config=config, include_local=False),
+    )
+
+
 def command_discover(args: argparse.Namespace) -> None:
     config = load_campaign_config(args.config)
     args._campaign_config = config
+    if args.metrics_port:
+        start_metrics_server(args.metrics_port)
+        print(f"Prometheus metrics: http://127.0.0.1:{args.metrics_port}/metrics")
     state = DatasetState(config)
     state.initialize()
-    collector = DatasetCollector(config, state, build_adapters(state, args))
+    if args.reset_checkpoint:
+        state.clear_checkpoint()
+    state.start_session()
+    reset_timing_stats()
+    key_pool = _youtube_key_pool(state, args)
+    progress = ProgressReporter(config, state, key_pool=key_pool)
+    update_gauges(progress.snapshot())
+    collector = DatasetCollector(
+        config,
+        state,
+        build_adapters(state, args, key_pool=key_pool),
+        progress=progress,
+    )
     categories = [args.category] if args.category else [category.name for category in config.categories]
-    total = {"accepted": 0, "rejected": 0}
-    for category in categories:
-        result = collector.discover_category(category, limit=args.limit)
-        total["accepted"] += result["accepted"]
-        total["rejected"] += result["rejected"]
-        print(f"{category}: accepted={result['accepted']} rejected={result['rejected']}")
+    try:
+        total = collector.discover_campaign(categories, limit=args.limit)
+    except Exception as exc:
+        state.flush_all_pending(shard_size=config.shard_size)
+        checkpoint = state.load_checkpoint()
+        print(
+            json.dumps(
+                {
+                    "error": str(exc),
+                    "checkpoint": jsonable(checkpoint.dict()) if checkpoint else None,
+                },
+                ensure_ascii=False,
+            )
+        )
+        raise
     print(json.dumps(total, ensure_ascii=False))
 
 
@@ -97,27 +160,111 @@ def command_snapshot(args: argparse.Namespace) -> None:
     args._campaign_config = config
     state = DatasetState(config)
     state.initialize()
+    key_pool = _youtube_key_pool(state, args)
     runner = SnapshotRunner(
         state,
-        build_adapters(state, args),
+        build_adapters(state, args, key_pool=key_pool),
         comments_limit=config.comments_per_snapshot,
     )
     result = runner.collect_due(snapshot_index=args.snapshot_index, limit=args.limit)
     print(json.dumps({"snapshots": len(result)}, ensure_ascii=False))
 
 
+def _maybe_refresh_inventory_metrics(state: DatasetState, args: argparse.Namespace) -> None:
+    if getattr(args, "metrics_port", None):
+        summary = refresh_summary(state)
+        update_inventory_gauges(summary)
+
+
 def command_download(args: argparse.Namespace) -> None:
     config = load_campaign_config(args.config)
-    if config.cookie_files_dir:
-        settings.cookie_files_dir = config.cookie_files_dir
-        settings.cookie_file_glob = config.cookie_file_glob
-    download_proxies = configured_proxies(config=config, include_local=True)
-    if download_proxies:
-        settings.enable_proxies = True
-        settings.proxies = download_proxies
     state = DatasetState(config)
+    state.initialize()
+    if args.metrics_port:
+        start_metrics_server(args.metrics_port)
     queue_path = state.download_dir / "queue.jsonl"
-    print(json.dumps(run_download_queue(queue_path), ensure_ascii=False))
+    result = run_download_queue(
+        state,
+        config,
+        queue_path,
+        limit=args.limit,
+        cookie_rotator=CookieRotator.from_config(config),
+    )
+    _maybe_refresh_inventory_metrics(state, args)
+    print(json.dumps(result, ensure_ascii=False))
+
+
+def command_upload_hf_shards(args: argparse.Namespace) -> None:
+    config = load_campaign_config(args.config)
+    state = DatasetState(config)
+    state.initialize()
+    if args.scan_shards:
+        queued = scan_shards_for_hf_upload(state, category=args.category)
+        print(json.dumps({"queued_from_shards": queued}, ensure_ascii=False))
+        if args.scan_only:
+            return
+    if args.metrics_port:
+        start_metrics_server(args.metrics_port)
+    result = run_hf_shard_upload_queue(
+        state,
+        config,
+        category=args.category,
+        limit=args.limit,
+        repo_id=args.repo_id,
+    )
+    _maybe_refresh_inventory_metrics(state, args)
+    print(json.dumps(result, ensure_ascii=False))
+
+
+def command_upload_hf_videos(args: argparse.Namespace) -> None:
+    config = load_campaign_config(args.config)
+    state = DatasetState(config)
+    state.initialize()
+    if args.scan_downloads:
+        queued = scan_downloaded_videos_for_hf_upload(state, category=args.category)
+        print(json.dumps({"queued_from_downloads": queued}, ensure_ascii=False))
+        if args.scan_only:
+            return
+    if args.metrics_port:
+        start_metrics_server(args.metrics_port)
+    result = run_hf_video_upload_queue(
+        state,
+        config,
+        category=args.category,
+        limit=args.limit,
+        repo_id=args.repo_id,
+    )
+    _maybe_refresh_inventory_metrics(state, args)
+    print(json.dumps(result, ensure_ascii=False))
+
+
+def command_enrich_metadata(args: argparse.Namespace) -> None:
+    config = load_campaign_config(args.config)
+    state = DatasetState(config)
+    state.initialize()
+    if args.compact_shards:
+        from fetcher.dataset_collector.metadata_enrichment import compact_metadata_shards
+
+        compact_stats = compact_metadata_shards(state, category=args.category)
+        print(json.dumps({"compact": compact_stats}, ensure_ascii=False))
+        if args.compact_only:
+            return
+    if args.scan_shards:
+        queued = scan_shards_for_enrichment(state, category=args.category)
+        print(json.dumps({"queued_from_shards": queued}, ensure_ascii=False))
+        if args.scan_only:
+            return
+    if args.metrics_port:
+        start_metrics_server(args.metrics_port)
+    result = run_metadata_enrich_queue(
+        state,
+        config,
+        category=args.category,
+        limit=args.limit,
+        cookie_rotator=CookieRotator.from_config(config),
+    )
+    _maybe_refresh_inventory_metrics(state, args)
+    print(json.dumps(result, ensure_ascii=False))
 
 
 def command_export(args: argparse.Namespace) -> None:
@@ -128,9 +275,23 @@ def command_export(args: argparse.Namespace) -> None:
 
 def command_status(args: argparse.Namespace) -> None:
     config = load_campaign_config(args.config)
+    args._campaign_config = config
     state = DatasetState(config)
-    manifest = state.initialize()
-    print(manifest.json(indent=2, ensure_ascii=False))
+    state.initialize()
+    key_pool = _youtube_key_pool(state, args)
+    report = build_status_report(config, state, key_pool=key_pool)
+    print(json.dumps(report, ensure_ascii=False, indent=2, default=str))
+
+
+def command_inventory_rebuild(args: argparse.Namespace) -> None:
+    config = load_campaign_config(args.config)
+    state = DatasetState(config)
+    state.initialize()
+    result = rebuild_inventory_from_disk(state, category=args.category)
+    if args.metrics_port:
+        start_metrics_server(args.metrics_port)
+        update_inventory_gauges(result)
+    print(json.dumps(result, ensure_ascii=False, indent=2, default=str))
 
 
 def command_validate(args: argparse.Namespace) -> None:
@@ -150,6 +311,23 @@ def command_upload_hf(args: argparse.Namespace) -> None:
     config = load_campaign_config(args.config)
     paths = [Path(path) for path in args.paths]
     print(json.dumps(upload_paths(config, paths, repo_id=args.repo_id), ensure_ascii=False))
+
+
+def command_run_workers(args: argparse.Namespace) -> None:
+    from fetcher.dataset_collector.config import load_campaign_config
+    from fetcher.dataset_collector.run_workers import run_all_workers
+
+    config = load_campaign_config(args.config)
+    log_dir = Path(args.log_dir) if args.log_dir else Path(config.output_dir) / "logs" / "workers"
+    run_all_workers(
+        config_path=args.config,
+        category=args.category,
+        log_dir=log_dir,
+        interval_sec=args.interval,
+        metrics_port=args.metrics_port,
+        with_discover=not args.no_discover,
+        once=args.once,
+    )
 
 
 def build_parser() -> argparse.ArgumentParser:
@@ -172,6 +350,8 @@ def build_parser() -> argparse.ArgumentParser:
     add_common(discover)
     discover.add_argument("--category")
     discover.add_argument("--limit", type=int)
+    discover.add_argument("--metrics-port", type=int, default=None, help="Prometheus /metrics port for live Grafana.")
+    discover.add_argument("--reset-checkpoint", action="store_true", help="Ignore saved discovery checkpoint.")
     discover.set_defaults(func=command_discover)
 
     snapshot = sub.add_parser("snapshot")
@@ -180,9 +360,105 @@ def build_parser() -> argparse.ArgumentParser:
     snapshot.add_argument("--limit", type=int)
     snapshot.set_defaults(func=command_snapshot)
 
-    download = sub.add_parser("download")
+    download = sub.add_parser("download", help="Download mp4 files locally (queue 1).")
     download.add_argument("config")
+    download.add_argument("--limit", type=int, help="Max videos to download in this run.")
+    download.add_argument("--metrics-port", type=int, default=None)
     download.set_defaults(func=command_download)
+
+    upload_hf_shards = sub.add_parser(
+        "upload-hf-shards",
+        help="Upload metadata shards to Hugging Face dataset repo.",
+    )
+    upload_hf_shards.add_argument("config")
+    upload_hf_shards.add_argument("--category")
+    upload_hf_shards.add_argument("--limit", type=int)
+    upload_hf_shards.add_argument("--repo-id", help="Override hf_shards_repo_id / hf_repo_id.")
+    upload_hf_shards.add_argument(
+        "--scan-shards",
+        action="store_true",
+        help="Enqueue all local metadata shards not yet uploaded.",
+    )
+    upload_hf_shards.add_argument(
+        "--scan-only",
+        action="store_true",
+        help="With --scan-shards, only build the queue.",
+    )
+    upload_hf_shards.add_argument("--metrics-port", type=int, default=None)
+    upload_hf_shards.set_defaults(func=command_upload_hf_shards)
+
+    upload_hf_videos = sub.add_parser(
+        "upload-hf-videos",
+        help="Upload downloaded mp4 files to Hugging Face dataset repo.",
+    )
+    upload_hf_videos.add_argument("config")
+    upload_hf_videos.add_argument("--category")
+    upload_hf_videos.add_argument("--limit", type=int)
+    upload_hf_videos.add_argument("--repo-id", help="Override hf_videos_repo_id / hf_repo_id.")
+    upload_hf_videos.add_argument(
+        "--scan-downloads",
+        action="store_true",
+        help="Enqueue files from downloads/videos/ not yet uploaded.",
+    )
+    upload_hf_videos.add_argument(
+        "--scan-only",
+        action="store_true",
+        help="With --scan-downloads, only build the queue.",
+    )
+    upload_hf_videos.add_argument("--metrics-port", type=int, default=None)
+    upload_hf_videos.set_defaults(func=command_upload_hf_videos)
+
+    run_workers = sub.add_parser(
+        "run-workers",
+        help="Run discover + all queue workers in parallel (separate processes).",
+    )
+    run_workers.add_argument("config")
+    run_workers.add_argument("--category", default="Sport")
+    run_workers.add_argument("--interval", type=int, default=120, help="Idle poll interval (sec) when queue is empty; active work is not interrupted.")
+    run_workers.add_argument("--log-dir", type=Path, default=None)
+    run_workers.add_argument("--metrics-port", type=int, default=9095)
+    run_workers.add_argument("--no-discover", action="store_true", help="Only queue workers, no discover.")
+    run_workers.add_argument("--once", action="store_true", help="One pass per queue worker, then exit.")
+    run_workers.set_defaults(func=command_run_workers)
+
+    enrich = sub.add_parser(
+        "enrich-metadata",
+        help="Second queue: fill metadata via yt-dlp (formats, thumbnails_ytdlp, subtitles, …).",
+    )
+    enrich.add_argument("config")
+    enrich.add_argument("--category", help="Only process this category.")
+    enrich.add_argument("--limit", type=int, help="Max videos to enrich in this run.")
+    enrich.add_argument(
+        "--scan-shards",
+        action="store_true",
+        help="Enqueue videos from existing metadata shards missing yt-dlp fields.",
+    )
+    enrich.add_argument(
+        "--scan-only",
+        action="store_true",
+        help="With --scan-shards, only build the queue without running yt-dlp.",
+    )
+    enrich.add_argument(
+        "--compact-shards",
+        action="store_true",
+        help="Strip bloated caption URLs from metadata shards (ru/en ext list only).",
+    )
+    enrich.add_argument(
+        "--compact-only",
+        action="store_true",
+        help="With --compact-shards, only compact without running yt-dlp.",
+    )
+    enrich.add_argument("--metrics-port", type=int, default=None)
+    enrich.set_defaults(func=command_enrich_metadata)
+
+    inventory_rebuild = sub.add_parser(
+        "inventory-rebuild",
+        help="Rebuild shard/video inventory index from local metadata shards.",
+    )
+    inventory_rebuild.add_argument("config")
+    inventory_rebuild.add_argument("--category", help="Only rescan this category.")
+    inventory_rebuild.add_argument("--metrics-port", type=int, default=None)
+    inventory_rebuild.set_defaults(func=command_inventory_rebuild)
 
     export = sub.add_parser("export")
     export.add_argument("config")

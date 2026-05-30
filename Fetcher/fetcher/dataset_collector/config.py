@@ -41,6 +41,7 @@ def default_campaign_config(
     return CampaignConfig(
         name=name,
         output_dir=output_dir,
+        baseline_accepted=0,
         categories=[
             CategoryConfig(
                 name=category,
@@ -71,6 +72,8 @@ def default_campaign_config(
         snapshot_schedule_days=[0, 7, 14, 21, 28],
         hf_upload_enabled=False,
         hf_upload_every_shards=10,
+        hf_shards_path_prefix="shards/metadata",
+        hf_videos_path_prefix="videos",
         youtube_keys_file="fetcher/dataset_collector/keys/keys.txt",
         proxies_file="fetcher/dataset_collector/proxies/proxies.txt",
         cookie_files_dir="fetcher/dataset_collector/cookies",

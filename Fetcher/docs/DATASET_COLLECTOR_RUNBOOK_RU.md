@@ -16,10 +16,12 @@
 - Глобальная дедупликация через `state/seen_ids.jsonl`.
 - Shard storage вместо одного большого JSON.
 - Rejected records с причинами отказа.
-- Очередь скачивания видео после `snapshot_0`.
+- Очередь скачивания видео после `snapshot_0` (`downloads/queue.jsonl`) через **pytubefix**.
+- Очередь обогащения metadata через yt-dlp (`state/metadata_enrich_queue.jsonl`) — formats, thumbnails_ytdlp, subtitles.
+- Очереди выгрузки в Hugging Face: shards (`hf_shard_upload_queue.jsonl`) и videos (`hf_video_upload_queue.jsonl`).
 - Ротация YouTube API keys.
 - Ротация proxy для YouTube Data API discovery.
-- Поддержка локального/nodpi proxy как download-only.
+- Единый список HTTP-прокси для discovery, download (pytubefix) и enrich (yt-dlp).
 - Ротация cookie-файлов для yt-dlp.
 - Best-effort adapters для TikTok, Twitch, Rutube.
 - Export в training JSON chunks.
@@ -42,9 +44,14 @@
 - `Fetcher/dataset_runs/dataset-100k/shards/metadata/category=<category>/part_*.json`
 - `Fetcher/dataset_runs/dataset-100k/shards/snapshots/snapshot=<n>/part_*.json`
 - `Fetcher/dataset_runs/dataset-100k/rejected/part_*.json`
-- `Fetcher/dataset_runs/dataset-100k/downloads/queue.jsonl`
+- `Fetcher/dataset_runs/dataset-100k/downloads/queue.jsonl` — скачивание mp4
+- `Fetcher/dataset_runs/dataset-100k/state/metadata_enrich_queue.jsonl` — yt-dlp metadata
+- `Fetcher/dataset_runs/dataset-100k/state/metadata_enrich_done.jsonl` — уже обогащённые
+- `Fetcher/dataset_runs/dataset-100k/state/hf_shard_upload_queue.jsonl` — HF: metadata shards
+- `Fetcher/dataset_runs/dataset-100k/state/hf_video_upload_queue.jsonl` — HF: mp4
+- `Fetcher/dataset_runs/dataset-100k/downloads/videos/<category>/*.mp4` — локальные файлы
 
-Важно: `shards/metadata` это внутренний raw-ish формат collector'а для resume/debug. Финальный training dataset нужно смотреть через `export`, а не напрямую по shard.
+`shards/metadata/category=<cat>/part_*.json` — тот же формат, что `main_ready/data_XX.json`: объект `{video_id: {time_interval, metadata, snapshot_0, ...}}`. Поле `time_interval` — в legacy-лейблах (`1month-3month`, `less-1day`, …). Команда `export` только склеивает shards и snapshot-shards в файлы `data_XX.json`.
 
 ## Campaign Config
 
@@ -130,17 +137,15 @@ Fetcher/fetcher/dataset_collector/proxies/proxies.txt
 Формат:
 
 ```text
-223.204.54.119:8080
-169.155.50.87:1080
-127.0.0.1:8084 download_only
+197.248.16.109:8080
 ```
 
 Правила:
 
 - Если схема не указана, collector считает proxy HTTP: `host:port` -> `http://host:port`.
-- Локальные proxy (`127.0.0.1`, `localhost`) не используются для discovery/API parsing.
-- Локальные proxy используются для download, потому что `nodpi` может помочь при скачивании видео.
-- Для YouTube Data API discovery нужен большой список внешних proxy с ротацией.
+- Один и тот же список используется для YouTube API (discovery), **pytubefix** (download) и **yt-dlp** (enrich).
+- Локальные адреса (`127.0.0.1`, `localhost`) по умолчанию пропускаются (`include_local_proxies_for_discovery: false` в config).
+- Для discovery желателен пул из нескольких внешних proxy с ротацией.
 
 ## Cookies
 
@@ -271,7 +276,192 @@ Download можно запускать отдельно:
 python -m fetcher.dataset_collector.cli download dataset_campaign.json
 ```
 
-Перед массовым download желательно отдельно протестировать `nodpi` / local proxy и cookies на 5-20 видео.
+Перед массовым download протестируйте прокси из `proxies.txt` на 5–20 видео (`python d.py` или `cli download --limit 5`).
+
+## Metadata Enrich Queue (yt-dlp)
+
+YouTube Data API не всегда отдаёт `formats`, `thumbnails_ytdlp`, `subtitles`, `automatic_captions`, `chapters`. Для этого вторая очередь:
+
+```text
+state/metadata_enrich_queue.jsonl
+state/metadata_enrich_done.jsonl
+```
+
+При записи metadata shard (`part_*.json`) каждое YouTube-видео автоматически попадает в enrich-очередь. Worker обновляет shard на месте и ставит `"_enriched": {"source": "yt_dlp", ...}`.
+
+Запуск (те же прокси из `proxies.txt` + cookies):
+
+```bash
+# Для уже собранных shards без enrich — сначала построить очередь:
+python -m fetcher.dataset_collector.cli enrich-metadata dataset_campaign.json \
+  --category Sport --scan-shards
+
+# Обогатить (можно параллельно с discover в другом терминале):
+python -m fetcher.dataset_collector.cli enrich-metadata dataset_campaign.json \
+  --category Sport --limit 50
+```
+
+Только построить очередь без yt-dlp: `--scan-shards --scan-only`.
+
+## Инвентарь (шарды, ID, скачивания, HF)
+
+Обязательный учёт в `dataset_runs/dataset-100k/state/inventory/`:
+
+| Файл | Содержимое |
+|------|------------|
+| `shards.jsonl` | каждый shard: путь, категория, список `video_ids`, `count` |
+| `videos.jsonl` | каждое видео: `video_id`, категория, shard |
+| `summary.json` | агрегаты: очереди, скачано, на HF, по категориям |
+
+Пересборка индекса из уже существующих `part_*.json`:
+
+```bash
+python -m fetcher.dataset_collector.cli inventory-rebuild dataset_campaign.json --category Sport
+```
+
+Статус (включая `inventory`):
+
+```bash
+python -m fetcher.dataset_collector.cli status dataset_campaign.json | python -m json.tool
+```
+
+### Prometheus: очереди и HF
+
+| Метрика | Смысл |
+|---------|--------|
+| `dataset_collector_download_queue_pending{category}` | в очереди на скачивание |
+| `dataset_collector_videos_downloaded_local{category}` | mp4 на диске |
+| `dataset_collector_videos_on_hf{category}` | видео выгружены на HF |
+| `dataset_collector_hf_video_upload_queue_pending{category}` | очередь выгрузки видео |
+| `dataset_collector_shards_total{category}` | шардов метаданных |
+| `dataset_collector_shards_on_hf{category}` | шардов на HF |
+| `dataset_collector_hf_shard_upload_queue_pending{category}` | очередь шардов |
+| `dataset_collector_videos_in_shards{category}` | уникальных ID в инвентаре |
+| `dataset_collector_metadata_enrich_queue_pending{category}` | очередь yt-dlp |
+| `dataset_collector_videos_enriched{category}` | обогащено yt-dlp |
+
+`category="all"` — суммарно по кампании; `category="Sport"` — по категории.
+
+При `run-workers --metrics-port 9095` инвентарь обновляется в фоне каждые ~30 с.
+
+## Полный тест пайплайна (пошагово)
+
+```bash
+cd Fetcher && source .fetcher_venv/bin/activate
+export HF_TOKEN=hf_...   # не класть токен в dataset_campaign.json
+
+# 0. Мониторинг (опционально)
+cd monitoring && docker compose up -d && cd ..
+
+# 1. Проверка конфига и статуса
+python -m fetcher.dataset_collector.cli status dataset_campaign.json
+
+# 2. Индекс по уже собранным shards
+python -m fetcher.dataset_collector.cli inventory-rebuild dataset_campaign.json --category Sport
+
+# 3. Backfill очередей (один раз, если данные были до очередей)
+python -m fetcher.dataset_collector.cli enrich-metadata dataset_campaign.json --category Sport --scan-shards --scan-only
+python -m fetcher.dataset_collector.cli upload-hf-shards dataset_campaign.json --category Sport --scan-shards --scan-only
+
+# 4. Пилот discover (мало видео)
+python -m fetcher.dataset_collector.cli discover dataset_campaign.json --category Sport --limit 5 --metrics-port 9095
+
+# 5. Очереди по одному (smoke, limit=1)
+python -m fetcher.dataset_collector.cli enrich-metadata dataset_campaign.json --category Sport --limit 1
+python -m fetcher.dataset_collector.cli download dataset_campaign.json --limit 1
+python -m fetcher.dataset_collector.cli upload-hf-shards dataset_campaign.json --category Sport --limit 1
+python -m fetcher.dataset_collector.cli upload-hf-videos dataset_campaign.json --category Sport --scan-downloads --limit 1
+
+# 6. Статус + метрики
+python -m fetcher.dataset_collector.cli status dataset_campaign.json
+curl -s http://127.0.0.1:9095/metrics | grep dataset_collector_
+
+# 7. Всё параллельно (боевой режим)
+python -m fetcher.dataset_collector.cli run-workers dataset_campaign.json --category Sport --interval 120 --metrics-port 9095
+# или: ./scripts/run_dataset_workers.sh Sport
+```
+
+## Запустить всё сразу
+
+Один процесс-лаунчер поднимает **5 воркеров параллельно** (отдельные OS-процессы):
+
+| Воркер | Что делает | Цикл |
+|--------|------------|------|
+| `discover` | сбор через YouTube API | один проход (перезапуск вручную) |
+| `enrich-metadata` | yt-dlp в shards | каждые N сек |
+| `download` | mp4 локально | каждые N сек |
+| `upload-hf-shards` | shards → HF | каждые N сек |
+| `upload-hf-videos` | mp4 → HF | каждые N сек |
+
+```bash
+cd Fetcher
+source .fetcher_venv/bin/activate
+export HF_TOKEN=hf_...   # имя переменной в config: hf_token_env = "HF_TOKEN"
+
+# Prometheus/Grafana (опционально)
+cd monitoring && docker compose up -d && cd ..
+
+# Всё параллельно (логи: dataset_runs/dataset-100k/logs/workers/*.log)
+python -m fetcher.dataset_collector.cli run-workers dataset_campaign.json \
+  --category Sport \
+  --interval 120 \
+  --metrics-port 9095
+```
+
+Или скрипт:
+
+```bash
+./scripts/run_dataset_workers.sh Sport
+```
+
+Полезные флаги:
+
+- `--no-discover` — только очереди (enrich / download / HF), если discover уже идёт в другом терминале.
+- `--once` — один проход по каждой очереди и выход (удобно для теста).
+- `--interval 60` — чаще опрашивать очереди (по умолчанию 120 с).
+
+Первый раз для уже собранных shards без очередей HF/enrich:
+
+```bash
+python -m fetcher.dataset_collector.cli enrich-metadata dataset_campaign.json --category Sport --scan-shards
+python -m fetcher.dataset_collector.cli upload-hf-shards dataset_campaign.json --category Sport --scan-shards
+```
+
+Остановка: `Ctrl+C` в терминале с `run-workers` (завершит дочерние процессы при выходе родителя — при необходимости `pkill -f 'dataset_collector.cli'`).
+
+## Hugging Face Upload Queues
+
+Две отдельные очереди для выгрузки в HF (нужен `HF_TOKEN` и `hf_repo_id` в `dataset_campaign.json`):
+
+| Очередь | Файл | Что грузится |
+|---------|------|--------------|
+| **Shards** | `state/hf_shard_upload_queue.jsonl` | `shards/metadata/category=*/part_*.json` |
+| **Videos** | `state/hf_video_upload_queue.jsonl` | `downloads/videos/<category>/<id>.mp4` |
+
+Опционально в config:
+
+```json
+"hf_repo_id": "org/my-dataset",
+"hf_shards_repo_id": null,
+"hf_videos_repo_id": null,
+"hf_shards_path_prefix": "shards/metadata",
+"hf_videos_path_prefix": "videos"
+```
+
+Shards попадают в очередь при каждой записи `part_*.json`. Видео — после успешного `cli download` (локальный yt-dlp в `downloads/videos/`).
+
+```bash
+# Скачать mp4 (очередь 1)
+python -m fetcher.dataset_collector.cli download dataset_campaign.json --limit 10
+
+# Выгрузить shards в HF
+python -m fetcher.dataset_collector.cli upload-hf-shards dataset_campaign.json \
+  --category Sport --scan-shards --limit 5
+
+# Выгрузить видео в HF
+python -m fetcher.dataset_collector.cli upload-hf-videos dataset_campaign.json \
+  --category Sport --scan-downloads --limit 5
+```
 
 ## Snapshot Schedule
 
@@ -351,7 +541,7 @@ python -m fetcher.dataset_collector.cli discover dataset_campaign.json --categor
 python -m fetcher.dataset_collector.cli download dataset_campaign.json
 ```
 
-Если download плохо идет через внешние proxy, проверить local `nodpi` как download-only proxy.
+Если download падает — проверить прокси в `proxies.txt` и лог `logs/workers/download.log` (pytubefix).
 
 5. После успешного pilot запустить по 1000 на 2-3 разных категориях.
 
@@ -388,10 +578,103 @@ python -m fetcher.dataset_collector.cli validate dataset_campaign.json --require
 }
 ```
 
+## Progress Logs, Resume и Checkpoint
+
+При `discover` в stdout печатается строка прогресса:
+
+```text
+[dataset-100k] total=102_431 (baseline=100_000 run=2_431) | session=+127 keys=12/49 quota_session=18_400 | Sport 2_000/6_000 | kw [47/300] (253 left) "football highlights 2026"
+```
+
+Поля:
+
+1. `total` — baseline + accepted текущего run.
+2. `run` — accepted в `manifest` за этот campaign run.
+3. `session` — accepted за текущий запуск CLI.
+4. `keys` — доступные / всего YouTube API keys.
+5. `quota_session` — квота, потраченная с начала сессии.
+6. `kw [i/N]` — текущее ключевое слово и сколько осталось в категории.
+
+Resume после исчерпания квоты:
+
+- Позиция сохраняется в `state/discovery_checkpoint.json` (категория, bucket, platform, `keyword_index`, keyword).
+- Отработанные ключевые слова (≥ `min_videos_per_keyword` уникальных) пишутся в `state/keyword_progress.jsonl` (`status: done`) и при следующем запуске **пропускаются**. После достижения порога collector сразу переходит к следующему keyword (не крутит поиск дальше).
+- Shards пишутся инкрементально каждые `shard_size` видео (не только в конце категории).
+- `seen_ids`, `video_schedule`, `downloads/queue` — как и раньше, сразу на диск.
+- На следующий день запускай тот же `discover` — collector продолжит с checkpoint.
+- Завершённые категории (`accepted >= collect_count`) пропускаются автоматически.
+
+```bash
+python -m fetcher.dataset_collector.cli discover dataset_campaign.json --metrics-port 9095
+python -m fetcher.dataset_collector.cli discover dataset_campaign.json --reset-checkpoint  # начать keyword с нуля
+```
+
+## Baseline и Import Старых ID
+
+В `dataset_campaign.json`:
+
+```json
+"baseline_accepted": 100000
+```
+
+Импорт ID из первого прогона (формат старого training JSON: ключи = video ID):
+
+```bash
+mkdir -p fetcher/dataset_collector/legacy
+# положи файл, например fetcher/dataset_collector/legacy/seen_youtube_v1.json
+
+python -m fetcher.dataset_collector.cli import-seen dataset_campaign.json \
+  fetcher/dataset_collector/legacy/seen_youtube_v1.json \
+  --platform youtube \
+  --category legacy_v1
+```
+
+Поддерживаемые форматы: dict JSON (как `example_train_data`), list JSON, TXT (один ID на строку), CSV, JSONL.
+
+Импорт пишет в `seen_ids.jsonl` (дедуп). `baseline_accepted` задаётся в config для отображения total в логах.
+
+## Status
+
+```bash
+python -m fetcher.dataset_collector.cli status dataset_campaign.json
+```
+
+JSON-отчёт: total/run/session, keys, checkpoint, прогресс по категориям, распределения view/like/comment/duration из shards.
+
+## Grafana / Prometheus
+
+Локальный стек (Docker) — **готов к запуску**:
+
+```bash
+# 1) discover с метриками на хосте
+python -m fetcher.dataset_collector.cli discover dataset_campaign.json --metrics-port 9095
+
+# 2) Prometheus + Grafana
+cd Fetcher/monitoring && docker compose up -d
+```
+
+| URL | Назначение |
+|-----|------------|
+| http://127.0.0.1:3001 | Grafana (admin / admin), дашборд **Dataset Collector** |
+| http://127.0.0.1:9090 | Prometheus, Targets → `dataset-collector` |
+| http://127.0.0.1:9095/metrics | сырые метрики процесса discover |
+
+Подробнее: `Fetcher/monitoring/README.md`
+
+Дашборд: heatmap view/like/comment/duration, перцентили, accept/reject rate, фильтр `$category`.
+
+Метрики: `dataset_collector_total_with_baseline`, `dataset_collector_run_accepted`, `dataset_collector_view_count_bucket`, …
+
+Полное распределение по всем shards (без live Prometheus):
+
+```bash
+python -m fetcher.dataset_collector.cli status dataset_campaign.json
+# → JSON.distributions (p50/p90/p99)
+```
+
 ## Что Еще Желательно Доделать
 
-- Команду `status`, которая показывает компактно: accepted/rejected per category, proxy/key errors, comments coverage, due snapshots.
 - Отдельный отчет по proxy health.
-- Отдельный отчет по comments coverage: сколько видео с `commentCount > 0`, сколько реально имеют comments.
-- Опциональный режим `comments_required=true` для категорий, где комментарии критичны.
+- Отдельный отчет по comments coverage.
+- Опциональный режим `comments_required=true`.
 - Миграцию Pydantic v2 API, чтобы убрать warnings.

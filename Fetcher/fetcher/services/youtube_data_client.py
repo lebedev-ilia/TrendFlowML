@@ -3,16 +3,48 @@ from __future__ import annotations
 import time
 from dataclasses import dataclass
 from datetime import datetime, timedelta, timezone
-from typing import Dict, Iterable, Iterator, List, Optional, Tuple
+from typing import Callable, Dict, Iterable, Iterator, List, Optional, Tuple
 
 import httpx
 from pydantic import BaseModel, ValidationError
 
 from fetcher.config import settings
+from fetcher.dataset_collector.proxy import is_proxy_transport_error
+from fetcher.dataset_collector.timing_log import log_timing
 from fetcher.metrics import fetcher_youtube_403_total, fetcher_youtube_429_total
 
 
 BASE_URL = "https://youtube.googleapis.com/youtube/v3"
+
+
+def _mask_proxy(proxy: Optional[str]) -> Optional[str]:
+    if not proxy:
+        return None
+    if "@" in proxy:
+        return proxy.split("@", 1)[-1][:40]
+    return proxy[:40]
+
+
+def is_comments_disabled_error(exc_or_text: Exception | str) -> bool:
+    text = str(exc_or_text).lower()
+    return any(
+        marker in text
+        for marker in (
+            "disabled comments",
+            "commentsdisabled",
+            "commenting disabled",
+            "comments are disabled",
+        )
+    )
+
+
+def _parse_api_error_message(resp: httpx.Response) -> str:
+    try:
+        data = resp.json()
+    except ValueError:
+        return resp.text[:500]
+    error = data.get("error") or {}
+    return str(error.get("message") or resp.text[:500])
 
 
 class VideoNotFoundError(Exception):
@@ -120,6 +152,8 @@ class YouTubeDataClient:
         rate_limit_rps: Optional[int] = None,
         daily_quota_limit: Optional[int] = None,
         proxy: Optional[str] = None,
+        on_proxy_success: Callable[[Optional[str]], None] | None = None,
+        on_proxy_failure: Callable[[Optional[str], Exception], None] | None = None,
     ) -> None:
         self.api_key = api_key or settings.youtube_data_api_key
         if not self.api_key:
@@ -129,6 +163,9 @@ class YouTubeDataClient:
         client_kwargs: dict[str, object] = {"timeout": timeout}
         if proxy:
             client_kwargs["proxy"] = proxy
+        self.proxy = proxy
+        self.on_proxy_success = on_proxy_success
+        self.on_proxy_failure = on_proxy_failure
         self.client = httpx.Client(**client_kwargs)
         self.rate_limit_rps = rate_limit_rps or settings.youtube_rate_limit_rps
         self._min_interval = 1.0 / float(self.rate_limit_rps) if self.rate_limit_rps > 0 else 0.0
@@ -353,9 +390,7 @@ class YouTubeDataClient:
                     operation="comments",
                 )
             except YouTubeAPIError as exc:
-                msg = str(exc)
-                if "has disabled comments" in msg:
-                    # Комментарии отключены — возвращаем пустой результат без ошибки.
+                if is_comments_disabled_error(exc):
                     return
                 raise
             items = data.get("items") or []
@@ -409,8 +444,34 @@ class YouTubeDataClient:
 
             try:
                 self._last_request_ts = time.time()
+                request_start = time.perf_counter()
                 resp = self.client.get(url, params=params)
+                elapsed = time.perf_counter() - request_start
+                video_id = params.get("videoId") or params.get("id")
+                log_timing(
+                    f"youtube.api.{operation}",
+                    elapsed,
+                    status=resp.status_code,
+                    video_id=str(video_id)[:20] if video_id else None,
+                    proxy=_mask_proxy(self.proxy),
+                )
             except httpx.RequestError as exc:
+                elapsed = time.perf_counter() - request_start
+                video_id = params.get("videoId") or params.get("id")
+                log_timing(
+                    f"youtube.api.{operation}",
+                    elapsed,
+                    error=type(exc).__name__,
+                    attempt=attempt + 1,
+                    video_id=str(video_id)[:20] if video_id else None,
+                    proxy=_mask_proxy(self.proxy),
+                )
+                if is_proxy_transport_error(exc):
+                    if self.on_proxy_failure:
+                        self.on_proxy_failure(self.proxy, exc)
+                    raise YouTubeAPIError(
+                        f"Proxy transport error via {_mask_proxy(self.proxy)}: {exc}"
+                    ) from exc
                 last_exc = exc
                 # retriable сетевые ошибки — пробуем ещё раз
                 continue
@@ -423,9 +484,12 @@ class YouTubeDataClient:
 
             if resp.status_code == 403:
                 fetcher_youtube_403_total.labels(operation=operation, error_code="HTTP_403").inc()
-                last_exc = YouTubeAPIError(f"403 Forbidden: {resp.text[:500]}")
-                # Часть 403 может быть неретраибельной (quotaExceeded), но для простоты
-                # ограничимся несколькими попытками.
+                message = _parse_api_error_message(resp)
+                last_exc = YouTubeAPIError(f"403 Forbidden: {message}")
+                if operation == "comments" or is_comments_disabled_error(message):
+                    raise last_exc
+                if "quotaExceeded" in message or "dailyLimitExceeded" in message:
+                    raise QuotaExceededError(message)
                 continue
 
             if 500 <= resp.status_code < 600:
@@ -450,6 +514,8 @@ class YouTubeDataClient:
                 message = error.get("message") or "Unknown error"
                 raise YouTubeAPIError(f"YouTube Data API error: {message}")
 
+            if self.on_proxy_success:
+                self.on_proxy_success(self.proxy)
             return data
 
         # Если дошли сюда — все попытки исчерпаны
@@ -550,5 +616,6 @@ __all__ = [
     "VideoNotFoundError",
     "QuotaExceededError",
     "YouTubeAPIError",
+    "is_comments_disabled_error",
 ]
 

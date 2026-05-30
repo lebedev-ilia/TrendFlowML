@@ -5,6 +5,11 @@ from pathlib import Path
 from typing import Any, Dict
 
 from fetcher.dataset_collector.state import atomic_write_json
+from fetcher.dataset_collector.training_format import (
+    format_training_record,
+    format_training_snapshot,
+    load_metadata_records,
+)
 
 
 def iter_json_files(directory: Path):
@@ -14,16 +19,6 @@ def iter_json_files(directory: Path):
         if path.name.endswith(".tmp"):
             continue
         yield path
-
-
-def load_metadata_records(root: Path) -> Dict[str, dict]:
-    records: Dict[str, dict] = {}
-    for path in iter_json_files(root / "shards" / "metadata"):
-        data = json.loads(path.read_text(encoding="utf-8"))
-        for record in data:
-            key = f"{record['platform']}:{record['video_id']}"
-            records[key] = record
-    return records
 
 
 def load_snapshot_records(root: Path) -> Dict[str, Dict[str, dict]]:
@@ -36,64 +31,17 @@ def load_snapshot_records(root: Path) -> Dict[str, Dict[str, dict]]:
     return snapshots
 
 
-def _legacy_metadata(record: dict) -> dict:
-    metadata = record.get("metadata") or {}
-    raw = metadata.get("raw") or {}
-    snippet = raw.get("snippet") or {}
-    status = raw.get("status") or {}
-    recording = raw.get("recordingDetails") or {}
-    content_details = raw.get("contentDetails") or {}
-    thumbnails = snippet.get("thumbnails") or {}
-    standard_thumb = thumbnails.get("standard") or thumbnails.get("high") or thumbnails.get("medium") or {}
-    return {
-        "title": metadata.get("title") or snippet.get("title") or "",
-        "description": metadata.get("description") or snippet.get("description") or "",
-        "tags": snippet.get("tags") or [],
-        "language": snippet.get("defaultAudioLanguage") or snippet.get("defaultLanguage"),
-        "madeForKids": status.get("madeForKids", False),
-        "duration": metadata.get("duration_seconds"),
-        "duration_seconds": metadata.get("duration_seconds"),
-        "publishedAt": snippet.get("publishedAt") or metadata.get("publishedAt"),
-        "channelTitle": metadata.get("channelTitle") or snippet.get("channelTitle"),
-        "country": recording.get("locationDescription") or recording.get("recordingDate"),
-        "thumbnails": {"standard": standard_thumb} if standard_thumb else {},
-        "subtitles": {},
-        "automatic_captions": {},
-        "chapters": None,
-        "formats": [],
-        "thumbnails_ytdlp": [],
-    }
-
-
-def _legacy_snapshot(snapshot: dict) -> dict:
-    return {
-        "time_get": snapshot.get("time_get"),
-        "viewCount": snapshot.get("viewCount"),
-        "likeCount": snapshot.get("likeCount"),
-        "commentCount": snapshot.get("commentCount"),
-        "subscriberCount": snapshot.get("subscriberCount"),
-        "videoCount": snapshot.get("videoCount"),
-        "viewCount_channel": snapshot.get("viewCount_channel"),
-        "comments": snapshot.get("comments") or [],
-    }
-
-
-def build_legacy_record(record: dict, snapshots: Dict[str, dict], *, youtube_plain_keys: bool) -> tuple[str, dict]:
-    key = record["video_id"] if youtube_plain_keys and record["platform"] == "youtube" else f"{record['platform']}:{record['video_id']}"
-    payload: Dict[str, Any] = {
-        "platform": record.get("platform"),
-        "category": record.get("category"),
-        "query": record.get("query"),
-        "collected_at": (record.get("snapshot_0") or {}).get("collected_at") or record.get("discovered_at"),
-        "time_interval": record.get("time_interval"),
-        "metadata": _legacy_metadata(record),
-        "snapshot_0": _legacy_snapshot(record["snapshot_0"]),
-        "_enriched": {
-            "at": record.get("discovered_at"),
-            "source": "dataset_collector",
-        },
-    }
-    payload.update({name: _legacy_snapshot(snapshot) for name, snapshot in snapshots.items()})
+def build_legacy_record(
+    record: dict,
+    snapshots: Dict[str, dict],
+    *,
+    youtube_plain_keys: bool,
+) -> tuple[str, dict]:
+    key, payload = format_training_record(record)
+    if not (youtube_plain_keys and record.get("platform") == "youtube"):
+        key = f"{record.get('platform', 'youtube')}:{record['video_id']}"
+    for name, snapshot in snapshots.items():
+        payload[name] = format_training_snapshot(snapshot)
     return key, payload
 
 

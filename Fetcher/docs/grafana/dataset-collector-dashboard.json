@@ -1,0 +1,297 @@
+{
+  "annotations": { "list": [] },
+  "editable": true,
+  "fiscalYearStartMonth": 0,
+  "graphTooltip": 1,
+  "id": null,
+  "links": [],
+  "liveNow": true,
+  "refresh": "10s",
+  "schemaVersion": 39,
+  "tags": ["dataset-collector", "trendflow"],
+  "templating": {
+    "list": [
+      {
+        "current": { "selected": true, "text": "Sport", "value": "Sport" },
+        "datasource": { "type": "prometheus", "uid": "prometheus" },
+        "definition": "label_values(dataset_collector_videos_accepted_total, category)",
+        "hide": 0,
+        "includeAll": false,
+        "multi": false,
+        "name": "category",
+        "options": [],
+        "query": { "query": "label_values(dataset_collector_videos_accepted_total, category)", "refId": "PrometheusVariableQuery" },
+        "refresh": 2,
+        "regex": "",
+        "sort": 1,
+        "type": "query"
+      }
+    ]
+  },
+  "time": { "from": "now-30m", "to": "now" },
+  "timepicker": {},
+  "timezone": "browser",
+  "title": "Dataset Collector",
+  "uid": "dataset-collector",
+  "version": 4,
+  "panels": [
+    {
+      "collapsed": false,
+      "gridPos": { "h": 1, "w": 24, "x": 0, "y": 0 },
+      "id": 100,
+      "title": "Overview",
+      "type": "row"
+    },
+    {
+      "datasource": { "type": "prometheus", "uid": "prometheus" },
+      "fieldConfig": { "defaults": { "unit": "short" }, "overrides": [] },
+      "gridPos": { "h": 4, "w": 5, "x": 0, "y": 1 },
+      "id": 1,
+      "options": { "colorMode": "value", "graphMode": "area", "reduceOptions": { "calcs": ["lastNotNull"] } },
+      "targets": [{ "expr": "dataset_collector_total_with_baseline", "refId": "A", "instant": true, "range": false }],
+      "title": "Total (+ baseline)",
+      "type": "stat"
+    },
+    {
+      "datasource": { "type": "prometheus", "uid": "prometheus" },
+      "fieldConfig": { "defaults": { "unit": "short" }, "overrides": [] },
+      "gridPos": { "h": 4, "w": 5, "x": 5, "y": 1 },
+      "id": 2,
+      "options": { "colorMode": "value", "graphMode": "area", "reduceOptions": { "calcs": ["lastNotNull"] } },
+      "targets": [{ "expr": "dataset_collector_run_accepted", "refId": "A", "instant": true, "range": false }],
+      "title": "Run accepted",
+      "type": "stat"
+    },
+    {
+      "datasource": { "type": "prometheus", "uid": "prometheus" },
+      "fieldConfig": { "defaults": { "unit": "short" }, "overrides": [] },
+      "gridPos": { "h": 4, "w": 5, "x": 10, "y": 1 },
+      "id": 3,
+      "options": { "colorMode": "value", "graphMode": "area", "reduceOptions": { "calcs": ["lastNotNull"] } },
+      "targets": [{ "expr": "dataset_collector_session_accepted", "refId": "A", "instant": true, "range": false }],
+      "title": "Session accepted",
+      "type": "stat"
+    },
+    {
+      "datasource": { "type": "prometheus", "uid": "prometheus" },
+      "fieldConfig": { "defaults": { "unit": "short" }, "overrides": [] },
+      "gridPos": { "h": 4, "w": 4, "x": 15, "y": 1 },
+      "id": 4,
+      "options": { "colorMode": "value", "graphMode": "none", "reduceOptions": { "calcs": ["lastNotNull"] } },
+      "targets": [{ "expr": "dataset_collector_keys_available", "refId": "A", "instant": true, "range": false }],
+      "title": "API keys OK",
+      "type": "stat"
+    },
+    {
+      "datasource": { "type": "prometheus", "uid": "prometheus" },
+      "fieldConfig": { "defaults": { "unit": "short" }, "overrides": [] },
+      "gridPos": { "h": 4, "w": 5, "x": 19, "y": 1 },
+      "id": 5,
+      "options": { "colorMode": "value", "graphMode": "area", "reduceOptions": { "calcs": ["lastNotNull"] } },
+      "targets": [{ "expr": "dataset_collector_quota_session_units", "refId": "A", "instant": true, "range": false }],
+      "title": "Session quota",
+      "type": "stat"
+    },
+    {
+      "collapsed": false,
+      "gridPos": { "h": 1, "w": 24, "x": 0, "y": 5 },
+      "id": 101,
+      "title": "Throughput",
+      "type": "row"
+    },
+    {
+      "datasource": { "type": "prometheus", "uid": "prometheus" },
+      "fieldConfig": { "defaults": { "unit": "short" }, "overrides": [] },
+      "gridPos": { "h": 8, "w": 12, "x": 0, "y": 6 },
+      "id": 10,
+      "options": { "legend": { "displayMode": "list", "placement": "bottom" }, "tooltip": { "mode": "multi" } },
+      "targets": [{ "expr": "dataset_collector_quota_session_units", "legendFormat": "quota units", "refId": "A", "range": true, "instant": false }],
+      "title": "Session quota (cumulative)",
+      "type": "timeseries"
+    },
+    {
+      "datasource": { "type": "prometheus", "uid": "prometheus" },
+      "fieldConfig": { "defaults": { "unit": "ops" }, "overrides": [] },
+      "gridPos": { "h": 8, "w": 12, "x": 12, "y": 6 },
+      "id": 11,
+      "options": { "legend": { "displayMode": "table", "placement": "bottom" }, "tooltip": { "mode": "multi" } },
+      "targets": [
+        {
+          "expr": "sum(rate(dataset_collector_videos_accepted_total{category=~\"$category\"}[5m])) by (category) * 60",
+          "legendFormat": "accepted/min {{category}}",
+          "refId": "A",
+          "range": true,
+          "instant": false
+        },
+        {
+          "expr": "sum(rate(dataset_collector_videos_rejected_total{category=~\"$category\"}[5m])) by (category, reason) * 60",
+          "legendFormat": "rejected/min {{category}}/{{reason}}",
+          "refId": "B",
+          "range": true,
+          "instant": false
+        }
+      ],
+      "title": "Accept / reject per minute",
+      "type": "timeseries"
+    },
+    {
+      "collapsed": false,
+      "gridPos": { "h": 1, "w": 24, "x": 0, "y": 14 },
+      "id": 102,
+      "title": "Video metric distributions (discovery time)",
+      "type": "row"
+    },
+    {
+      "datasource": { "type": "prometheus", "uid": "prometheus" },
+      "fieldConfig": { "defaults": { "unit": "short" }, "overrides": [] },
+      "gridPos": { "h": 8, "w": 12, "x": 0, "y": 15 },
+      "id": 20,
+      "options": {
+        "displayMode": "gradient",
+        "orientation": "horizontal",
+        "showValue": "auto"
+      },
+      "targets": [
+        {
+          "expr": "sum(increase(dataset_collector_view_count_bucket{category=~\"$category\"}[$__range])) by (le)",
+          "legendFormat": "≤ {{le}}",
+          "refId": "A",
+          "instant": true,
+          "range": false
+        }
+      ],
+      "title": "View count distribution",
+      "type": "barchart"
+    },
+    {
+      "datasource": { "type": "prometheus", "uid": "prometheus" },
+      "fieldConfig": { "defaults": { "unit": "short" }, "overrides": [] },
+      "gridPos": { "h": 8, "w": 12, "x": 12, "y": 15 },
+      "id": 21,
+      "options": {
+        "displayMode": "gradient",
+        "orientation": "horizontal",
+        "showValue": "auto"
+      },
+      "targets": [
+        {
+          "expr": "sum(increase(dataset_collector_like_count_bucket{category=~\"$category\"}[$__range])) by (le)",
+          "legendFormat": "≤ {{le}}",
+          "refId": "A",
+          "instant": true,
+          "range": false
+        }
+      ],
+      "title": "Like count distribution",
+      "type": "barchart"
+    },
+    {
+      "datasource": { "type": "prometheus", "uid": "prometheus" },
+      "fieldConfig": { "defaults": { "unit": "short" }, "overrides": [] },
+      "gridPos": { "h": 8, "w": 12, "x": 0, "y": 23 },
+      "id": 22,
+      "options": {
+        "displayMode": "gradient",
+        "orientation": "horizontal",
+        "showValue": "auto"
+      },
+      "targets": [
+        {
+          "expr": "sum(increase(dataset_collector_comment_count_bucket{category=~\"$category\"}[$__range])) by (le)",
+          "legendFormat": "≤ {{le}}",
+          "refId": "A",
+          "instant": true,
+          "range": false
+        }
+      ],
+      "title": "Comment count distribution",
+      "type": "barchart"
+    },
+    {
+      "datasource": { "type": "prometheus", "uid": "prometheus" },
+      "fieldConfig": { "defaults": { "unit": "s" }, "overrides": [] },
+      "gridPos": { "h": 8, "w": 12, "x": 12, "y": 23 },
+      "id": 23,
+      "options": {
+        "displayMode": "gradient",
+        "orientation": "horizontal",
+        "showValue": "auto"
+      },
+      "targets": [
+        {
+          "expr": "sum(increase(dataset_collector_duration_seconds_bucket{category=~\"$category\"}[$__range])) by (le)",
+          "legendFormat": "≤ {{le}}",
+          "refId": "A",
+          "instant": true,
+          "range": false
+        }
+      ],
+      "title": "Duration distribution",
+      "type": "barchart"
+    },
+    {
+      "collapsed": false,
+      "gridPos": { "h": 1, "w": 24, "x": 0, "y": 31 },
+      "id": 103,
+      "title": "Percentiles",
+      "type": "row"
+    },
+    {
+      "datasource": { "type": "prometheus", "uid": "prometheus" },
+      "fieldConfig": { "defaults": { "unit": "short" }, "overrides": [] },
+      "gridPos": { "h": 8, "w": 12, "x": 0, "y": 32 },
+      "id": 30,
+      "options": { "legend": { "displayMode": "table", "placement": "bottom" } },
+      "targets": [
+        {
+          "expr": "histogram_quantile(0.5, sum(rate(dataset_collector_view_count_bucket{category=~\"$category\"}[5m])) by (le, category))",
+          "legendFormat": "p50 {{category}}",
+          "refId": "A",
+          "range": true,
+          "instant": false
+        },
+        {
+          "expr": "histogram_quantile(0.9, sum(rate(dataset_collector_view_count_bucket{category=~\"$category\"}[5m])) by (le, category))",
+          "legendFormat": "p90 {{category}}",
+          "refId": "B",
+          "range": true,
+          "instant": false
+        },
+        {
+          "expr": "histogram_quantile(0.99, sum(rate(dataset_collector_view_count_bucket{category=~\"$category\"}[5m])) by (le, category))",
+          "legendFormat": "p99 {{category}}",
+          "refId": "C",
+          "range": true,
+          "instant": false
+        }
+      ],
+      "title": "View count p50 / p90 / p99",
+      "type": "timeseries"
+    },
+    {
+      "datasource": { "type": "prometheus", "uid": "prometheus" },
+      "fieldConfig": { "defaults": { "unit": "s" }, "overrides": [] },
+      "gridPos": { "h": 8, "w": 12, "x": 12, "y": 32 },
+      "id": 31,
+      "options": { "legend": { "displayMode": "table", "placement": "bottom" } },
+      "targets": [
+        {
+          "expr": "histogram_quantile(0.5, sum(rate(dataset_collector_duration_seconds_bucket{category=~\"$category\"}[5m])) by (le, category))",
+          "legendFormat": "p50 {{category}}",
+          "refId": "A",
+          "range": true,
+          "instant": false
+        },
+        {
+          "expr": "histogram_quantile(0.9, sum(rate(dataset_collector_duration_seconds_bucket{category=~\"$category\"}[5m])) by (le, category))",
+          "legendFormat": "p90 {{category}}",
+          "refId": "B",
+          "range": true,
+          "instant": false
+        }
+      ],
+      "title": "Duration p50 / p90",
+      "type": "timeseries"
+    }
+  ]
+}

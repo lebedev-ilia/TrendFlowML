@@ -1,11 +1,12 @@
 {
   "name": "dataset-100k",
+  "baseline_accepted": 106103,
   "output_dir": "dataset_runs/dataset-100k",
   "categories": [
     {
       "name": "Avto_i_transport",
       "keywords": [
-        "sports"
+        ""
       ],
       "target_count": 5500,
       "collect_count": 6000,
@@ -17,7 +18,7 @@
     {
       "name": "Deti",
       "keywords": [
-        "travel"
+        ""
       ],
       "target_count": 5500,
       "collect_count": 6000,
@@ -29,7 +30,7 @@
     {
       "name": "Dom_i_sad",
       "keywords": [
-        "education"
+        ""
       ],
       "target_count": 5500,
       "collect_count": 6000,
@@ -41,7 +42,7 @@
     {
       "name": "Eda_i_napitki",
       "keywords": [
-        "science"
+        ""
       ],
       "target_count": 5500,
       "collect_count": 6000,
@@ -53,7 +54,7 @@
     {
       "name": "Finansy_i_biznes",
       "keywords": [
-        "technology"
+        ""
       ],
       "target_count": 5500,
       "collect_count": 6000,
@@ -65,7 +66,7 @@
     {
       "name": "Igry",
       "keywords": [
-        "gaming"
+      ""
       ],
       "target_count": 5500,
       "collect_count": 6000,
@@ -77,7 +78,7 @@
     {
       "name": "Iumor",
       "keywords": [
-        "music"
+      ""
       ],
       "target_count": 5500,
       "collect_count": 6000,
@@ -89,7 +90,7 @@
     {
       "name": "Kino_i_serialy",
       "keywords": [
-        "movies"
+      ""
       ],
       "target_count": 5500,
       "collect_count": 6000,
@@ -101,7 +102,7 @@
     {
       "name": "Moda_i_krasota",
       "keywords": [
-        "news"
+      ""
       ],
       "target_count": 5500,
       "collect_count": 6000,
@@ -113,7 +114,7 @@
     {
       "name": "Muzyka",
       "keywords": [
-        "comedy"
+      ""
       ],
       "target_count": 5500,
       "collect_count": 6000,
@@ -125,7 +126,7 @@
     {
       "name": "Nauka",
       "keywords": [
-        "food"
+      ""
       ],
       "target_count": 5500,
       "collect_count": 6000,
@@ -137,7 +138,7 @@
     {
       "name": "Novosti_i_politika",
       "keywords": [
-        "fashion"
+      ""
       ],
       "target_count": 5500,
       "collect_count": 6000,
@@ -149,7 +150,7 @@
     {
       "name": "Obrazovanie",
       "keywords": [
-        "beauty"
+      ""
       ],
       "target_count": 5500,
       "collect_count": 6000,
@@ -161,7 +162,7 @@
     {
       "name": "Puteshestvia",
       "keywords": [
-        "fitness"
+      ""
       ],
       "target_count": 5500,
       "collect_count": 6000,
@@ -173,7 +174,7 @@
     {
       "name": "Sport",
       "keywords": [
-        "business"
+      ""
       ],
       "target_count": 5500,
       "collect_count": 6000,
@@ -185,7 +186,7 @@
     {
       "name": "Tehnologii",
       "keywords": [
-        "finance"
+      ""
       ],
       "target_count": 5500,
       "collect_count": 6000,
@@ -197,7 +198,7 @@
     {
       "name": "Zdorovie_i_fitnes",
       "keywords": [
-        "cars"
+      ""
       ],
       "target_count": 5500,
       "collect_count": 6000,
@@ -209,7 +210,7 @@
     {
       "name": "Zivotnye",
       "keywords": [
-        "pets"
+      ""
       ],
       "target_count": 5500,
       "collect_count": 6000,
@@ -289,12 +290,16 @@
       "weight": 0.04
     }
   ],
-  "shard_size": 100,
+  "shard_size": 300,
   "comments_per_snapshot": 100,
-  "hf_repo_id": null,
+  "hf_repo_id": "Ilialebedev/dataset_100k_v2",
+  "hf_shards_repo_id": "Ilialebedev/dataset_100k_v2_shards",
+  "hf_videos_repo_id": "Ilialebedev/dataset_100k_v2_videos1",
+  "hf_shards_path_prefix": "",
+  "hf_videos_path_prefix": "",
   "hf_token_env": "HF_TOKEN",
-  "hf_upload_enabled": false,
-  "hf_upload_every_shards": 10,
+  "hf_upload_enabled": true,
+  "hf_upload_every_shards": 1,
   "hf_path_prefix": "",
   "cookie_files_dir": "fetcher/dataset_collector/cookies",
   "cookie_file_glob": "*.txt",

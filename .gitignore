@@ -53,6 +53,8 @@ _profiles_cache/
 
 *.png
 
+dataset_runs/
+
 Fetcher/fetcher/dataset_collector/keys/
 Fetcher/fetcher/dataset_collector/cookies/
 Fetcher/fetcher/dataset_collector/proxies/

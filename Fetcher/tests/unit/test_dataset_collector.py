@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import json
 from datetime import timedelta
 
 import pytest
@@ -10,7 +11,22 @@ from fetcher.dataset_collector.config import default_campaign_config
 from fetcher.dataset_collector.cookies import CookieRotator, apply_cookiefile
 from fetcher.dataset_collector.discovery.base import DiscoveryCapabilities
 from fetcher.dataset_collector.export import export_legacy_json, validate_export
-from fetcher.dataset_collector.proxy import load_proxy_file, normalize_proxy_url
+from fetcher.dataset_collector.hf_queues import run_hf_shard_upload_queue
+from fetcher.dataset_collector.training_format import (
+    compact_training_metadata,
+    format_training_shard,
+    merge_ytdlp_into_training_metadata,
+    metadata_captions_are_bloated,
+    slim_caption_tracks,
+    training_entry_needs_ytdlp_enrichment,
+)
+from fetcher.dataset_collector.filters import VideoFilter
+from fetcher.dataset_collector.proxy import (
+    ProxyRotator,
+    is_proxy_transport_error,
+    load_proxy_file,
+    normalize_proxy_url,
+)
 from fetcher.dataset_collector.schemas import CollectedVideo, ScheduleEntry, Snapshot
 from fetcher.dataset_collector.snapshots import SnapshotRunner
 from fetcher.dataset_collector.state import DatasetState, format_time_get, utcnow
@@ -85,6 +101,7 @@ def make_video(video_id: str, *, views: int = 10) -> CollectedVideo:
 @pytest.mark.unit
 def test_collector_deduplicates_and_writes_rejected(tmp_path):
     config = default_campaign_config(output_dir=str(tmp_path), categories=["sports"])
+    config.time_interval_buckets = []
     config.categories[0].keywords = ["sports"]
     config.categories[0].collect_count = 3
     config.categories[0].platform_weights = {"youtube": 1.0}
@@ -131,6 +148,94 @@ def test_snapshot_runner_collects_due_once(tmp_path):
 
 
 @pytest.mark.unit
+def test_merge_ytdlp_into_training_metadata():
+    metadata = {"title": "t", "formats": [], "thumbnails_ytdlp": []}
+    info = {
+        "tags": ["a", "b"],
+        "duration": 120,
+        "formats": [{"fps": 30, "resolution": "1920x1080", "vcodec": "avc1"}],
+        "thumbnails": [{"url": "https://example.com/t.jpg", "width": 1280, "height": 720}],
+        "subtitles": {"en": [{"ext": "vtt"}]},
+        "automatic_captions": {"ru": [{"ext": "vtt"}]},
+    }
+    merged = merge_ytdlp_into_training_metadata(metadata, info)
+    assert merged["tags"] == ["a", "b"]
+    assert merged["duration_seconds"] == 120
+    assert len(merged["formats"]) == 1
+    assert len(merged["thumbnails_ytdlp"]) == 1
+    assert merged["subtitles"] == {"en": [{"ext": "vtt"}]}
+    assert merged["automatic_captions"] == {"ru": [{"ext": "vtt"}]}
+    assert "url" not in json.dumps(merged["automatic_captions"])
+
+
+@pytest.mark.unit
+def test_training_entry_needs_ytdlp_enrichment():
+    assert training_entry_needs_ytdlp_enrichment({"metadata": {"formats": [], "thumbnails_ytdlp": []}})
+    assert not training_entry_needs_ytdlp_enrichment(
+        {"metadata": {"formats": [{"fps": 30}]}, "thumbnails_ytdlp": []}
+    )
+    assert not training_entry_needs_ytdlp_enrichment(
+        {"metadata": {"formats": []}, "_enriched": {"source": "yt_dlp"}}
+    )
+
+
+@pytest.mark.unit
+def test_metadata_shard_matches_training_json_shape(tmp_path):
+    video = make_video("abc123", views=500)
+    video.snapshot_0.comments = [
+        {
+            "text": "hi",
+            "likeCount": 1,
+            "repliesCount": 0,
+            "publishedAt": "2025-01-01T00:00:00Z",
+            "authorName": "@user",
+        }
+    ]
+    shard = format_training_shard([video])
+    assert list(shard.keys()) == ["abc123"]
+    entry = shard["abc123"]
+    assert set(entry.keys()) == {"query", "time_interval", "metadata", "snapshot_0"}
+    assert entry["query"] == "sports"
+    assert "platform" not in entry
+    assert set(entry["metadata"].keys()) >= {
+        "title",
+        "description",
+        "tags",
+        "duration_seconds",
+        "thumbnails",
+    }
+    assert "raw" not in entry["metadata"]
+    assert entry["snapshot_0"]["comments"][0]["repliesCount"] == 0
+    assert "snapshot_index" not in entry["snapshot_0"]
+
+
+@pytest.mark.unit
+def test_write_metadata_shard_enqueues_hf_shard_upload(tmp_path):
+    config = default_campaign_config(output_dir=str(tmp_path), categories=["sports"])
+    state = DatasetState(config)
+    state.initialize()
+    state.write_metadata_shard("sports", [make_video("vid1")])
+    lines = state.hf_shard_upload_queue_path.read_text(encoding="utf-8").strip().splitlines()
+    assert len(lines) == 1
+    row = json.loads(lines[0])
+    assert "shards/metadata/" in row["shard"]
+    assert row["category"] == "sports"
+
+
+@pytest.mark.unit
+def test_write_metadata_shard_enqueues_enrichment(tmp_path):
+    config = default_campaign_config(output_dir=str(tmp_path), categories=["sports"])
+    state = DatasetState(config)
+    state.initialize()
+    state.write_metadata_shard("sports", [make_video("vid1")])
+    lines = state.metadata_enrich_queue_path.read_text(encoding="utf-8").strip().splitlines()
+    assert len(lines) == 1
+    row = json.loads(lines[0])
+    assert row["video_id"] == "vid1"
+    assert row["shard"].startswith("shards/metadata/")
+
+
+@pytest.mark.unit
 def test_export_legacy_json_splits_records(tmp_path):
     config = default_campaign_config(output_dir=str(tmp_path / "run"), categories=["sports"])
     state = DatasetState(config)
@@ -173,7 +278,14 @@ def test_collector_sets_time_interval_from_bucket(tmp_path):
 
     assert result["accepted"] == 1
     shard = next((tmp_path / "shards" / "metadata").glob("**/*.json"))
-    assert '"time_interval": "lt_1d"' in shard.read_text(encoding="utf-8")
+    text = shard.read_text(encoding="utf-8")
+    data = json.loads(text)
+    assert isinstance(data, dict)
+    assert len(data) == 1
+    entry = next(iter(data.values()))
+    assert entry["time_interval"] == "less-1day"
+    assert "platform" not in entry
+    assert "metadata" in entry and "snapshot_0" in entry
 
 
 @pytest.mark.unit
@@ -192,13 +304,447 @@ def test_cookie_rotator_applies_cookiefile(tmp_path):
 
 
 @pytest.mark.unit
+def test_incremental_shard_flush_writes_before_category_end(tmp_path):
+    config = default_campaign_config(output_dir=str(tmp_path), categories=["sports"])
+    config.categories[0].keywords = ["sports"]
+    config.categories[0].collect_count = 5
+    config.shard_size = 2
+    config.time_interval_buckets = [
+        {"name": "lt_1d", "min_age_days": 0, "max_age_days": 1, "weight": 1.0}
+    ]
+    state = DatasetState(config)
+    state.initialize()
+
+    videos = [make_video(f"v{i}") for i in range(5)]
+    collector = DatasetCollector(config, state, {"youtube": FakeAdapter(videos)})
+    result = collector.discover_category("sports", limit=5)
+
+    assert result["accepted"] == 5
+    shard_files = list((tmp_path / "shards" / "metadata").glob("**/*.json"))
+    assert len(shard_files) == 3
+    assert state.load_manifest().counters["accepted"] == 5
+
+
+@pytest.mark.unit
+def test_checkpoint_resume_starts_from_saved_keyword(tmp_path):
+    config = default_campaign_config(output_dir=str(tmp_path), categories=["sports"])
+    config.categories[0].keywords = ["kw0", "kw1", "kw2"]
+    config.categories[0].collect_count = 10
+    config.shard_size = 100
+    state = DatasetState(config)
+    state.initialize()
+
+    from fetcher.dataset_collector.checkpoint import DiscoveryCheckpoint
+
+    state.save_checkpoint(
+        DiscoveryCheckpoint(
+            category="sports",
+            bucket_name="lt_1d",
+            platform="youtube",
+            keyword_index=1,
+            keyword="kw1",
+        )
+    )
+    state.mark_seen("youtube:from_kw0", category="sports")
+
+    calls = []
+
+    class TrackingAdapter(FakeAdapter):
+        def discover(self, **kwargs):
+            calls.append(kwargs["query"])
+            return super().discover(**kwargs)
+
+    collector = DatasetCollector(
+        config,
+        state,
+        {"youtube": TrackingAdapter([make_video("fresh")])},
+    )
+    collector.discover_category("sports", limit=1)
+
+    assert calls == ["kw1"]
+
+
+@pytest.mark.unit
+def test_import_seen_updates_manifest_baseline(tmp_path):
+    config = default_campaign_config(output_dir=str(tmp_path), categories=["sports"])
+    config.baseline_accepted = 100_000
+    state = DatasetState(config)
+    state.initialize()
+
+    source = tmp_path / "ids.json"
+    source.write_text(json.dumps({"abc123": {}, "def456": {}}), encoding="utf-8")
+
+    from fetcher.dataset_collector.legacy_import import import_seen_ids
+
+    imported = import_seen_ids(state, source)
+    manifest = state.load_manifest()
+
+    assert imported == 2
+    assert manifest.legacy_seen_imported == 2
+    assert manifest.baseline_accepted == 100_000
+
+
+@pytest.mark.unit
 def test_proxy_file_excludes_local_for_discovery(tmp_path):
     proxy_file = tmp_path / "proxies.txt"
-    proxy_file.write_text("1.2.3.4:8080\n127.0.0.1:8084\n", encoding="utf-8")
+    proxy_file.write_text(
+        "1.2.3.4:8080\n127.0.0.1:8084 download_only\n127.0.0.1:8881 nodpi\n",
+        encoding="utf-8",
+    )
 
-    discovery_proxies = load_proxy_file(proxy_file, include_local=False)
-    download_proxies = load_proxy_file(proxy_file, include_local=True)
+    discovery_proxies = load_proxy_file(proxy_file, include_local=False, download_only=False)
+    download_proxies = load_proxy_file(proxy_file, download_only=True)
+    with_local = load_proxy_file(proxy_file, include_local=True, download_only=False)
 
     assert discovery_proxies == ["http://1.2.3.4:8080"]
-    assert download_proxies == ["http://1.2.3.4:8080", "http://127.0.0.1:8084"]
+    assert download_proxies == ["http://127.0.0.1:8084", "http://127.0.0.1:8881"]
+    assert with_local == ["http://1.2.3.4:8080"]
     assert normalize_proxy_url("5.6.7.8:80") == "http://5.6.7.8:80"
+
+
+@pytest.mark.unit
+def test_pytubefix_proxy_dict():
+    from fetcher.dataset_collector.proxy import pytubefix_proxy_dict
+
+    assert pytubefix_proxy_dict("197.248.16.109:8080") == {
+        "http": "http://197.248.16.109:8080",
+        "https": "http://197.248.16.109:8080",
+    }
+    assert pytubefix_proxy_dict(None) is None
+
+
+@pytest.mark.unit
+def test_proxy_rotator_blacklists_transport_failures():
+    import httpx
+
+    rotator = ProxyRotator(proxies=["http://bad:80", "http://good:8080"])
+    rotator.record_failure("http://bad:80", error=httpx.ProxyError("connection refused"))
+    assert "http://bad:80" in rotator.blacklisted()
+    assert rotator.next() == "http://good:8080"
+
+
+@pytest.mark.unit
+def test_proxy_rotator_prefers_last_good_proxy():
+    rotator = ProxyRotator(proxies=["http://a:1", "http://b:2"])
+    rotator.record_success("http://b:2")
+    assert rotator.next() == "http://b:2"
+    assert rotator.next() == "http://b:2"
+
+
+@pytest.mark.unit
+def test_proxy_rotator_ignores_api_errors_for_blacklist():
+    rotator = ProxyRotator(proxies=["http://good:8080"])
+    rotator.record_failure("http://good:8080", error=RuntimeError("403 Forbidden"))
+    assert rotator.blacklisted() == set()
+    assert rotator.next() == "http://good:8080"
+
+
+@pytest.mark.unit
+def test_is_comments_disabled_error():
+    from fetcher.services.youtube_data_client import is_comments_disabled_error
+
+    assert is_comments_disabled_error("videoId parameter has disabled comments")
+    assert not is_comments_disabled_error("quotaExceeded")
+
+
+@pytest.mark.unit
+def test_collector_stops_keyword_after_min_unique(tmp_path):
+    config = default_campaign_config(output_dir=str(tmp_path), categories=["sports"])
+    config.min_videos_per_keyword = 20
+    config.keyword_search_multiplier = 10
+    config.time_interval_buckets = []
+    config.categories[0].keywords = ["kw-one", "kw-two"]
+    config.categories[0].collect_count = 10_000
+    state = DatasetState(config)
+    state.initialize()
+
+    class PerQueryAdapter(FakeAdapter):
+        def discover(self, *, category, query, limit, published_after=None, published_before=None, time_interval=None):
+            prefix = query.replace("-", "_")
+            self.videos = [make_video(f"{prefix}_{i}") for i in range(limit)]
+            return super().discover(
+                category=category,
+                query=query,
+                limit=limit,
+                published_after=published_after,
+                published_before=published_before,
+                time_interval=time_interval,
+            )
+
+    collector = DatasetCollector(
+        config,
+        state,
+        {"youtube": PerQueryAdapter([])},
+    )
+    result = collector.discover_category("sports")
+    assert result["accepted"] == 40
+    progress = list(state.keyword_progress_path.read_text(encoding="utf-8").strip().splitlines())
+    assert len(progress) == 2
+    first = json.loads(progress[0])
+    assert first["status"] == "done"
+    assert first["accepted"] == 20
+
+
+@pytest.mark.unit
+def test_collector_skips_keywords_marked_done_in_progress(tmp_path):
+    config = default_campaign_config(output_dir=str(tmp_path), categories=["sports"])
+    config.min_videos_per_keyword = 20
+    config.time_interval_buckets = []
+    config.categories[0].keywords = ["done-kw", "fresh-kw"]
+    config.categories[0].collect_count = 10_000
+    state = DatasetState(config)
+    state.initialize()
+    from fetcher.dataset_collector.keyword_progress import KeywordProgressEntry
+
+    state.append_keyword_progress(
+        KeywordProgressEntry(
+            category="sports",
+            bucket_name=None,
+            platform="youtube",
+            keyword_index=0,
+            keyword="done-kw",
+            accepted=25,
+            min_required=20,
+            status="done",
+        )
+    )
+
+    class PerQueryAdapter(FakeAdapter):
+        def discover(self, *, category, query, limit, published_after=None, published_before=None, time_interval=None):
+            prefix = query.replace("-", "_")
+            self.videos = [make_video(f"{prefix}_{i}") for i in range(limit)]
+            return super().discover(
+                category=category,
+                query=query,
+                limit=limit,
+                published_after=published_after,
+                published_before=published_before,
+                time_interval=time_interval,
+            )
+
+    collector = DatasetCollector(config, state, {"youtube": PerQueryAdapter([])})
+    result = collector.discover_category("sports")
+    assert result["accepted"] == 20
+    lines = state.keyword_progress_path.read_text(encoding="utf-8").strip().splitlines()
+    assert len(lines) == 2
+    assert json.loads(lines[1])["keyword"] == "fresh-kw"
+
+
+@pytest.mark.unit
+def test_hf_remote_paths():
+    config = default_campaign_config(output_dir="/tmp/unused", categories=["sports"])
+    config.hf_shards_path_prefix = "data/shards"
+    config.hf_videos_path_prefix = "raw/videos"
+    from fetcher.dataset_collector.hf_upload import remote_shard_path, remote_video_path
+
+    assert remote_shard_path(config, "shards/metadata/category=Sport/part_000000.json").startswith(
+        "data/shards/"
+    )
+    assert remote_video_path(config, category="Sport", video_id="abc") == "raw/videos/Sport/abc.mp4"
+
+
+@pytest.mark.unit
+def test_run_hf_shard_upload_queue(tmp_path, monkeypatch):
+    config = default_campaign_config(output_dir=str(tmp_path), categories=["sports"])
+    config.hf_repo_id = "org/test-dataset"
+    state = DatasetState(config)
+    state.initialize()
+    shard_path = state.write_metadata_shard("sports", [make_video("v1")])
+    rel = str(shard_path.relative_to(state.root))
+    state.enqueue_hf_shard_upload(shard_relpath=rel, category="sports")
+
+    uploaded: list[str] = []
+
+    def fake_upload(cfg, local_path, *, repo_id, path_in_repo):
+        uploaded.append(path_in_repo)
+
+    monkeypatch.setenv("HF_TOKEN", "test-token")
+    monkeypatch.setattr(
+        "fetcher.dataset_collector.hf_queues.upload_local_file",
+        fake_upload,
+    )
+
+    result = run_hf_shard_upload_queue(state, config, limit=1)
+    assert result["uploaded"] == 1
+    assert uploaded
+
+
+@pytest.mark.unit
+def test_collector_keyword_search_budget(tmp_path):
+    config = default_campaign_config(output_dir=str(tmp_path), categories=["sports"])
+    config.min_videos_per_keyword = 20
+    config.keyword_search_multiplier = 10
+    config.categories[0].keywords = ["sports"]
+    config.categories[0].collect_count = 100
+    state = DatasetState(config)
+    state.initialize()
+
+    class LimitAdapter(FakeAdapter):
+        last_limit = 0
+
+        def discover(self, *, category, query, limit, published_after=None, published_before=None, time_interval=None):
+            LimitAdapter.last_limit = limit
+            return super().discover(
+                category=category,
+                query=query,
+                limit=limit,
+                published_after=published_after,
+                published_before=published_before,
+                time_interval=time_interval,
+            )
+
+    videos = [make_video(f"v{i}") for i in range(25)]
+    collector = DatasetCollector(
+        config,
+        state,
+        {"youtube": LimitAdapter(videos)},
+    )
+    collector.discover_category("sports", limit=5)
+    assert LimitAdapter.last_limit >= 200
+
+
+@pytest.mark.unit
+def test_is_proxy_transport_error():
+    import httpx
+
+    assert is_proxy_transport_error(httpx.ProxyError("x"))
+    assert not is_proxy_transport_error(RuntimeError("quota"))
+
+
+@pytest.mark.unit
+def test_inventory_register_shard_and_stats(tmp_path):
+    from fetcher.dataset_collector.inventory import (
+        compute_inventory_stats,
+        list_shard_records,
+        rebuild_inventory_from_disk,
+        shards_index_path,
+    )
+
+    config = default_campaign_config(output_dir=str(tmp_path), categories=["Sport"])
+    state = DatasetState(config)
+    state.initialize()
+    v1 = make_video("vid-a").copy(update={"category": "Sport"})
+    v2 = make_video("vid-b").copy(update={"category": "Sport"})
+    state.write_metadata_shard("Sport", [v1, v2])
+    rows = list_shard_records(state, category="Sport")
+    assert len(rows) == 1
+    assert rows[0]["count"] == 2
+    assert "vid-a" in rows[0]["video_ids"]
+    assert shards_index_path(state).exists()
+
+    state.enqueue_download(make_video("vid-q").copy(update={"video_id": "vid-q", "category": "Sport"}))
+    stats = compute_inventory_stats(state, category="Sport")
+    assert stats["videos"]["in_shards"] == 2
+    assert stats["shards"]["total"] == 1
+
+    rebuild_inventory_from_disk(state, category="Sport")
+    assert len(list_shard_records(state, category="Sport")) == 1
+
+
+@pytest.mark.unit
+def test_update_inventory_gauges():
+    from fetcher.dataset_collector.metrics import (
+        dataset_collector_download_queue_pending,
+        update_inventory_gauges,
+    )
+
+    summary = {
+        "totals": {
+            "shards": {"total": 3, "on_hf": 1, "pending_hf_upload": 2},
+            "videos": {
+                "in_shards": 100,
+                "downloaded_local_files": 10,
+                "on_hf": 5,
+                "pending_download": 80,
+                "pending_hf_upload": 5,
+                "pending_enrich": 90,
+                "enriched": 10,
+            },
+        },
+        "by_category": {
+            "Sport": {
+                "shards": {"total": 3, "on_hf": 1, "pending_hf_upload": 2},
+                "videos": {
+                    "in_shards": 100,
+                    "downloaded_local_files": 10,
+                    "on_hf": 5,
+                    "pending_download": 80,
+                    "pending_hf_upload": 5,
+                    "pending_enrich": 90,
+                    "enriched": 10,
+                },
+            }
+        },
+    }
+    update_inventory_gauges(summary)
+    sample = dataset_collector_download_queue_pending.collect()[0]
+    assert sample.samples[0].value == 80
+
+
+@pytest.mark.unit
+def test_parse_resolution_height():
+    from fetcher.dataset_collector.downloads import _parse_resolution_height
+
+    assert _parse_resolution_height("1080p") == 1080
+    assert _parse_resolution_height("360p") == 360
+    assert _parse_resolution_height(None) == 0
+
+
+@pytest.mark.unit
+def test_install_pytubefix_session(tmp_path):
+    from fetcher.dataset_collector.cookies import install_pytubefix_session
+
+    cookie_file = tmp_path / "cookies.txt"
+    cookie_file.write_text(
+        "# Netscape HTTP Cookie File\n"
+        ".youtube.com\tTRUE\t/\tFALSE\t0\tPREF\ttest\n",
+        encoding="utf-8",
+    )
+    install_pytubefix_session(
+        proxies={"http": "http://127.0.0.1:8881", "https": "http://127.0.0.1:8881"},
+        cookie_file=cookie_file,
+    )
+
+
+@pytest.mark.unit
+def test_pass_had_work():
+    from fetcher.dataset_collector.run_workers import _pass_had_work
+
+    assert _pass_had_work({"attempted": 1, "downloaded": 0, "failed": 1})
+    assert not _pass_had_work({"attempted": 0, "downloaded": 0, "skipped": 5})
+    assert not _pass_had_work({})
+
+
+@pytest.mark.unit
+def test_slim_caption_tracks_drops_urls_and_foreign_langs():
+    bloated = {
+        "ru": [{"ext": "vtt", "url": "https://example.com/ru.vtt"}],
+        "en": [{"ext": "srv1", "url": "https://example.com/en.srv1"}],
+        "ab": [{"ext": "vtt", "url": "https://example.com/ab.vtt"}],
+    }
+    slim = slim_caption_tracks(bloated)
+    assert set(slim.keys()) == {"ru", "en"}
+    assert slim["ru"] == [{"ext": "vtt"}]
+    assert metadata_captions_are_bloated({"automatic_captions": bloated})
+    assert not metadata_captions_are_bloated(compact_training_metadata({"automatic_captions": bloated}))
+
+
+@pytest.mark.unit
+def test_video_filter_rejects_missing_duration():
+    rules = {"duration_min_seconds": 4, "duration_max_seconds": 1500}
+    filt = VideoFilter(rules)
+    assert not filt.decide({"metadata": {"duration_seconds": None}}).accepted
+    assert not filt.decide({"metadata": {"duration_seconds": 0}}).accepted
+    assert filt.decide({"metadata": {"duration_seconds": 30}}).accepted
+
+
+@pytest.mark.unit
+def test_video_filter_rejects_live_after_enrich():
+    rules = {"duration_min_seconds": 4, "duration_max_seconds": 1500}
+    filt = VideoFilter(rules)
+    decision = filt.decide_post_enrich(
+        info={"is_live": True, "duration": 0},
+        metadata={"duration_seconds": 0, "title": "LIVE match"},
+    )
+    assert not decision.accepted
+    assert decision.reason == "live_stream"

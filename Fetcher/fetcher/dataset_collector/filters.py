@@ -29,8 +29,9 @@ class VideoFilter:
         duration = _to_int(metadata.get("duration_seconds") or metadata.get("duration"))
         min_duration = _to_int(self.rules.get("duration_min_seconds"))
         max_duration = _to_int(self.rules.get("duration_max_seconds"))
-        if min_duration is not None and duration is not None and duration < min_duration:
-            return FilterDecision(False, "duration_below_min")
+        if min_duration is not None:
+            if duration is None or duration < min_duration:
+                return FilterDecision(False, "duration_below_min")
         if max_duration is not None and duration is not None and duration > max_duration:
             return FilterDecision(False, "duration_above_max")
 
@@ -65,6 +66,15 @@ class VideoFilter:
                 return FilterDecision(False, "channel_cap_exceeded")
 
         return FilterDecision(True)
+
+    def decide_post_enrich(self, *, info: Dict[str, Any], metadata: Dict[str, Any]) -> FilterDecision:
+        """Reject live streams and invalid durations revealed by yt-dlp."""
+        if info.get("is_live") or info.get("live_status") in ("is_live", "is_upcoming"):
+            return FilterDecision(False, "live_stream")
+        duration = _to_int(info.get("duration"))
+        if duration is None:
+            duration = _to_int(metadata.get("duration_seconds") or metadata.get("duration"))
+        return self.decide({"metadata": {**metadata, "duration_seconds": duration, "duration": duration}})
 
     def accept(self, record: Dict[str, Any]) -> None:
         metadata = record.get("metadata") or record

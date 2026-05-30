@@ -15,6 +15,7 @@ from fetcher.services.youtube_data_client import (
     QuotaExceededError,
     YouTubeAPIError,
     YouTubeDataClient,
+    is_comments_disabled_error,
 )
 
 
@@ -48,10 +49,13 @@ class YouTubeKeyPool:
     def get_client(self) -> YouTubeDataClient:
         state = self._select_key()
         remaining = max(self.daily_quota_limit - state.used_units, 1)
+        rotator = self.proxy_rotator
         return YouTubeDataClient(
             api_key=state.api_key,
             daily_quota_limit=remaining,
-            proxy=self.proxy_rotator.next(),
+            proxy=rotator.next() if rotator else None,
+            on_proxy_success=rotator.record_success if rotator else None,
+            on_proxy_failure=rotator.record_failure if rotator else None,
         )
 
     def record_success(self, api_key: str, units: int | None = None) -> None:
@@ -61,6 +65,8 @@ class YouTubeKeyPool:
         self._save()
 
     def record_failure(self, api_key: str, error: Exception) -> None:
+        if is_comments_disabled_error(error):
+            return
         state = self.states[api_key]
         state.last_error = str(error)[:500]
         if isinstance(error, QuotaExceededError) or "quota" in str(error).lower():
@@ -98,6 +104,24 @@ class YouTubeKeyPool:
         self.state_path.parent.mkdir(parents=True, exist_ok=True)
         payload = {"keys": {key: state.__dict__ for key, state in self.states.items()}}
         self.state_path.write_text(json.dumps(payload, ensure_ascii=False, indent=2), encoding="utf-8")
+
+    def quota_stats(self) -> dict[str, int]:
+        now = utcnow()
+        available = 0
+        total_used = 0
+        for state in self.states.values():
+            total_used += int(state.used_units or 0)
+            if state.disabled_until:
+                disabled_until = datetime.fromisoformat(state.disabled_until)
+                if disabled_until > now:
+                    continue
+            if int(state.used_units or 0) < self.daily_quota_limit:
+                available += 1
+        return {
+            "keys_available": available,
+            "keys_total": len(self.states),
+            "quota_used_total": total_used,
+        }
 
 
 class YouTubeDiscoveryAdapter:
@@ -138,7 +162,8 @@ class YouTubeDiscoveryAdapter:
                     published_before=published_before,
                     order="date" if published_after or published_before else "relevance",
                 )
-                metadata = client.get_videos_metadata_batch([item.video_id for item in search.items])
+                video_ids = [item.video_id for item in search.items]
+                metadata = client.get_videos_metadata_batch(video_ids)
                 channel_ids = [item.channel_id for item in metadata if item.channel_id]
                 if channel_ids:
                     channels = {
@@ -219,6 +244,9 @@ class YouTubeDiscoveryAdapter:
                 self.key_pool.record_success(api_key, client.quota_tracker.used_units)
                 return comments
             except (QuotaExceededError, YouTubeAPIError) as exc:
+                if is_comments_disabled_error(exc):
+                    self.key_pool.record_success(api_key, client.quota_tracker.used_units)
+                    return []
                 last_error = exc
                 self.key_pool.record_failure(api_key, exc)
                 continue

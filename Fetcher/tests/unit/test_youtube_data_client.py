@@ -144,3 +144,17 @@ class TestYouTubeDataClient:
         assert channels[0].subscriber_count == 10
         assert channels[0].video_count == 2
 
+    def test_comments_403_disabled_fails_fast(self, client, mock_http_client):
+        response = MagicMock()
+        response.status_code = 403
+        response.text = '{"error":{"message":"The video identified by the videoId parameter has disabled comments."}}'
+        response.json.return_value = {
+            "error": {"message": "The video identified by the videoId parameter has disabled comments."}
+        }
+        mock_http_client.get.return_value = response
+
+        comments = list(client.iter_comments("vid1", max_count=10))
+
+        assert comments == []
+        assert mock_http_client.get.call_count == 1
+
