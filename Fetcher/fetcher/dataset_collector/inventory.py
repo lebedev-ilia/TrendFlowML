@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+from collections import Counter, defaultdict
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Dict, Iterable, Iterator, List, Set
@@ -164,6 +165,90 @@ def _load_videos_in_shards(state: DatasetState) -> Set[str]:
     return keys
 
 
+def _metadata_records_for_category(state: DatasetState, *, category: str | None = None) -> Iterator[dict]:
+    metadata_root = state.shards_dir / "metadata"
+    if not metadata_root.exists():
+        return
+    pattern = f"category={category}/part_*.json" if category else "**/part_*.json"
+    for shard_path in sorted(metadata_root.glob(pattern)):
+        if shard_path.name.endswith(".tmp"):
+            continue
+        try:
+            data = json.loads(shard_path.read_text(encoding="utf-8"))
+        except (OSError, json.JSONDecodeError):
+            continue
+        rows = data.values() if isinstance(data, dict) else data
+        if not isinstance(rows, Iterable):
+            continue
+        for row in rows:
+            if isinstance(row, dict):
+                yield row
+
+
+def _channel_stats(state: DatasetState, *, category: str | None = None) -> dict[str, Any]:
+    counts: Counter[str] = Counter()
+    for row in _metadata_records_for_category(state, category=category):
+        metadata = row.get("metadata") or {}
+        channel_id = (
+            metadata.get("channel_id")
+            or metadata.get("channelId")
+            or row.get("channel_id")
+            or metadata.get("channelTitle")
+            or "unknown"
+        )
+        counts[str(channel_id)] += 1
+    total = sum(counts.values())
+    top_count = counts.most_common(1)[0][1] if counts else 0
+    return {
+        "unique": len(counts),
+        "top_count": top_count,
+        "top_share": (top_count / total) if total else 0.0,
+        "average_videos_per_channel": (total / len(counts)) if counts else 0.0,
+    }
+
+
+def _snapshot_readiness(state: DatasetState, *, category: str | None = None) -> dict[str, Any]:
+    scheduled: dict[str, str] = {}
+    for row in iter_jsonl(state.schedule_path):
+        key = f"{row.get('platform') or 'youtube'}:{row.get('video_id')}"
+        if not row.get("video_id"):
+            continue
+        scheduled[key] = row.get("category") or "unknown"
+    if category:
+        scheduled = {key: cat for key, cat in scheduled.items() if cat == category}
+
+    completed: dict[str, set[int]] = defaultdict(set)
+    for row in iter_jsonl(state.snapshot_completion_path):
+        key = str(row.get("key") or "")
+        if not key or key not in scheduled:
+            continue
+        try:
+            index = int(row.get("snapshot_index"))
+        except (TypeError, ValueError):
+            continue
+        completed[key].add(index)
+
+    by_index = {
+        str(index): sum(1 for indexes in completed.values() if index in indexes)
+        for index in (1, 2, 3, 4)
+    }
+    ready_14_21 = sum(1 for indexes in completed.values() if 2 in indexes and 3 in indexes)
+    ready_7_14_21 = sum(
+        1
+        for indexes in completed.values()
+        if 1 in indexes and 2 in indexes and 3 in indexes
+    )
+    return {
+        "scheduled": len(scheduled),
+        "snapshot_7d": by_index["1"],
+        "snapshot_14d": by_index["2"],
+        "snapshot_21d": by_index["3"],
+        "snapshot_28d": by_index["4"],
+        "training_ready_14_21": ready_14_21,
+        "training_ready_7_14_21": ready_7_14_21,
+    }
+
+
 def rebuild_inventory_from_disk(
     state: DatasetState,
     *,
@@ -214,6 +299,17 @@ def compute_inventory_stats(
     hf_video_done = state.load_hf_video_upload_done()
     hf_shard_done = state.load_hf_shard_upload_done()
     enrich_done = state.load_metadata_enrich_done()
+    for row in iter_jsonl(state.metadata_enrich_done_path):
+        platform = row.get("platform") or "youtube"
+        shard = str(row.get("shard") or "")
+        category_name = row.get("category") or "unknown"
+        for part in Path(shard).parts:
+            if part.startswith("category="):
+                category_name = part.split("=", 1)[1] or category_name
+                break
+        video_id = row.get("video_id")
+        if video_id:
+            enrich_done.add(_video_key(platform, category_name, str(video_id)))
 
     download_pending_keys = _unique_queue_keys(
         state.download_dir / "queue.jsonl",
@@ -280,15 +376,29 @@ def compute_inventory_stats(
 
     videos_downloaded = len(download_done)
     videos_on_hf = len(hf_video_done)
-    videos_enriched = len(enrich_done)
+    enrich_on_hf = len(state.load_hf_enrich_upload_done())
+    enrich_root = state.shards_dir / "enrich"
+    videos_enriched = 0
+    if enrich_root.exists():
+        enrich_pattern = f"category={category}/part_*.json" if category else "**/part_*.json"
+        for enrich_path in enrich_root.glob(enrich_pattern):
+            try:
+                data = json.loads(enrich_path.read_text(encoding="utf-8"))
+            except (OSError, json.JSONDecodeError):
+                continue
+            if isinstance(data, dict):
+                videos_enriched += len(data)
     local_mp4 = _count_local_downloads(state, category=category)
+    channel_stats = _channel_stats(state, category=category)
+    snapshot_readiness = _snapshot_readiness(state, category=category)
 
     if category:
         videos_downloaded = sum(1 for k in download_done if f":{category}:" in k)
         videos_on_hf = sum(1 for k in hf_video_done if f":{category}:" in k)
-        videos_enriched = sum(
-            1 for row in iter_jsonl(state.metadata_enrich_done_path)
-            if row.get("shard") and f"category={category}" in str(row.get("shard"))
+        enrich_on_hf = sum(
+            1
+            for row in iter_jsonl(state.hf_enrich_upload_done_path)
+            if row.get("category") == category
         )
         download_pending_keys = {k for k in download_pending_keys if f":{category}:" in k}
         hf_video_pending_keys = {k for k in hf_video_pending_keys if f":{category}:" in k}
@@ -296,6 +406,26 @@ def compute_inventory_stats(
             k for k in hf_shard_pending_keys if f"category={category}" in k
         }
         enrich_pending_keys = {k for k in enrich_pending_keys if f":{category}:" in k}
+
+    videos_in_shards_count = len(videos_in_shards)
+    lifecycle = {
+        "accepted": videos_in_shards_count,
+        "enriched": videos_enriched,
+        "downloaded_or_on_hf": max(videos_downloaded, videos_on_hf),
+        "uploaded_metadata_shards": shards_on_hf,
+        "uploaded_enrich": enrich_on_hf,
+        "uploaded_video": videos_on_hf,
+        "lag_enrich": max(0, videos_in_shards_count - videos_enriched),
+        "lag_download": max(0, videos_in_shards_count - max(videos_downloaded, videos_on_hf)),
+        "lag_hf_video": max(0, videos_in_shards_count - videos_on_hf),
+        "lag_hf_enrich": max(0, videos_in_shards_count - enrich_on_hf),
+        "training_ready_snapshot0": videos_in_shards_count,
+        "training_ready_14_21": snapshot_readiness["training_ready_14_21"],
+    }
+
+    retry_dead_letters = list(iter_jsonl(state.queue_dead_letter_path))
+    if category:
+        retry_dead_letters = [row for row in retry_dead_letters if row.get("category") == category]
 
     return {
         "category": category,
@@ -310,9 +440,16 @@ def compute_inventory_stats(
             "downloaded_marked_done": videos_downloaded,
             "on_hf": videos_on_hf,
             "enriched": videos_enriched,
+            "enrich_on_hf": enrich_on_hf,
             "pending_download": len(download_pending_keys),
             "pending_hf_upload": len(hf_video_pending_keys),
             "pending_enrich": len(enrich_pending_keys),
+        },
+        "lifecycle": lifecycle,
+        "snapshots": snapshot_readiness,
+        "channels": channel_stats,
+        "queues": {
+            "dead_letter": len(retry_dead_letters),
         },
         "updated_at": utcnow().isoformat(),
     }

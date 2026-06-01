@@ -3,6 +3,7 @@ from __future__ import annotations
 from typing import Dict, Iterable, List, Tuple
 
 from fetcher.dataset_collector.age_buckets import allocate_counts, bucket_from_config
+from fetcher.dataset_collector.balancer import DatasetBalancer
 from fetcher.dataset_collector.checkpoint import DiscoveryCheckpoint
 from fetcher.dataset_collector.keyword_progress import KeywordProgressEntry
 from fetcher.dataset_collector.config import merged_filters
@@ -12,6 +13,8 @@ from fetcher.dataset_collector.metrics import (
     dataset_collector_videos_accepted_total,
     dataset_collector_videos_rejected_total,
     observe_video_metrics,
+    record_balancer_decision,
+    record_reject_reason,
     update_gauges,
 )
 from fetcher.dataset_collector.progress import ProgressReporter
@@ -34,6 +37,11 @@ class DatasetCollector:
         self.state = state
         self.adapters = adapters
         self.progress = progress
+        self.balancer = DatasetBalancer(
+            config.balancer_config,
+            state_root=state.root,
+            campaign_config=config,
+        )
 
     def discover_campaign(
         self,
@@ -166,14 +174,22 @@ class DatasetCollector:
                             )
 
                         try:
-                            for video in adapter.discover(
-                                category=category.name,
-                                query=keyword,
-                                limit=search_limit,
-                                published_after=published_after,
-                                published_before=published_before,
-                                time_interval=bucket_name,
-                            ):
+                            discover_kwargs = {
+                                "category": category.name,
+                                "query": keyword,
+                                "limit": search_limit,
+                                "published_after": published_after,
+                                "published_before": published_before,
+                                "time_interval": bucket_name,
+                            }
+                            if platform == "youtube":
+                                discover_kwargs.update(
+                                    self._youtube_search_params(
+                                        category,
+                                        keyword_index=keyword_idx,
+                                    )
+                                )
+                            for video in adapter.discover(**discover_kwargs):
                                 keyword_scanned += 1
                                 if bucket_accepted >= bucket_target:
                                     break
@@ -195,8 +211,32 @@ class DatasetCollector:
                                     )
                                     continue
 
+                                balancer_decision = self.balancer.decide(video)
+                                if self.balancer.enabled:
+                                    fill_ratios = {
+                                        (field, value): self.balancer.bucket_fill_ratio(field, value)
+                                        for field, value in balancer_decision.field_values.items()
+                                    }
+                                    record_balancer_decision(
+                                        category=video.category,
+                                        accepted=balancer_decision.accepted,
+                                        reason=balancer_decision.reason,
+                                        score=balancer_decision.score,
+                                        field_scores=balancer_decision.field_scores,
+                                        field_values=balancer_decision.field_values,
+                                        fill_ratios=fill_ratios,
+                                    )
+                                if not balancer_decision.accepted:
+                                    keyword_filtered += 1
+                                    session_rejected += self._handle_reject(
+                                        video,
+                                        balancer_decision.reason or "balancer_rejected",
+                                    )
+                                    continue
+
                                 self._attach_initial_comments(adapter, video)
                                 video_filter.accept(jsonable(video.dict()))
+                                self.balancer.observe_accept(video)
                                 self.state.mark_seen(video.dedup_key, category=category.name)
                                 self.state.append_schedule(
                                     build_schedule_entry(video, self.config.snapshot_schedule_days)
@@ -290,6 +330,16 @@ class DatasetCollector:
             return None
         return checkpoint
 
+    def _youtube_search_params(self, category: CategoryConfig, *, keyword_index: int) -> dict[str, str]:
+        languages = category.youtube_relevance_languages or self.config.youtube_relevance_languages
+        regions = category.youtube_region_codes or self.config.youtube_region_codes
+        params: dict[str, str] = {}
+        if languages:
+            params["relevance_language"] = languages[keyword_index % len(languages)]
+        if regions:
+            params["region_code"] = regions[keyword_index % len(regions)]
+        return params
+
     @staticmethod
     def _bucket_index(buckets: list, bucket_name: str | None) -> int:
         if bucket_name is None:
@@ -360,6 +410,7 @@ class DatasetCollector:
         if len(self.state._pending_rejected) >= self.config.shard_size:
             self.state.flush_pending(video.category, shard_size=self.config.shard_size, force=True)
         dataset_collector_videos_rejected_total.labels(category=video.category, reason=reason).inc()
+        record_reject_reason(video.category, reason)
         if self.progress:
             self.progress.record_reject()
             self.state.increment_session(rejected=1)

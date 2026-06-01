@@ -1,6 +1,9 @@
 from __future__ import annotations
 
+import json
 import os
+import time
+from datetime import datetime, timezone
 from pathlib import Path
 from typing import Callable, Iterable
 
@@ -32,6 +35,13 @@ def resolve_videos_repo_id(config: CampaignConfig, *, repo_id: str | None = None
     return target
 
 
+def resolve_enrich_repo_id(config: CampaignConfig, *, repo_id: str | None = None) -> str:
+    target = repo_id or config.hf_enrich_repo_id or config.hf_repo_id
+    if not target:
+        raise HuggingFaceUploadError("hf_enrich_repo_id / hf_repo_id is not configured")
+    return target
+
+
 def remote_shard_path(config: CampaignConfig, shard_relpath: str) -> str:
     prefix = (config.hf_shards_path_prefix or "").strip("/")
     rel = shard_relpath.lstrip("/")
@@ -43,12 +53,79 @@ def remote_video_path(config: CampaignConfig, *, category: str, video_id: str) -
     return f"{prefix}/{category}/{video_id}.mp4"
 
 
+def remote_enrich_path(config: CampaignConfig, enrich_relpath: str) -> str:
+    prefix = (config.hf_enrich_path_prefix or "enrich").strip("/")
+    rel = enrich_relpath.lstrip("/")
+    if rel.startswith("shards/enrich/"):
+        rel = rel.removeprefix("shards/enrich/")
+    return f"{prefix}/{rel}" if prefix else rel
+
+
 def get_hf_api(config: CampaignConfig):
     try:
         from huggingface_hub import HfApi
     except ImportError as exc:
         raise HuggingFaceUploadError("Install huggingface_hub to enable HF uploads") from exc
     return HfApi(token=resolve_hf_token(config))
+
+
+def wait_for_commit_slot(
+    *,
+    state_dir: Path,
+    repo_id: str,
+    min_interval_seconds: int,
+    hourly_limit: int = 100,
+) -> None:
+    """Throttle commits per HF repo using both min interval and rolling-hour cap."""
+    if min_interval_seconds <= 0 and hourly_limit <= 0:
+        return
+    log_path = state_dir / "hf_commit_log.jsonl"
+    last_ts: float | None = None
+    recent: list[float] = []
+    now = time.time()
+    if log_path.exists():
+        for line in log_path.read_text(encoding="utf-8").splitlines():
+            if not line.strip():
+                continue
+            try:
+                row = json.loads(line)
+            except json.JSONDecodeError:
+                continue
+            if row.get("repo_id") == repo_id:
+                ts = float(row.get("ts") or 0)
+                last_ts = ts
+                if ts > now - 3600:
+                    recent.append(ts)
+    if last_ts:
+        wait = min_interval_seconds - (now - last_ts)
+        if wait > 0:
+            time.sleep(wait)
+            now = time.time()
+    if hourly_limit > 0:
+        recent = sorted(ts for ts in recent if ts > now - 3600)
+        if len(recent) >= hourly_limit:
+            wait = 3600 - (now - recent[0]) + 1
+            if wait > 0:
+                time.sleep(wait)
+
+
+def record_commit(
+    *,
+    state_dir: Path,
+    repo_id: str,
+    files: int,
+) -> None:
+    log_path = state_dir / "hf_commit_log.jsonl"
+    log_path.parent.mkdir(parents=True, exist_ok=True)
+    payload = {
+        "repo_id": repo_id,
+        "files": files,
+        "ts": time.time(),
+        "committed_at": datetime.now(timezone.utc).isoformat(),
+    }
+    with log_path.open("a", encoding="utf-8") as fh:
+        fh.write(json.dumps(payload, ensure_ascii=False))
+        fh.write("\n")
 
 
 def upload_local_file(
@@ -67,6 +144,53 @@ def upload_local_file(
         repo_id=repo_id,
         repo_type="dataset",
     )
+
+
+def upload_local_files_commit(
+    config: CampaignConfig,
+    files: Iterable[tuple[Path, str]],
+    *,
+    repo_id: str,
+    commit_message: str,
+    state_dir: Path | None = None,
+) -> None:
+    items = [(path, remote.lstrip("/")) for path, remote in files if path.is_file()]
+    if not items:
+        return
+    if state_dir is not None:
+        wait_for_commit_slot(
+            state_dir=state_dir,
+            repo_id=repo_id,
+            min_interval_seconds=config.hf_commit_min_interval_seconds,
+            hourly_limit=config.hf_commit_hourly_limit,
+        )
+    api = get_hf_api(config)
+    if len(items) == 1:
+        local_path, remote = items[0]
+        api.upload_file(
+            path_or_fileobj=str(local_path),
+            path_in_repo=remote,
+            repo_id=repo_id,
+            repo_type="dataset",
+            commit_message=commit_message,
+        )
+    else:
+        try:
+            from huggingface_hub import CommitOperationAdd
+        except ImportError as exc:
+            raise HuggingFaceUploadError("Install huggingface_hub to enable batch commits") from exc
+        operations = [
+            CommitOperationAdd(path_in_repo=remote, path_or_fileobj=str(local_path))
+            for local_path, remote in items
+        ]
+        api.create_commit(
+            repo_id=repo_id,
+            repo_type="dataset",
+            operations=operations,
+            commit_message=commit_message,
+        )
+    if state_dir is not None:
+        record_commit(state_dir=state_dir, repo_id=repo_id, files=len(items))
 
 
 def upload_paths(

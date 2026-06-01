@@ -2,6 +2,7 @@
   "name": "dataset-100k",
   "baseline_accepted": 106103,
   "output_dir": "dataset_runs/dataset-100k",
+  "balancer_config_file": "dataset_balancer.json",
   "categories": [
     {
       "name": "Avto_i_transport",
@@ -295,16 +296,23 @@
   "hf_repo_id": "Ilialebedev/dataset_100k_v2",
   "hf_shards_repo_id": "Ilialebedev/dataset_100k_v2_shards",
   "hf_videos_repo_id": "Ilialebedev/dataset_100k_v2_videos1",
+  "hf_enrich_repo_id": "Ilialebedev/dataset_100k_v2_enrich",
   "hf_shards_path_prefix": "",
   "hf_videos_path_prefix": "",
+  "hf_enrich_path_prefix": "",
   "hf_token_env": "HF_TOKEN",
   "hf_upload_enabled": true,
   "hf_upload_every_shards": 1,
+  "hf_commit_min_interval_seconds": 37,
+  "hf_shard_upload_batch_files": 25,
+  "hf_video_upload_batch_files": 25,
+  "hf_enrich_upload_batch_files": 25,
   "hf_path_prefix": "",
   "cookie_files_dir": "fetcher/dataset_collector/cookies",
   "cookie_file_glob": "*.txt",
   "youtube_keys_file": "fetcher/dataset_collector/keys/keys.txt",
   "proxies_file": "fetcher/dataset_collector/proxies/proxies.txt",
   "proxy_default_scheme": "http",
-  "include_local_proxies_for_discovery": false
+  "include_local_proxies_for_discovery": false,
+  "use_proxies_for_discovery": false
 }

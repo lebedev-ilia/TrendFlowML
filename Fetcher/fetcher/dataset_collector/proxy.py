@@ -95,6 +95,9 @@ def configured_proxies(
     download_only: bool = False,
 ) -> list[str]:
     """Return proxy list for discovery/enrich (default) or download-only pool."""
+    if not download_only and config is not None and not config.use_proxies_for_discovery:
+        return []
+
     proxies: list[str] = []
     if config is not None and config.proxies_file:
         proxy_path = Path(config.proxies_file)

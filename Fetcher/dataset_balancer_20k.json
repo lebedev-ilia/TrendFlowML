@@ -1,0 +1,84 @@
+{
+  "enabled": true,
+  "mode": "mixed",
+  "default_action": "accept",
+  "min_accept_score": 0.35,
+  "random_seed": 1337,
+  "fields": {
+    "language": {
+      "coefficient": 0.6,
+      "unknown_policy": "separate_cap",
+      "unknown_max_share": 0.1,
+      "targets": {
+        "ru": 0.5,
+        "en": 0.5
+      }
+    },
+    "country": {
+      "coefficient": 0.4,
+      "unknown_policy": "separate_cap",
+      "unknown_max_share": 0.25,
+      "targets": {
+        "RU": 0.35,
+        "US": 0.35,
+        "GB": 0.1,
+        "CA": 0.05,
+        "UA": 0.05,
+        "KZ": 0.05,
+        "other": 0.05
+      }
+    },
+    "duration_seconds": {
+      "coefficient": 0.55,
+      "buckets": [[4, 29], [30, 59], [60, 119], [120, 299], [300, 599], [600, 899], [900, 1500]],
+      "targets": [0.2, 0.2, 0.18, 0.16, 0.12, 0.08, 0.06]
+    },
+    "view_count": {
+      "coefficient": 0.5,
+      "buckets": [[0, 999], [1000, 4999], [5000, 9999], [10000, 49999], [50000, 99999], [100000, null]],
+      "targets": [0.28, 0.24, 0.16, 0.16, 0.08, 0.08]
+    },
+    "like_count": {
+      "coefficient": 0.25,
+      "buckets": [[0, 9], [10, 49], [50, 99], [100, 499], [500, 999], [1000, 4999], [5000, null]],
+      "targets": [0.28, 0.24, 0.14, 0.16, 0.08, 0.06, 0.04]
+    },
+    "comment_count": {
+      "coefficient": 0.2,
+      "buckets": [[0, 0], [1, 4], [5, 9], [10, 49], [50, 99], [100, 499], [500, null]],
+      "targets": [0.35, 0.22, 0.12, 0.14, 0.07, 0.06, 0.04]
+    },
+    "time_interval": {
+      "coefficient": 0.65,
+      "targets": "campaign_weights"
+    },
+    "comments_available": {
+      "coefficient": 0.15,
+      "targets": {
+        "yes": 0.45,
+        "no": 0.55
+      }
+    },
+    "channel": {
+      "coefficient": 0.75,
+      "max_share": 0.005
+    }
+  },
+  "post_enrich_fields": {
+    "video_resolution": {
+      "coefficient": 0,
+      "targets": "uniform"
+    },
+    "subtitle_presence": {
+      "coefficient": 0,
+      "targets": {
+        "with_subtitles": 0.35,
+        "without_subtitles": 0.65
+      }
+    },
+    "subtitle_language": {
+      "coefficient": 0,
+      "targets": "uniform"
+    }
+  }
+}

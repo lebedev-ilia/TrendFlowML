@@ -6,8 +6,8 @@ from typing import Any, Dict, Iterable, Iterator
 
 from fetcher.dataset_collector.schemas import CollectedVideo
 
-# Languages kept in shard metadata; full timedtext URLs are omitted to avoid multi-MiB bloat.
-CAPTION_LANGS = frozenset({"ru", "en", "en-US", "en-GB"})
+# Preferred caption languages in shards (ext list only; no timedtext URLs).
+CAPTION_LANG_PREFERENCE = ("ru", "en")
 
 
 def _jsonable(payload: Any) -> Any:
@@ -88,53 +88,117 @@ def extract_ytdlp_formats(info: dict) -> list[dict]:
     return formats
 
 
-def _caption_lang_allowed(lang: str) -> bool:
-    normalized = lang.replace("_", "-").lower()
-    if lang in CAPTION_LANGS:
-        return True
-    if normalized == "ru":
-        return True
-    return normalized.startswith("en")
+def _resolution_height(value: str | None) -> int:
+    if not value:
+        return 0
+    if "x" in value:
+        try:
+            return int(value.rsplit("x", 1)[1])
+        except ValueError:
+            return 0
+    digits = "".join(ch for ch in value if ch.isdigit())
+    return int(digits) if digits else 0
+
+
+def extract_best_enrich_formats(info: dict, *, download_cap_height: int = 1080) -> list[dict]:
+    """Keep global max format and max format download can fetch (<=1080 by default)."""
+    formats = extract_ytdlp_formats(info)
+    if not formats:
+        return []
+    ordered = sorted(formats, key=lambda item: _resolution_height(item.get("resolution")))
+    best_overall = ordered[-1]
+    downloadable = [fmt for fmt in ordered if _resolution_height(fmt.get("resolution")) <= download_cap_height]
+    selected = [best_overall]
+    if downloadable:
+        selected.append(downloadable[-1])
+    out: list[dict] = []
+    seen: set[tuple[Any, Any]] = set()
+    for fmt in selected:
+        key = (fmt.get("fps"), fmt.get("resolution"))
+        if key not in seen:
+            out.append(fmt)
+            seen.add(key)
+    return out
+
+
+def normalize_caption_lang(lang: str) -> str | None:
+    """Map yt-dlp language codes to shard keys: ru or en."""
+    normalized = str(lang).replace("_", "-").lower()
+    if normalized == "ru" or normalized.startswith("ru-"):
+        return "ru"
+    if normalized == "en" or normalized.startswith("en"):
+        return "en"
+    return None
 
 
 def slim_caption_tracks(tracks: dict | None) -> dict:
-    """Keep ru/en caption tracks without download URLs (ext list only)."""
+    """Keep ru/en caption tracks (merge en-US/en-GB → en); ext list only, no URLs."""
     if not tracks or not isinstance(tracks, dict):
         return {}
-    slim: Dict[str, Any] = {}
+    exts_by_lang: Dict[str, list[str]] = {}
     for lang, entries in tracks.items():
-        if not _caption_lang_allowed(str(lang)):
+        canon = normalize_caption_lang(str(lang))
+        if not canon:
             continue
-        exts: list[str] = []
+        bucket = exts_by_lang.setdefault(canon, [])
         for entry in entries or []:
             if not isinstance(entry, dict):
                 continue
             ext = entry.get("ext")
-            if ext and ext not in exts:
-                exts.append(str(ext))
-        if exts:
-            slim[str(lang)] = [{"ext": ext} for ext in exts]
+            if ext and str(ext) not in bucket:
+                bucket.append(str(ext))
+    slim: Dict[str, Any] = {}
+    for lang in CAPTION_LANG_PREFERENCE:
+        if lang in exts_by_lang:
+            slim[lang] = [{"ext": ext} for ext in exts_by_lang[lang]]
     return slim
 
 
 def metadata_captions_are_bloated(metadata: dict) -> bool:
+    """True when caption entries still carry timedtext URLs (not plain text bodies)."""
     for key in ("automatic_captions", "subtitles"):
         block = metadata.get(key) or {}
         if not isinstance(block, dict):
             continue
         for entries in block.values():
-            if not isinstance(entries, list):
-                continue
-            for entry in entries:
-                if isinstance(entry, dict) and entry.get("url"):
-                    return True
+            if isinstance(entries, list):
+                for entry in entries:
+                    if isinstance(entry, dict) and entry.get("url"):
+                        return True
+            elif isinstance(entries, dict) and entries.get("url"):
+                return True
     return False
 
 
 def compact_training_metadata(metadata: dict) -> dict:
+    """Strip caption URLs; keep ext+text payloads from enrich."""
     merged = dict(metadata)
-    merged["automatic_captions"] = slim_caption_tracks(merged.get("automatic_captions"))
-    merged["subtitles"] = slim_caption_tracks(merged.get("subtitles"))
+
+    def _compact_block(block: dict | None) -> dict:
+        if not block or not isinstance(block, dict):
+            return {}
+        out: Dict[str, Any] = {}
+        for lang, val in block.items():
+            canon = normalize_caption_lang(str(lang))
+            if not canon:
+                continue
+            if isinstance(val, dict) and val.get("text"):
+                entry = {
+                    "language": canon,
+                    "ext": val.get("ext") or "vtt",
+                    "text": val.get("text"),
+                }
+                if val.get("cues"):
+                    entry["cues"] = val.get("cues")
+                out[canon] = entry
+            elif isinstance(val, list):
+                slim = slim_caption_tracks({lang: val})
+                if canon in slim:
+                    out[canon] = slim[canon][0] if slim[canon] else {}
+        return out
+
+    merged["automatic_captions"] = _compact_block(merged.get("automatic_captions"))
+    merged["subtitles"] = _compact_block(merged.get("subtitles"))
     return merged
 
 
@@ -150,6 +214,19 @@ def extract_ytdlp_thumbnails(info: dict) -> list[dict]:
                 entry[key] = thumb.get(key)
         thumbnails.append(entry)
     return thumbnails
+
+
+def extract_best_ytdlp_thumbnails(info: dict, *, limit: int = 2) -> list[dict]:
+    thumbnails = extract_ytdlp_thumbnails(info)
+    return sorted(
+        thumbnails,
+        key=lambda item: (
+            item.get("preference") if item.get("preference") is not None else -999,
+            item.get("height") or 0,
+            item.get("width") or 0,
+        ),
+        reverse=True,
+    )[:limit]
 
 
 def merge_ytdlp_into_training_metadata(metadata: dict, info: dict) -> dict:
@@ -179,21 +256,28 @@ def merge_ytdlp_into_training_metadata(metadata: dict, info: dict) -> dict:
     thumbnails_ytdlp = extract_ytdlp_thumbnails(info)
     if thumbnails_ytdlp:
         merged["thumbnails_ytdlp"] = thumbnails_ytdlp
-    if info.get("subtitles") is not None:
-        merged["subtitles"] = slim_caption_tracks(info.get("subtitles") or {})
-    if info.get("automatic_captions") is not None:
-        merged["automatic_captions"] = slim_caption_tracks(info.get("automatic_captions") or {})
+    from fetcher.dataset_collector.caption_text import build_caption_metadata
+
+    caption_manual = info.get("_caption_texts_manual") or {}
+    caption_auto = info.get("_caption_texts_auto") or {}
+    merged["subtitles"] = build_caption_metadata(info.get("subtitles"), caption_manual)
+    merged["automatic_captions"] = build_caption_metadata(
+        info.get("automatic_captions"), caption_auto
+    )
     if info.get("chapters") is not None:
         merged["chapters"] = info.get("chapters")
     return compact_training_metadata(merged)
 
 
 def training_entry_needs_ytdlp_enrichment(entry: dict) -> bool:
+    from fetcher.dataset_collector.caption_text import captions_need_text_download
+
+    metadata = entry.get("metadata") or {}
     enriched = entry.get("_enriched") or {}
     if enriched.get("source") == "yt_dlp":
-        return False
-    metadata = entry.get("metadata") or {}
-    if metadata.get("formats") or metadata.get("thumbnails_ytdlp"):
+        return captions_need_text_download(metadata)
+    has_core = bool(metadata.get("formats") or metadata.get("thumbnails_ytdlp"))
+    if has_core and not captions_need_text_download(metadata):
         return False
     return True
 

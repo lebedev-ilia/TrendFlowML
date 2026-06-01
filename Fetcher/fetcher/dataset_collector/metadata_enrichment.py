@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import json
 import sys
+import time
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Iterable
@@ -9,18 +10,26 @@ from typing import Any, Iterable
 import yt_dlp
 from yt_dlp.utils import DownloadError
 
+from fetcher.dataset_collector.caption_text import fetch_caption_texts_from_info
 from fetcher.dataset_collector.cookies import CookieRotator, apply_cookiefile
 from fetcher.dataset_collector.config import merged_filters
 from fetcher.dataset_collector.filters import VideoFilter
 from fetcher.dataset_collector.proxy import ProxyRotator, configured_proxies
+from fetcher.dataset_collector.queue_retries import (
+    load_dead_letter_keys,
+    queue_item_key,
+    record_queue_failure,
+)
 from fetcher.dataset_collector.schemas import CampaignConfig
 from fetcher.dataset_collector.state import DatasetState, atomic_write_json, iter_jsonl
 from fetcher.dataset_collector.training_format import (
     compact_training_metadata,
-    merge_ytdlp_into_training_metadata,
+    extract_best_enrich_formats,
+    extract_best_ytdlp_thumbnails,
     metadata_captions_are_bloated,
     training_entry_needs_ytdlp_enrichment,
 )
+from fetcher.dataset_collector.worker_shutdown import should_stop
 from fetcher.dataset_collector.worker_logging import (
     count_jsonl_lines,
     log_kv_block,
@@ -28,6 +37,7 @@ from fetcher.dataset_collector.worker_logging import (
     log_pass_header,
     worker_log,
 )
+from fetcher.dataset_collector.ytdlp_logging import YtdlpEnrichLogger
 
 
 def _utcnow() -> datetime:
@@ -63,6 +73,11 @@ def fetch_ytdlp_info(
         "quiet": True,
         "no_warnings": True,
         "ignore_no_formats_error": True,
+        # Video file is not downloaded; caption text is fetched from track URLs below.
+        "writesubtitles": False,
+        "writeautomaticsub": False,
+        "subtitleslangs": ["ru", "en"],
+        "logger": YtdlpEnrichLogger(),
     }
     if proxy:
         ydl_opts["proxy"] = proxy
@@ -70,6 +85,10 @@ def fetch_ytdlp_info(
     try:
         with yt_dlp.YoutubeDL(ydl_opts) as ydl:
             info = ydl.extract_info(url, download=False)
+            if info:
+                manual, auto = fetch_caption_texts_from_info(info, urlopen=ydl.urlopen)
+                info["_caption_texts_manual"] = manual
+                info["_caption_texts_auto"] = auto
         if proxy_rotator and proxy:
             proxy_rotator.record_success(proxy)
         if not info:
@@ -87,10 +106,46 @@ def fetch_ytdlp_info(
         return None
 
 
-def patch_training_entry(entry: dict, info: dict) -> None:
-    metadata = entry.get("metadata") or {}
-    entry["metadata"] = merge_ytdlp_into_training_metadata(metadata, info)
-    entry["_enriched"] = _enriched_marker()
+def build_enrich_entry(
+    *,
+    entry: dict,
+    info: dict,
+    video_id: str,
+    category: str,
+    source_shard: str,
+    rejected_reason: str | None = None,
+) -> dict:
+    from fetcher.dataset_collector.caption_text import build_caption_metadata
+
+    subtitles = build_caption_metadata(
+        info.get("subtitles"),
+        info.get("_caption_texts_manual") or {},
+    )
+    automatic_captions = build_caption_metadata(
+        info.get("automatic_captions"),
+        info.get("_caption_texts_auto") or {},
+    )
+    return {
+        "video_id": video_id,
+        "source_shard": source_shard,
+        "thumbnails_ytdlp": extract_best_ytdlp_thumbnails(info, limit=2),
+        "formats": extract_best_enrich_formats(info, download_cap_height=1080),
+        "subtitles": subtitles,
+        "automatic_captions": automatic_captions,
+        "_enriched": _enriched_marker(),
+        "rejected": rejected_reason is not None,
+        "rejected_reason": rejected_reason,
+    }
+
+
+def write_enrich_entry(
+    state: DatasetState,
+    *,
+    category: str,
+    video_id: str,
+    payload: dict,
+) -> Path:
+    return state.append_enrich_record(category=category, video_id=video_id, payload=payload)
 
 
 def _resolve_category_filters(config: CampaignConfig, category: str) -> dict:
@@ -195,6 +250,7 @@ def enrich_shard_video(
         return "ok"
 
     worker_log("enrich", f"yt-dlp fetch {video_id} …")
+    started_at = time.perf_counter()
     info = fetch_ytdlp_info(url, cookie_rotator=cookie_rotator, proxy_rotator=proxy_rotator)
     if info is None:
         worker_log("enrich", f"FAIL {video_id}: yt-dlp returned no info")
@@ -206,20 +262,48 @@ def enrich_shard_video(
         metadata=entry.get("metadata") or {},
     )
     if not decision.accepted:
-        _reject_enriched_video(
-            state,
-            data=data,
-            shard_path=shard_path,
+        reason = decision.reason or "post_enrich_rejected"
+        payload = build_enrich_entry(
+            entry=entry,
+            info=info,
             video_id=video_id,
             category=category,
-            entry=entry,
-            reason=decision.reason or "post_enrich_rejected",
+            source_shard=shard_relpath,
+            rejected_reason=reason,
         )
+        enrich_path = write_enrich_entry(state, category=category, video_id=video_id, payload=payload)
+        state.record_performance_event(
+            "enrich",
+            {
+                "platform": "youtube",
+                "video_id": video_id,
+                "category": category,
+                "seconds": round(time.perf_counter() - started_at, 3),
+                "result": "rejected",
+            },
+        )
+        worker_log("enrich", f"REJECT {video_id}: {reason} (enrich payload will be queued for HF on flush)")
         return "rejected"
 
-    patch_training_entry(entry, info)
-    atomic_write_json(shard_path, data)
-    worker_log("enrich", f"OK {video_id} patched in {shard_relpath}")
+    payload = build_enrich_entry(
+        entry=entry,
+        info=info,
+        video_id=video_id,
+        category=category,
+        source_shard=shard_relpath,
+    )
+    enrich_path = write_enrich_entry(state, category=category, video_id=video_id, payload=payload)
+    state.record_performance_event(
+        "enrich",
+        {
+            "platform": "youtube",
+            "video_id": video_id,
+            "category": category,
+            "seconds": round(time.perf_counter() - started_at, 3),
+            "result": "ok",
+        },
+    )
+    worker_log("enrich", f"OK {video_id} enriched locally -> {enrich_path.relative_to(state.root)}")
     return "ok"
 
 
@@ -273,13 +357,18 @@ def run_metadata_enrich_queue(
     cookie_rotator: CookieRotator | None = None,
 ) -> dict[str, int]:
     cookie_rotator = cookie_rotator or CookieRotator.from_config(config)
-    enrich_proxies = configured_proxies(config=config)
+    enrich_proxies = configured_proxies(config=config, download_only=False)
     if enrich_proxies:
         worker_log("enrich", f"proxies: {', '.join(enrich_proxies)}")
-    proxy_rotator = ProxyRotator(proxies=enrich_proxies, config=config)
+    else:
+        worker_log("enrich", "proxies: direct (use_proxies_for_discovery=false)")
+    proxy_rotator = ProxyRotator(proxies=enrich_proxies) if enrich_proxies else None
     log_pass_header("enrich", "pass start")
 
     done_keys = state.load_metadata_enrich_done()
+    hf_enrich_done = state.load_hf_enrich_upload_done()
+    hf_enrich_queued = state.load_hf_enrich_upload_queued()
+    dead_letter_keys = load_dead_letter_keys(state, service="enrich")
     queue_path = state.metadata_enrich_queue_path
     queue_lines = count_jsonl_lines(queue_path)
 
@@ -289,6 +378,8 @@ def run_metadata_enrich_queue(
             ("queue_file", queue_path),
             ("queue_lines", queue_lines),
             ("already_done", len(done_keys)),
+            ("already_on_hf", len(hf_enrich_done)),
+            ("pending_hf_upload", len(hf_enrich_queued - hf_enrich_done)),
             ("category_filter", category or "all"),
             ("limit_this_pass", limit if limit is not None else "none"),
         ],
@@ -305,6 +396,9 @@ def run_metadata_enrich_queue(
     attempted = 0
 
     for item in iter_metadata_enrich_queue(queue_path):
+        if should_stop():
+            worker_log("enrich", "shutdown requested — stopping pass")
+            break
         if limit is not None and results["enriched"] + results["failed"] + results["rejected"] >= limit:
             worker_log("enrich", f"limit reached ({limit}), stopping this pass")
             break
@@ -327,9 +421,18 @@ def run_metadata_enrich_queue(
             continue
 
         key = f"{platform}:{video_id}"
-        if key in done_keys:
+        retry_key = queue_item_key("enrich", item)
+        if retry_key in dead_letter_keys:
+            results["skipped"] += 1
+            skip_reasons["dead_letter"] = skip_reasons.get("dead_letter", 0) + 1
+            continue
+        if key in done_keys or key in hf_enrich_done:
             results["skipped"] += 1
             skip_reasons["already_done"] = skip_reasons.get("already_done", 0) + 1
+            continue
+        if key in hf_enrich_queued:
+            results["skipped"] += 1
+            skip_reasons["pending_hf_upload"] = skip_reasons.get("pending_hf_upload", 0) + 1
             continue
 
         attempted += 1
@@ -350,15 +453,24 @@ def run_metadata_enrich_queue(
             proxy_rotator=proxy_rotator,
         )
         if ok == "ok":
-            state.mark_metadata_enrich_done(key, video_id=video_id, shard=shard_relpath)
-            done_keys.add(key)
+            hf_enrich_queued.add(key)
             results["enriched"] += 1
         elif ok == "rejected":
-            state.mark_metadata_enrich_done(key, video_id=video_id, shard=shard_relpath)
-            done_keys.add(key)
+            hf_enrich_queued.add(key)
             results["rejected"] += 1
         else:
             results["failed"] += 1
+            if record_queue_failure(
+                state,
+                service="enrich",
+                item=item,
+                error="yt-dlp enrich failed",
+            ):
+                dead_letter_keys.add(retry_key)
+
+    written_enrich_shards = state.flush_all_enrich_pending()
+    if written_enrich_shards:
+        worker_log("enrich", f"flushed enrich shards: {len(written_enrich_shards)}")
 
     if skip_reasons:
         log_kv_block("enrich", [(f"skipped_{k}", v) for k, v in sorted(skip_reasons.items())])

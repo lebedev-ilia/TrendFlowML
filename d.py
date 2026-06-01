@@ -83,9 +83,10 @@ def parse_youtube_api(
             f"create {keys_path or 'keys file'}"
         )
 
+    discovery_proxies = configured_proxies(config=config, download_only=False)
     pool = YouTubeKeyPool(
         keys,
-        proxy_rotator=ProxyRotator(proxies=configured_proxies(config=config, download_only=False)),
+        proxy_rotator=ProxyRotator(proxies=discovery_proxies) if discovery_proxies else None,
     )
     adapter = YouTubeDiscoveryAdapter(pool)
     client = pool.get_client()

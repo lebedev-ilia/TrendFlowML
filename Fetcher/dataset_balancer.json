@@ -1,0 +1,73 @@
+{
+  "enabled": true,
+  "mode": "mixed",
+  "default_action": "accept",
+  "min_accept_score": 0.35,
+  "random_seed": 42,
+  "fields": {
+    "language": {
+      "coefficient": 0.5,
+      "unknown_policy": "separate_cap",
+      "unknown_max_share": 0.15,
+      "targets": "uniform"
+    },
+    "country": {
+      "coefficient": 0.65,
+      "unknown_policy": "separate_cap",
+      "unknown_max_share": 0.2,
+      "targets": "uniform"
+    },
+    "duration_seconds": {
+      "coefficient": 0.7,
+      "buckets": [[4, 29], [30, 59], [60, 119], [120, 299], [300, 599], [600, 899], [900, 1500]],
+      "targets": "uniform"
+    },
+    "view_count": {
+      "coefficient": 0.6,
+      "buckets": [[0, 999], [1000, 4999], [5000, 9999], [10000, 49999], [50000, 99999], [100000, null]],
+      "targets": [0.2, 0.2, 0.18, 0.17, 0.13, 0.12]
+    },
+    "like_count": {
+      "coefficient": 0.35,
+      "buckets": [[0, 9], [10, 49], [50, 99], [100, 499], [500, 999], [1000, 4999], [5000, null]],
+      "targets": "uniform"
+    },
+    "comment_count": {
+      "coefficient": 0.3,
+      "buckets": [[0, 0], [1, 4], [5, 9], [10, 49], [50, 99], [100, 499], [500, null]],
+      "targets": "uniform"
+    },
+    "time_interval": {
+      "coefficient": 0.45,
+      "targets": "campaign_weights"
+    },
+    "comments_available": {
+      "coefficient": 0.2,
+      "targets": {
+        "yes": 0.5,
+        "no": 0.5
+      }
+    },
+    "channel": {
+      "coefficient": 0.7,
+      "max_share": 0.01
+    }
+  },
+  "post_enrich_fields": {
+    "video_resolution": {
+      "coefficient": 0,
+      "targets": "uniform"
+    },
+    "subtitle_presence": {
+      "coefficient": 0,
+      "targets": {
+        "with_subtitles": 0.35,
+        "without_subtitles": 0.65
+      }
+    },
+    "subtitle_language": {
+      "coefficient": 0,
+      "targets": "uniform"
+    }
+  }
+}

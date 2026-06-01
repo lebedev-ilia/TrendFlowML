@@ -4,9 +4,16 @@ global:
   evaluation_interval: 10s
 
 scrape_configs:
-  - job_name: dataset-collector
+  - job_name: dataset-collector-discover
     metrics_path: /metrics
     static_configs:
       - targets: ["host.docker.internal:9095"]
         labels:
-          service: dataset-collector
+          service: dataset-collector-discover
+
+  - job_name: dataset-collector-workers
+    metrics_path: /metrics
+    static_configs:
+      - targets: ["host.docker.internal:9096"]
+        labels:
+          service: dataset-collector-workers

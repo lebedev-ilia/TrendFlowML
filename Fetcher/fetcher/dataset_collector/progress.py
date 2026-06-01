@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import time
 from typing import TYPE_CHECKING, Any, Dict, Optional
 
 if TYPE_CHECKING:
@@ -24,6 +25,7 @@ class ProgressReporter:
         self.session_accepted = 0
         self.session_rejected = 0
         self._session_quota_baseline = self._total_quota_used()
+        self._session_started_monotonic = time.monotonic()
 
     def record_accept(self) -> None:
         self.session_accepted += 1
@@ -53,6 +55,7 @@ class ProgressReporter:
             "session_accepted": session_accepted,
             "session_rejected": self.session_rejected,
             "session_quota_units": self.session_quota_used(),
+            "session_elapsed_seconds": time.monotonic() - self._session_started_monotonic,
             "keys_available": key_stats.get("keys_available", 0),
             "keys_total": key_stats.get("keys_total", 0),
         }

@@ -38,7 +38,7 @@ class YouTubeKeyPool:
     ) -> None:
         self.state_path = state_path
         self.daily_quota_limit = daily_quota_limit
-        self.proxy_rotator = proxy_rotator or ProxyRotator()
+        self.proxy_rotator = proxy_rotator
         self.states: Dict[str, YouTubeKeyState] = {
             key: YouTubeKeyState(api_key=key) for key in api_keys if key
         }
@@ -146,6 +146,8 @@ class YouTubeDiscoveryAdapter:
         published_after: Optional[datetime] = None,
         published_before: Optional[datetime] = None,
         time_interval: Optional[str] = None,
+        relevance_language: Optional[str] = None,
+        region_code: Optional[str] = None,
     ) -> Iterable[CollectedVideo]:
         collected = 0
         page_token: Optional[str] = None
@@ -160,6 +162,8 @@ class YouTubeDiscoveryAdapter:
                     max_results=min(50, limit - collected),
                     published_after=published_after,
                     published_before=published_before,
+                    relevance_language=relevance_language,
+                    region_code=region_code,
                     order="date" if published_after or published_before else "relevance",
                 )
                 video_ids = [item.video_id for item in search.items]

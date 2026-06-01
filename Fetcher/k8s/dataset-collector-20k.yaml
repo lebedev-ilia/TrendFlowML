@@ -1,0 +1,156 @@
+apiVersion: v1
+kind: Namespace
+metadata:
+  name: trendflow-fetcher
+---
+apiVersion: v1
+kind: Secret
+metadata:
+  name: dataset-collector-secrets
+  namespace: trendflow-fetcher
+type: Opaque
+stringData:
+  HF_TOKEN: "replace-me"
+  FETCHER_YOUTUBE_DATA_API_KEYS: "replace-me"
+---
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata:
+  name: dataset-collector-state
+  namespace: trendflow-fetcher
+spec:
+  accessModes:
+    - ReadWriteMany
+  resources:
+    requests:
+      storage: 500Gi
+---
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: dataset-collector-config
+  namespace: trendflow-fetcher
+data:
+  campaign_path: "/app/dataset_campaign_20k.json"
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: dataset-collector-workers
+  namespace: trendflow-fetcher
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: dataset-collector-workers
+  template:
+    metadata:
+      labels:
+        app: dataset-collector-workers
+    spec:
+      containers:
+        - name: workers
+          image: trendflow-fetcher/dataset-collector:20k
+          imagePullPolicy: IfNotPresent
+          command:
+            - python
+            - -m
+            - fetcher.dataset_collector.cli
+          args:
+            - run-workers
+            - /app/dataset_campaign_20k.json
+            - --interval
+            - "120"
+            - --metrics-port
+            - "9096"
+            - --lease-name
+            - k8s-workers
+            - --lease-owner
+            - k8s-workers
+          envFrom:
+            - secretRef:
+                name: dataset-collector-secrets
+          ports:
+            - name: metrics
+              containerPort: 9096
+          volumeMounts:
+            - name: dataset-state
+              mountPath: /app/dataset_runs
+      volumes:
+        - name: dataset-state
+          persistentVolumeClaim:
+            claimName: dataset-collector-state
+---
+apiVersion: batch/v1
+kind: Job
+metadata:
+  name: dataset-collector-discover-sport
+  namespace: trendflow-fetcher
+spec:
+  template:
+    spec:
+      restartPolicy: Never
+      containers:
+        - name: discover
+          image: trendflow-fetcher/dataset-collector:20k
+          imagePullPolicy: IfNotPresent
+          command:
+            - python
+            - -m
+            - fetcher.dataset_collector.cli
+          args:
+            - discover
+            - /app/dataset_campaign_20k.json
+            - --category
+            - Sport
+            - --metrics-port
+            - "9095"
+          envFrom:
+            - secretRef:
+                name: dataset-collector-secrets
+          ports:
+            - name: metrics
+              containerPort: 9095
+          volumeMounts:
+            - name: dataset-state
+              mountPath: /app/dataset_runs
+      volumes:
+        - name: dataset-state
+          persistentVolumeClaim:
+            claimName: dataset-collector-state
+---
+apiVersion: batch/v1
+kind: CronJob
+metadata:
+  name: dataset-collector-snapshot-7d
+  namespace: trendflow-fetcher
+spec:
+  schedule: "15 */6 * * *"
+  jobTemplate:
+    spec:
+      template:
+        spec:
+          restartPolicy: Never
+          containers:
+            - name: snapshot
+              image: trendflow-fetcher/dataset-collector:20k
+              imagePullPolicy: IfNotPresent
+              command:
+                - python
+                - -m
+                - fetcher.dataset_collector.cli
+              args:
+                - snapshot
+                - /app/dataset_campaign_20k.json
+                - --snapshot-index
+                - "1"
+              envFrom:
+                - secretRef:
+                    name: dataset-collector-secrets
+              volumeMounts:
+                - name: dataset-state
+                  mountPath: /app/dataset_runs
+          volumes:
+            - name: dataset-state
+              persistentVolumeClaim:
+                claimName: dataset-collector-state

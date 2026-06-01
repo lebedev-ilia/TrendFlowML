@@ -29,6 +29,8 @@ class DiscoveryAdapter(Protocol):
         published_after: Optional[datetime] = None,
         published_before: Optional[datetime] = None,
         time_interval: Optional[str] = None,
+        relevance_language: Optional[str] = None,
+        region_code: Optional[str] = None,
     ) -> Iterable[CollectedVideo]:
         ...
 

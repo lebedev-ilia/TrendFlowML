@@ -7,6 +7,7 @@ import pytest
 
 from fetcher.dataset_collector.collector import DatasetCollector
 from fetcher.dataset_collector.age_buckets import allocate_counts, bucket_from_config
+from fetcher.dataset_collector.balancer import DatasetBalancer
 from fetcher.dataset_collector.config import default_campaign_config
 from fetcher.dataset_collector.cookies import CookieRotator, apply_cookiefile
 from fetcher.dataset_collector.discovery.base import DiscoveryCapabilities
@@ -27,7 +28,13 @@ from fetcher.dataset_collector.proxy import (
     load_proxy_file,
     normalize_proxy_url,
 )
-from fetcher.dataset_collector.schemas import CollectedVideo, ScheduleEntry, Snapshot
+from fetcher.dataset_collector.schemas import (
+    BalancerConfig,
+    BalancerFieldConfig,
+    CollectedVideo,
+    ScheduleEntry,
+    Snapshot,
+)
 from fetcher.dataset_collector.snapshots import SnapshotRunner
 from fetcher.dataset_collector.state import DatasetState, format_time_get, utcnow
 
@@ -99,6 +106,83 @@ def make_video(video_id: str, *, views: int = 10) -> CollectedVideo:
 
 
 @pytest.mark.unit
+def test_dataset_balancer_rejects_overfilled_bucket(tmp_path):
+    balancer = DatasetBalancer(
+        BalancerConfig(
+            enabled=True,
+            mode="hard",
+            min_accept_score=0.35,
+            fields={
+                "duration_seconds": BalancerFieldConfig(
+                    coefficient=1.0,
+                    buckets=[[0, 59], [60, 300]],
+                    targets="uniform",
+                )
+            },
+        ),
+        state_root=tmp_path,
+    )
+    first = make_video("a").copy(update={"metadata": {"duration_seconds": 30}})
+    second = make_video("b").copy(update={"metadata": {"duration_seconds": 35}})
+
+    first_decision = balancer.decide(first)
+    assert first_decision.accepted
+    balancer.observe_accept(first)
+
+    second_decision = balancer.decide(second)
+    assert not second_decision.accepted
+    assert second_decision.reason == "balancer_duration_seconds"
+
+
+@pytest.mark.unit
+def test_dataset_balancer_respects_unknown_cap(tmp_path):
+    balancer = DatasetBalancer(
+        BalancerConfig(
+            enabled=True,
+            mode="hard",
+            fields={
+                "language": BalancerFieldConfig(
+                    coefficient=1.0,
+                    unknown_policy="separate_cap",
+                    unknown_max_share=0.1,
+                )
+            },
+        ),
+        state_root=tmp_path,
+    )
+    first = make_video("a").copy(update={"metadata": {"duration_seconds": 120}})
+    second = make_video("b").copy(update={"metadata": {"duration_seconds": 120}})
+
+    assert balancer.decide(first).accepted
+    balancer.observe_accept(first)
+
+    decision = balancer.decide(second)
+    assert not decision.accepted
+    assert decision.reason == "balancer_language"
+
+
+@pytest.mark.unit
+def test_dataset_balancer_coefficient_zero_disables_field(tmp_path):
+    balancer = DatasetBalancer(
+        BalancerConfig(
+            enabled=True,
+            mode="hard",
+            fields={
+                "language": BalancerFieldConfig(
+                    coefficient=0.0,
+                    unknown_policy="separate_cap",
+                    unknown_max_share=0.0,
+                )
+            },
+        ),
+        state_root=tmp_path,
+    )
+
+    assert balancer.decide(make_video("a")).accepted
+    assert balancer.enabled_field_names() == []
+
+
+@pytest.mark.unit
 def test_collector_deduplicates_and_writes_rejected(tmp_path):
     config = default_campaign_config(output_dir=str(tmp_path), categories=["sports"])
     config.time_interval_buckets = []
@@ -120,6 +204,42 @@ def test_collector_deduplicates_and_writes_rejected(tmp_path):
     assert not state.is_seen("youtube:b")
     assert state.load_manifest().counters["accepted"] == 1
     assert state.load_manifest().counters["rejected"] == 2
+
+
+@pytest.mark.unit
+def test_collector_applies_dataset_balancer_before_accept(tmp_path):
+    config = default_campaign_config(output_dir=str(tmp_path), categories=["sports"])
+    config.time_interval_buckets = []
+    config.categories[0].keywords = ["sports"]
+    config.categories[0].collect_count = 3
+    config.categories[0].platform_weights = {"youtube": 1.0}
+    config.balancer_config = BalancerConfig(
+        enabled=True,
+        mode="hard",
+        fields={
+            "duration_seconds": BalancerFieldConfig(
+                coefficient=1.0,
+                buckets=[[0, 59], [60, 300]],
+                targets="uniform",
+            )
+        },
+    )
+    state = DatasetState(config)
+    state.initialize()
+    videos = [
+        make_video("a").copy(update={"metadata": {"duration_seconds": 30}}),
+        make_video("b").copy(update={"metadata": {"duration_seconds": 35}}),
+        make_video("c").copy(update={"metadata": {"duration_seconds": 120}}),
+    ]
+
+    collector = DatasetCollector(config, state, {"youtube": FakeAdapter(videos)})
+    result = collector.discover_category("sports", limit=3)
+
+    assert result == {"accepted": 2, "rejected": 1}
+    assert state.is_seen("youtube:a")
+    assert not state.is_seen("youtube:b")
+    rejected = json.loads(next(state.rejected_dir.glob("part_*.json")).read_text(encoding="utf-8"))
+    assert rejected[0]["reason"] == "balancer_duration_seconds"
 
 
 @pytest.mark.unit
@@ -157,14 +277,16 @@ def test_merge_ytdlp_into_training_metadata():
         "thumbnails": [{"url": "https://example.com/t.jpg", "width": 1280, "height": 720}],
         "subtitles": {"en": [{"ext": "vtt"}]},
         "automatic_captions": {"ru": [{"ext": "vtt"}]},
+        "_caption_texts_manual": {"en": {"language": "en", "ext": "vtt", "text": "hello"}},
+        "_caption_texts_auto": {"ru": {"language": "ru", "ext": "vtt", "text": "привет"}},
     }
     merged = merge_ytdlp_into_training_metadata(metadata, info)
     assert merged["tags"] == ["a", "b"]
     assert merged["duration_seconds"] == 120
     assert len(merged["formats"]) == 1
     assert len(merged["thumbnails_ytdlp"]) == 1
-    assert merged["subtitles"] == {"en": [{"ext": "vtt"}]}
-    assert merged["automatic_captions"] == {"ru": [{"ext": "vtt"}]}
+    assert merged["subtitles"] == {"en": {"language": "en", "ext": "vtt", "text": "hello"}}
+    assert merged["automatic_captions"] == {"ru": {"language": "ru", "ext": "vtt", "text": "привет"}}
     assert "url" not in json.dumps(merged["automatic_captions"])
 
 
@@ -172,7 +294,19 @@ def test_merge_ytdlp_into_training_metadata():
 def test_training_entry_needs_ytdlp_enrichment():
     assert training_entry_needs_ytdlp_enrichment({"metadata": {"formats": [], "thumbnails_ytdlp": []}})
     assert not training_entry_needs_ytdlp_enrichment(
-        {"metadata": {"formats": [{"fps": 30}]}, "thumbnails_ytdlp": []}
+        {
+            "metadata": {
+                "formats": [{"fps": 30}],
+                "subtitles": {"en": {"ext": "vtt", "text": "hi"}},
+            },
+            "_enriched": {"source": "yt_dlp"},
+        }
+    )
+    assert training_entry_needs_ytdlp_enrichment(
+        {
+            "metadata": {"formats": [{"fps": 30}], "subtitles": {"en": [{"ext": "vtt"}]}},
+            "_enriched": {"source": "yt_dlp"},
+        }
     )
     assert not training_entry_needs_ytdlp_enrichment(
         {"metadata": {"formats": []}, "_enriched": {"source": "yt_dlp"}}
@@ -385,6 +519,24 @@ def test_import_seen_updates_manifest_baseline(tmp_path):
 
 
 @pytest.mark.unit
+def test_use_proxies_for_discovery_false_skips_api_pool(tmp_path):
+    from fetcher.dataset_collector.config import default_campaign_config
+    from fetcher.dataset_collector.proxy import configured_proxies, load_proxy_file
+
+    proxy_file = tmp_path / "proxies.txt"
+    proxy_file.write_text(
+        "1.2.3.4:8080\n127.0.0.1:8881 download_only\n",
+        encoding="utf-8",
+    )
+    config = default_campaign_config(output_dir=str(tmp_path))
+    config.proxies_file = str(proxy_file)
+    config.use_proxies_for_discovery = False
+
+    assert configured_proxies(config=config, download_only=False) == []
+    assert configured_proxies(config=config, download_only=True) == ["http://127.0.0.1:8881"]
+
+
+@pytest.mark.unit
 def test_proxy_file_excludes_local_for_discovery(tmp_path):
     proxy_file = tmp_path / "proxies.txt"
     proxy_file.write_text(
@@ -555,12 +707,12 @@ def test_run_hf_shard_upload_queue(tmp_path, monkeypatch):
 
     uploaded: list[str] = []
 
-    def fake_upload(cfg, local_path, *, repo_id, path_in_repo):
-        uploaded.append(path_in_repo)
+    def fake_upload(cfg, files, *, repo_id, commit_message, state_dir=None):
+        uploaded.extend(path_in_repo for _, path_in_repo in files)
 
     monkeypatch.setenv("HF_TOKEN", "test-token")
     monkeypatch.setattr(
-        "fetcher.dataset_collector.hf_queues.upload_local_file",
+        "fetcher.dataset_collector.hf_queues.upload_local_files_commit",
         fake_upload,
     )
 
@@ -691,6 +843,51 @@ def test_parse_resolution_height():
 
 
 @pytest.mark.unit
+def test_ytdlp_enrich_logger_suppresses_subtitle_403():
+    from fetcher.dataset_collector.ytdlp_logging import YtdlpEnrichLogger
+
+    logger = YtdlpEnrichLogger()
+    # should not raise / print
+    logger.warning("HTTP Error 403: Forbidden for url: timedtext")
+    logger.error("Unable to download auto subtitles for xyz")
+
+
+@pytest.mark.unit
+def test_download_height_tiers():
+    from fetcher.dataset_collector.downloads import DOWNLOAD_HEIGHT_TIERS, MAX_DOWNLOAD_HEIGHT
+
+    assert MAX_DOWNLOAD_HEIGHT == 1080
+    assert DOWNLOAD_HEIGHT_TIERS[0] == 1080
+    assert 720 in DOWNLOAD_HEIGHT_TIERS
+
+
+@pytest.mark.unit
+def test_best_enrich_formats_and_thumbnails():
+    from fetcher.dataset_collector.training_format import (
+        extract_best_enrich_formats,
+        extract_best_ytdlp_thumbnails,
+    )
+
+    info = {
+        "formats": [
+            {"fps": 30, "resolution": "1280x720", "vcodec": "avc1"},
+            {"fps": 30, "resolution": "1920x1080", "vcodec": "avc1"},
+            {"fps": 30, "resolution": "3840x2160", "vcodec": "vp9"},
+        ],
+        "thumbnails": [
+            {"url": "low", "preference": -1, "height": 90},
+            {"url": "best", "preference": 10, "height": 1080},
+            {"url": "second", "preference": 5, "height": 720},
+        ],
+    }
+    assert extract_best_enrich_formats(info) == [
+        {"fps": 30, "resolution": "3840x2160"},
+        {"fps": 30, "resolution": "1920x1080"},
+    ]
+    assert [thumb["url"] for thumb in extract_best_ytdlp_thumbnails(info)] == ["best", "second"]
+
+
+@pytest.mark.unit
 def test_install_pytubefix_session(tmp_path):
     from fetcher.dataset_collector.cookies import install_pytubefix_session
 
@@ -727,6 +924,39 @@ def test_slim_caption_tracks_drops_urls_and_foreign_langs():
     assert slim["ru"] == [{"ext": "vtt"}]
     assert metadata_captions_are_bloated({"automatic_captions": bloated})
     assert not metadata_captions_are_bloated(compact_training_metadata({"automatic_captions": bloated}))
+
+
+@pytest.mark.unit
+def test_slim_caption_tracks_merges_en_variants_and_empty():
+    merged = slim_caption_tracks(
+        {
+            "en-US": [{"ext": "vtt", "url": "https://example.com/en.vtt"}],
+            "en-GB": [{"ext": "srv3"}],
+            "de": [{"ext": "vtt"}],
+        }
+    )
+    assert merged == {"en": [{"ext": "vtt"}, {"ext": "srv3"}]}
+    assert slim_caption_tracks({}) == {}
+    assert slim_caption_tracks(None) == {}
+
+
+@pytest.mark.unit
+def test_parse_vtt_subtitle_text():
+    from fetcher.dataset_collector.caption_text import parse_subtitle_content, parse_subtitle_payload
+
+    vtt = "WEBVTT\n\n00:00:01.000 --> 00:00:03.000\nHello world\n\n00:00:04.000 --> 00:00:06.000\nSecond line\n"
+    assert parse_subtitle_content(vtt, "vtt") == "Hello world\nSecond line"
+    payload = parse_subtitle_payload(vtt, "vtt")
+    assert payload["cues"][0]["start"] == "00:00:01.000"
+
+
+@pytest.mark.unit
+def test_merge_ytdlp_always_sets_caption_fields():
+    metadata = {"title": "t"}
+    info = {"formats": [], "subtitles": {}, "automatic_captions": {}}
+    merged = merge_ytdlp_into_training_metadata(metadata, info)
+    assert merged["subtitles"] == {}
+    assert merged["automatic_captions"] == {}
 
 
 @pytest.mark.unit

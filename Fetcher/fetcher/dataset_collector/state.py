@@ -102,12 +102,18 @@ class DatasetState:
         self.hf_video_upload_done_path = self.state_dir / "hf_video_upload_done.jsonl"
         self.hf_shard_upload_queue_path = self.state_dir / "hf_shard_upload_queue.jsonl"
         self.hf_shard_upload_done_path = self.state_dir / "hf_shard_upload_done.jsonl"
+        self.hf_enrich_upload_queue_path = self.state_dir / "hf_enrich_upload_queue.jsonl"
+        self.hf_enrich_upload_done_path = self.state_dir / "hf_enrich_upload_done.jsonl"
         self.download_done_path = self.state_dir / "download_done.jsonl"
         self.post_enrich_rejected_path = self.state_dir / "post_enrich_rejected.jsonl"
+        self.performance_events_path = self.state_dir / "performance_events.jsonl"
+        self.queue_failures_path = self.state_dir / "queue_failures.jsonl"
+        self.queue_dead_letter_path = self.state_dir / "queue_dead_letter.jsonl"
         self.lock_path = self.state_dir / ".collector.lock"
         self._seen: Set[str] | None = None
         self._pending_accepted: Dict[str, List[CollectedVideo]] = {}
         self._pending_rejected: List[RejectedRecord] = []
+        self._pending_enrich: Dict[str, List[dict]] = {}
 
     def initialize(self) -> CampaignManifest:
         self.root.mkdir(parents=True, exist_ok=True)
@@ -122,6 +128,9 @@ class DatasetState:
             created_at=utcnow(),
             updated_at=utcnow(),
             output_dir=str(self.root),
+            campaign_profile=self.config.campaign_profile,
+            sampling_policy_version=self.config.sampling_policy_version,
+            balancer_policy_version=self.config.balancer_policy_version,
             baseline_accepted=self.config.baseline_accepted,
             counters={"accepted": 0, "rejected": 0, "snapshots": 0, "downloads": 0},
             category_counters={category.name: {"accepted": 0, "rejected": 0} for category in self.config.categories},
@@ -140,6 +149,9 @@ class DatasetState:
         manifest = self.initialize()
         if manifest.baseline_accepted == 0 and self.config.baseline_accepted:
             manifest.baseline_accepted = self.config.baseline_accepted
+        manifest.campaign_profile = self.config.campaign_profile
+        manifest.sampling_policy_version = self.config.sampling_policy_version
+        manifest.balancer_policy_version = self.config.balancer_policy_version
         manifest.session_started_at = utcnow()
         manifest.session_counters = {"accepted": 0, "rejected": 0, "quota_units": 0}
         self.save_manifest(manifest)
@@ -353,13 +365,28 @@ class DatasetState:
         }
 
     def enqueue_download(self, video: CollectedVideo) -> None:
+        self.enqueue_download_item(
+            platform=video.platform,
+            video_id=video.video_id,
+            url=video.url,
+            category=video.category,
+        )
+
+    def enqueue_download_item(
+        self,
+        *,
+        platform: str,
+        video_id: str,
+        url: str,
+        category: str,
+    ) -> None:
         append_jsonl(
             self.download_dir / "queue.jsonl",
             {
-                "platform": video.platform,
-                "video_id": video.video_id,
-                "url": video.url,
-                "category": video.category,
+                "platform": platform,
+                "video_id": video_id,
+                "url": url,
+                "category": category,
                 "queued_at": utcnow().isoformat(),
             },
         )
@@ -406,6 +433,82 @@ class DatasetState:
             },
         )
 
+    def append_enrich_record(self, *, category: str, video_id: str, payload: dict) -> Path:
+        pending = self._pending_enrich.setdefault(category, [])
+        pending.append({"video_id": video_id, "payload": payload})
+        base = self.shards_dir / "enrich" / f"category={category}"
+        pending_path = base / "part_pending.json"
+        existing: dict[str, dict] = {}
+        if pending_path.exists():
+            try:
+                raw = json.loads(pending_path.read_text(encoding="utf-8"))
+                if isinstance(raw, dict):
+                    existing = raw
+            except json.JSONDecodeError:
+                existing = {}
+        existing[video_id] = payload
+        atomic_write_json(pending_path, existing)
+        batch_size = max(1, min(self.config.hf_enrich_upload_batch_files, self.config.shard_size))
+        if len(existing) >= batch_size:
+            return self.flush_enrich_pending(category, force=True)
+        return pending_path
+
+    def flush_enrich_pending(self, category: str, *, force: bool = False) -> Path:
+        pending = self._pending_enrich.get(category, [])
+        base = self.shards_dir / "enrich" / f"category={category}"
+        pending_path = base / "part_pending.json"
+        if pending_path.exists():
+            try:
+                raw = json.loads(pending_path.read_text(encoding="utf-8"))
+            except json.JSONDecodeError:
+                raw = {}
+            if isinstance(raw, dict):
+                known = {item["video_id"] for item in pending}
+                pending.extend(
+                    {"video_id": video_id, "payload": payload}
+                    for video_id, payload in raw.items()
+                    if video_id not in known
+                )
+        if not pending and not force:
+            raise ValueError("cannot write empty enrich shard")
+        chunk = pending[: self.config.shard_size] if not force else list(pending)
+        del pending[: len(chunk)]
+        if not chunk:
+            raise ValueError("cannot write empty enrich shard")
+        shard_path = base / f"part_{self._next_index(base):06d}.json"
+        atomic_write_json(shard_path, {item["video_id"]: item["payload"] for item in chunk})
+        pending_path.unlink(missing_ok=True)
+        for item in chunk:
+            relpath = str(shard_path.relative_to(self.root))
+            self.enqueue_hf_enrich_upload(
+                platform="youtube",
+                video_id=item["video_id"],
+                category=category,
+                local_path=relpath,
+            )
+            self.mark_metadata_enrich_done(
+                f"youtube:{item['video_id']}",
+                video_id=item["video_id"],
+                shard=relpath,
+            )
+        return shard_path
+
+    def flush_all_enrich_pending(self) -> list[Path]:
+        written: list[Path] = []
+        categories = set(self._pending_enrich.keys())
+        enrich_root = self.shards_dir / "enrich"
+        if enrich_root.exists():
+            categories.update(
+                path.parent.name.replace("category=", "")
+                for path in enrich_root.glob("category=*/part_pending.json")
+            )
+        for category in sorted(categories):
+            pending = self._pending_enrich.get(category, [])
+            pending_path = self.shards_dir / "enrich" / f"category={category}" / "part_pending.json"
+            if pending or pending_path.exists():
+                written.append(self.flush_enrich_pending(category, force=True))
+        return written
+
     def enqueue_hf_video_upload(
         self,
         *,
@@ -432,6 +535,13 @@ class DatasetState:
             if row.get("key")
         }
 
+    def load_hf_video_upload_queued(self) -> set[str]:
+        return {
+            f"{row.get('platform') or 'youtube'}:{row.get('category') or 'unknown'}:{row.get('video_id')}"
+            for row in iter_jsonl(self.hf_video_upload_queue_path)
+            if row.get("video_id")
+        }
+
     def mark_hf_video_upload_done(
         self,
         key: str,
@@ -448,6 +558,68 @@ class DatasetState:
                 "category": category,
                 "local_path": local_path,
                 "completed_at": utcnow().isoformat(),
+            },
+        )
+
+    def enqueue_hf_enrich_upload(
+        self,
+        *,
+        platform: str,
+        video_id: str,
+        category: str,
+        local_path: str,
+    ) -> None:
+        append_jsonl(
+            self.hf_enrich_upload_queue_path,
+            {
+                "platform": platform,
+                "video_id": video_id,
+                "category": category,
+                "local_path": local_path,
+                "queued_at": utcnow().isoformat(),
+            },
+        )
+
+    def load_hf_enrich_upload_done(self) -> set[str]:
+        return {
+            str(row.get("key"))
+            for row in iter_jsonl(self.hf_enrich_upload_done_path)
+            if row.get("key")
+        }
+
+    def load_hf_enrich_upload_queued(self) -> set[str]:
+        return {
+            f"{row.get('platform') or 'youtube'}:{row.get('video_id')}"
+            for row in iter_jsonl(self.hf_enrich_upload_queue_path)
+            if row.get("video_id")
+        }
+
+    def mark_hf_enrich_upload_done(
+        self,
+        key: str,
+        *,
+        video_id: str,
+        category: str,
+        local_path: str,
+    ) -> None:
+        append_jsonl(
+            self.hf_enrich_upload_done_path,
+            {
+                "key": key,
+                "video_id": video_id,
+                "category": category,
+                "local_path": local_path,
+                "completed_at": utcnow().isoformat(),
+            },
+        )
+
+    def record_performance_event(self, event: str, payload: dict) -> None:
+        append_jsonl(
+            self.performance_events_path,
+            {
+                "event": event,
+                "recorded_at": utcnow().isoformat(),
+                **payload,
             },
         )
 

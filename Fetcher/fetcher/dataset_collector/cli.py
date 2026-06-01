@@ -11,6 +11,7 @@ from fetcher.dataset_collector.metrics import (
     start_metrics_server,
     update_gauges,
     update_inventory_gauges,
+    update_run_distribution_gauges,
 )
 from fetcher.dataset_collector.inventory import rebuild_inventory_from_disk, refresh_summary
 from fetcher.dataset_collector.progress import ProgressReporter
@@ -24,8 +25,10 @@ from fetcher.dataset_collector.discovery.twitch import TwitchDiscoveryAdapter
 from fetcher.dataset_collector.discovery.youtube import YouTubeDiscoveryAdapter, YouTubeKeyPool
 from fetcher.dataset_collector.downloads import run_download_queue
 from fetcher.dataset_collector.hf_queues import (
+    run_hf_enrich_upload_queue,
     run_hf_shard_upload_queue,
     run_hf_video_upload_queue,
+    scan_enrich_files_for_hf_upload,
     scan_downloaded_videos_for_hf_upload,
     scan_shards_for_hf_upload,
 )
@@ -76,10 +79,11 @@ def build_adapters(
         keys_path = getattr(args, "youtube_keys", None) or (config.youtube_keys_file if config else None)
         youtube_keys = load_youtube_keys(keys_path)
         if youtube_keys:
+            discovery_proxies = configured_proxies(config=config, download_only=False)
             key_pool = YouTubeKeyPool(
                 youtube_keys,
                 state_path=state.api_keys_path,
-                proxy_rotator=ProxyRotator(config=config, include_local=False),
+                proxy_rotator=ProxyRotator(proxies=discovery_proxies) if discovery_proxies else None,
             )
     if key_pool is not None:
         adapters["youtube"] = YouTubeDiscoveryAdapter(key_pool)
@@ -108,10 +112,11 @@ def _youtube_key_pool(state: DatasetState, args: argparse.Namespace):
     youtube_keys = load_youtube_keys(keys_path)
     if not youtube_keys:
         return None
+    discovery_proxies = configured_proxies(config=config, download_only=False)
     return YouTubeKeyPool(
         youtube_keys,
         state_path=state.api_keys_path,
-        proxy_rotator=ProxyRotator(config=config, include_local=False),
+        proxy_rotator=ProxyRotator(proxies=discovery_proxies) if discovery_proxies else None,
     )
 
 
@@ -121,8 +126,17 @@ def command_discover(args: argparse.Namespace) -> None:
     if args.metrics_port:
         start_metrics_server(args.metrics_port)
         print(f"Prometheus metrics: http://127.0.0.1:{args.metrics_port}/metrics")
+    if config.balancer_config and config.balancer_config.enabled:
+        fields = ", ".join(
+            name
+            for name, field_config in config.balancer_config.fields.items()
+            if field_config.coefficient > 0
+        )
+        print(f"Dataset balancer: enabled ({config.balancer_config_file}); fields={fields}")
     state = DatasetState(config)
     state.initialize()
+    if args.metrics_port:
+        update_run_distribution_gauges(state.root)
     if args.reset_checkpoint:
         state.clear_checkpoint()
     state.start_session()
@@ -141,6 +155,9 @@ def command_discover(args: argparse.Namespace) -> None:
         total = collector.discover_campaign(categories, limit=args.limit)
     except Exception as exc:
         state.flush_all_pending(shard_size=config.shard_size)
+        if config.hf_upload_enabled:
+            scan_shards_for_hf_upload(state, category=args.category)
+            run_hf_shard_upload_queue(state, config, category=args.category)
         checkpoint = state.load_checkpoint()
         print(
             json.dumps(
@@ -152,6 +169,9 @@ def command_discover(args: argparse.Namespace) -> None:
             )
         )
         raise
+    if config.hf_upload_enabled:
+        scan_shards_for_hf_upload(state, category=args.category)
+        run_hf_shard_upload_queue(state, config, category=args.category)
     print(json.dumps(total, ensure_ascii=False))
 
 
@@ -228,6 +248,28 @@ def command_upload_hf_videos(args: argparse.Namespace) -> None:
     if args.metrics_port:
         start_metrics_server(args.metrics_port)
     result = run_hf_video_upload_queue(
+        state,
+        config,
+        category=args.category,
+        limit=args.limit,
+        repo_id=args.repo_id,
+    )
+    _maybe_refresh_inventory_metrics(state, args)
+    print(json.dumps(result, ensure_ascii=False))
+
+
+def command_upload_hf_enrich(args: argparse.Namespace) -> None:
+    config = load_campaign_config(args.config)
+    state = DatasetState(config)
+    state.initialize()
+    if args.scan_enrich:
+        queued = scan_enrich_files_for_hf_upload(state, category=args.category)
+        print(json.dumps({"queued_from_enrich": queued}, ensure_ascii=False))
+        if args.scan_only:
+            return
+    if args.metrics_port:
+        start_metrics_server(args.metrics_port)
+    result = run_hf_enrich_upload_queue(
         state,
         config,
         category=args.category,
@@ -325,8 +367,11 @@ def command_run_workers(args: argparse.Namespace) -> None:
         log_dir=log_dir,
         interval_sec=args.interval,
         metrics_port=args.metrics_port,
-        with_discover=not args.no_discover,
+        with_discover=args.with_discover,
         once=args.once,
+        lease_name=args.lease_name,
+        lease_owner=args.lease_owner,
+        lease_ttl_sec=args.lease_ttl_sec,
     )
 
 
@@ -408,17 +453,41 @@ def build_parser() -> argparse.ArgumentParser:
     upload_hf_videos.add_argument("--metrics-port", type=int, default=None)
     upload_hf_videos.set_defaults(func=command_upload_hf_videos)
 
+    upload_hf_enrich = sub.add_parser(
+        "upload-hf-enrich",
+        help="Upload yt-dlp enrich payloads to Hugging Face dataset repo.",
+    )
+    upload_hf_enrich.add_argument("config")
+    upload_hf_enrich.add_argument("--category")
+    upload_hf_enrich.add_argument("--limit", type=int)
+    upload_hf_enrich.add_argument("--repo-id", help="Override hf_enrich_repo_id / hf_repo_id.")
+    upload_hf_enrich.add_argument(
+        "--scan-enrich",
+        action="store_true",
+        help="Enqueue local enrich JSON files not yet uploaded.",
+    )
+    upload_hf_enrich.add_argument(
+        "--scan-only",
+        action="store_true",
+        help="With --scan-enrich, only build the queue.",
+    )
+    upload_hf_enrich.add_argument("--metrics-port", type=int, default=None)
+    upload_hf_enrich.set_defaults(func=command_upload_hf_enrich)
+
     run_workers = sub.add_parser(
         "run-workers",
-        help="Run discover + all queue workers in parallel (separate processes).",
+        help="Run long-lived queue workers (discover is separate by default).",
     )
     run_workers.add_argument("config")
-    run_workers.add_argument("--category", default="Sport")
+    run_workers.add_argument("--category", default=None, help="Optional discover-only category filter.")
     run_workers.add_argument("--interval", type=int, default=120, help="Idle poll interval (sec) when queue is empty; active work is not interrupted.")
     run_workers.add_argument("--log-dir", type=Path, default=None)
     run_workers.add_argument("--metrics-port", type=int, default=9095)
-    run_workers.add_argument("--no-discover", action="store_true", help="Only queue workers, no discover.")
+    run_workers.add_argument("--with-discover", action="store_true", help="Also run discover; normally run discover separately.")
     run_workers.add_argument("--once", action="store_true", help="One pass per queue worker, then exit.")
+    run_workers.add_argument("--lease-name", help="Optional shared-state worker lease name for multi-Colab runs.")
+    run_workers.add_argument("--lease-owner", help="Optional owner label for --lease-name.")
+    run_workers.add_argument("--lease-ttl-sec", type=int, default=600)
     run_workers.set_defaults(func=command_run_workers)
 
     enrich = sub.add_parser(
