@@ -429,12 +429,17 @@ def test_cookie_rotator_applies_cookiefile(tmp_path):
     first.write_text("# Netscape HTTP Cookie File\n", encoding="utf-8")
     second.write_text("# Netscape HTTP Cookie File\n", encoding="utf-8")
 
-    rotator = CookieRotator([first, second])
+    rotator = CookieRotator([first, second], rotate_after_successes=2)
     opts = apply_cookiefile({"quiet": True}, rotator)
     next_opts = apply_cookiefile({"quiet": True}, rotator)
 
     assert opts["cookiefile"] == str(first)
-    assert next_opts["cookiefile"] == str(second)
+    assert next_opts["cookiefile"] == str(first)
+
+    rotator.record_success()
+    assert apply_cookiefile({"quiet": True}, rotator)["cookiefile"] == str(first)
+    rotator.record_success()
+    assert apply_cookiefile({"quiet": True}, rotator)["cookiefile"] == str(second)
 
 
 @pytest.mark.unit

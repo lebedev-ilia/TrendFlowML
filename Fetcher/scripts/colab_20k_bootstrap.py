@@ -45,6 +45,7 @@ def build_runtime_config(args: argparse.Namespace) -> Path:
         config["cookie_files_dir"] = args.cookie_files_dir
     if args.proxies_file:
         config["proxies_file"] = args.proxies_file
+    config["use_proxies_for_discovery"] = bool(args.use_discovery_proxies)
     if args.disable_hf_upload:
         config["hf_upload_enabled"] = False
     runtime_config = output_dir / "runtime_dataset_campaign_20k.json"
@@ -74,6 +75,11 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--youtube-keys-file")
     parser.add_argument("--cookie-files-dir")
     parser.add_argument("--proxies-file")
+    parser.add_argument(
+        "--use-discovery-proxies",
+        action="store_true",
+        help="Use configured proxies for YouTube Data API discovery/enrich. Default is direct API calls on Colab.",
+    )
     parser.add_argument("--disable-hf-upload", action="store_true")
     args = parser.parse_args(argv)
 

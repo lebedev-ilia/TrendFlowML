@@ -2,18 +2,19 @@ from __future__ import annotations
 
 import http.cookiejar
 import os
-from itertools import cycle
 from pathlib import Path
-from typing import Iterator, Optional
+from typing import Optional
 from urllib import request
 
 from fetcher.dataset_collector.schemas import CampaignConfig
 
 
 class CookieRotator:
-    def __init__(self, cookie_files: list[Path]) -> None:
+    def __init__(self, cookie_files: list[Path], *, rotate_after_successes: int = 20) -> None:
         self.cookie_files = [path for path in cookie_files if path.is_file()]
-        self._iterator: Iterator[Path] | None = cycle(self.cookie_files) if self.cookie_files else None
+        self.rotate_after_successes = max(1, rotate_after_successes)
+        self._index = 0
+        self._successes_on_current = 0
 
     @classmethod
     def from_config(cls, config: CampaignConfig) -> "CookieRotator":
@@ -25,16 +26,62 @@ class CookieRotator:
             # Paths in campaign JSON are relative to Fetcher/ (cli cwd).
             fetcher_root = Path(__file__).resolve().parents[2]
             root = fetcher_root / root
-        return cls(sorted(root.glob(config.cookie_file_glob or "*.txt")))
+        return cls(
+            sorted(root.glob(config.cookie_file_glob or "*.txt")),
+            rotate_after_successes=config.download_cookie_rotate_successes,
+        )
 
     @classmethod
-    def from_directory(cls, directory: Path | str, *, glob_pattern: str = "*.txt") -> "CookieRotator":
-        return cls(sorted(Path(directory).glob(glob_pattern)))
+    def from_directory(
+        cls,
+        directory: Path | str,
+        *,
+        glob_pattern: str = "*.txt",
+        rotate_after_successes: int = 20,
+    ) -> "CookieRotator":
+        return cls(
+            sorted(Path(directory).glob(glob_pattern)),
+            rotate_after_successes=rotate_after_successes,
+        )
 
     def next(self) -> Optional[Path]:
-        if self._iterator is None:
+        if not self.cookie_files:
             return None
-        return next(self._iterator)
+        return self.cookie_files[self._index % len(self.cookie_files)]
+
+    def rotate(self) -> Optional[Path]:
+        if not self.cookie_files:
+            return None
+        self._index = (self._index + 1) % len(self.cookie_files)
+        self._successes_on_current = 0
+        return self.next()
+
+    def record_success(self) -> None:
+        if not self.cookie_files:
+            return
+        self._successes_on_current += 1
+        if self._successes_on_current >= self.rotate_after_successes:
+            self.rotate()
+
+    def set_current(self, cookie_file: Path | None) -> None:
+        if cookie_file is None or not self.cookie_files:
+            return
+        try:
+            self._index = self.cookie_files.index(cookie_file)
+            self._successes_on_current = 0
+        except ValueError:
+            return
+
+    def iter_attempts(self) -> list[Optional[Path]]:
+        """Try the current cookie first, then every other cookie once."""
+
+        current = self.next()
+        if not self.cookie_files:
+            return [None]
+        ordered = [current]
+        for offset in range(1, len(self.cookie_files)):
+            ordered.append(self.cookie_files[(self._index + offset) % len(self.cookie_files)])
+        return ordered
 
 
 def install_pytubefix_session(

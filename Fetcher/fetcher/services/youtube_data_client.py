@@ -160,7 +160,7 @@ class YouTubeDataClient:
             raise ValueError("YouTube Data API key is not configured")
 
         self.timeout = timeout
-        client_kwargs: dict[str, object] = {"timeout": timeout}
+        client_kwargs: dict[str, object] = {"timeout": timeout, "trust_env": False}
         if proxy:
             client_kwargs["proxy"] = proxy
         self.proxy = proxy

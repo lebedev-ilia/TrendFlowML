@@ -8,7 +8,11 @@ from typing import Callable, Iterable
 
 from pytubefix import YouTube
 
-from fetcher.dataset_collector.cookies import CookieRotator, install_pytubefix_session
+from fetcher.dataset_collector.cookies import (
+    CookieRotator,
+    apply_cookiefile,
+    install_pytubefix_session,
+)
 from fetcher.dataset_collector.proxy import ProxyRotator, configured_proxies, pytubefix_proxy_dict
 from fetcher.dataset_collector.schemas import CampaignConfig
 from fetcher.dataset_collector.state import DatasetState
@@ -30,6 +34,24 @@ from fetcher.dataset_collector.worker_logging import (
 MAX_DOWNLOAD_HEIGHT = 1080
 # Try highest cap first; on failure retry with lower caps (merge / stream errors).
 DOWNLOAD_HEIGHT_TIERS = (1080, 720, 480, 360, 240, 144)
+
+
+class BotDetectionDownloadError(RuntimeError):
+    """YouTube rejected the download request as automated traffic."""
+
+
+def is_bot_detection_error(exc_or_text: Exception | str) -> bool:
+    text = str(exc_or_text).lower()
+    return any(
+        marker in text
+        for marker in (
+            "botdetection",
+            "detected as a bot",
+            "sign in to confirm",
+            "not a bot",
+            "po_token",
+        )
+    )
 
 
 def iter_download_queue(path: Path) -> Iterable[dict]:
@@ -267,6 +289,100 @@ def _progress_callback(video_id: str) -> Callable:
     return _on_progress
 
 
+def _pytubefix_client_sequence(config: CampaignConfig) -> list[str]:
+    clients = [str(item).strip() for item in (config.download_pytubefix_clients or []) if str(item).strip()]
+    return clients or ["ANDROID_VR", "WEB"]
+
+
+def _download_video_local_pytubefix_attempt(
+    state: DatasetState,
+    config: CampaignConfig,
+    *,
+    platform: str,
+    video_id: str,
+    url: str,
+    category: str,
+    target: Path,
+    proxy_rotator: ProxyRotator | None,
+    cookie_rotator: CookieRotator | None,
+    cookie_file: Path | None,
+    client_name: str,
+    started_at: float,
+) -> Path | None:
+    proxy_url = proxy_rotator.next() if proxy_rotator else None
+    proxies = pytubefix_proxy_dict(proxy_url)
+    install_pytubefix_session(proxies=proxies, cookie_file=cookie_file)
+
+    worker_log(
+        "download",
+        f"pytubefix start {video_id} category={category} client={client_name} "
+        f"proxy={proxy_url or 'direct'} cookie={cookie_file.name if cookie_file else 'none'}",
+    )
+    worker_log("download", f"  url={url}")
+    try:
+        yt = YouTube(
+            url,
+            client=client_name,
+            on_progress_callback=_progress_callback(video_id),
+        )
+        label = download_youtube_mp4(
+            yt,
+            target=target,
+            max_height=MAX_DOWNLOAD_HEIGHT,
+            log=lambda msg: worker_log("download", msg),
+        )
+        worker_log("download", f"  saved as {label}")
+    except KeyboardInterrupt:
+        _cleanup_download_temps(target)
+        worker_log("download", f"STOP {video_id}: shutdown requested")
+        raise
+    except subprocess.CalledProcessError as exc:
+        if proxy_rotator and proxy_url:
+            proxy_rotator.record_download_failure(proxy_url)
+        worker_log("download", f"FAIL {video_id}: ffmpeg merge failed: {exc.stderr.decode(errors='replace')[:300]}")
+        return None
+    except Exception as exc:
+        if proxy_rotator and proxy_url:
+            proxy_rotator.record_download_failure(proxy_url)
+        if is_bot_detection_error(exc):
+            raise BotDetectionDownloadError(str(exc)) from exc
+        worker_log("download", f"FAIL {video_id}: {type(exc).__name__}: {exc}")
+        return None
+
+    if proxy_rotator and proxy_url:
+        proxy_rotator.record_success(proxy_url)
+
+    if not target.exists() or target.stat().st_size <= 0:
+        worker_log("download", f"FAIL {video_id}: file missing after download")
+        return None
+
+    if cookie_rotator is not None:
+        cookie_rotator.set_current(cookie_file)
+        cookie_rotator.record_success()
+
+    elapsed = time.perf_counter() - started_at
+    size_bytes = target.stat().st_size
+    state.record_performance_event(
+        "download",
+        {
+            "platform": platform,
+            "video_id": video_id,
+            "category": category,
+            "seconds": round(elapsed, 3),
+            "size_bytes": size_bytes,
+            "local_path": str(target.relative_to(state.root)),
+            "backend": "pytubefix",
+            "client": client_name,
+        },
+    )
+    worker_log(
+        "download",
+        f"OK {video_id} -> {target.relative_to(state.root)} "
+        f"({_format_bytes(size_bytes)}, {elapsed:.1f}s, pytubefix:{client_name})",
+    )
+    return target
+
+
 def download_video_local(
     state: DatasetState,
     config: CampaignConfig,
@@ -296,76 +412,190 @@ def download_video_local(
         worker_log("download", f"removed empty partial file {video_id}")
 
     target.parent.mkdir(parents=True, exist_ok=True)
+    cookie_attempts = cookie_rotator.iter_attempts() if cookie_rotator else [None]
+    backend = (config.download_backend or "pytubefix").lower().replace("-", "_")
+    if backend not in {"pytubefix", "yt_dlp", "yt_dlp_first"}:
+        backend = "pytubefix"
+    started_at = time.perf_counter()
+
+    if backend in {"yt_dlp", "yt_dlp_first"}:
+        cookie_file = cookie_attempts[0]
+        try:
+            return _download_video_local_ytdlp(
+                state,
+                config,
+                platform=platform,
+                video_id=video_id,
+                url=url,
+                category=category,
+                target=target,
+                proxy_rotator=proxy_rotator,
+                cookie_file=cookie_file,
+                started_at=started_at,
+            )
+        except BotDetectionDownloadError as exc:
+            worker_log("download", f"FAIL {video_id}: yt-dlp bot detection: {exc}")
+            raise
+        except KeyboardInterrupt:
+            _cleanup_download_temps(target)
+            worker_log("download", f"STOP {video_id}: shutdown requested")
+            raise
+        except Exception as exc:
+            if backend == "yt_dlp":
+                worker_log("download", f"FAIL {video_id}: yt-dlp {type(exc).__name__}: {exc}")
+                return None
+            worker_log("download", f"yt-dlp failed for {video_id}, trying pytubefix: {type(exc).__name__}: {exc}")
+
+    bot_errors: list[str] = []
+    pytubefix_clients = _pytubefix_client_sequence(config)
+    for client_idx, client_name in enumerate(pytubefix_clients):
+        for cookie_file in cookie_attempts:
+            try:
+                return _download_video_local_pytubefix_attempt(
+                    state,
+                    config,
+                    platform=platform,
+                    video_id=video_id,
+                    url=url,
+                    category=category,
+                    target=target,
+                    proxy_rotator=proxy_rotator,
+                    cookie_rotator=cookie_rotator,
+                    cookie_file=cookie_file,
+                    client_name=client_name,
+                    started_at=started_at,
+                )
+            except BotDetectionDownloadError as exc:
+                bot_errors.append(str(exc)[:300])
+                worker_log(
+                    "download",
+                    f"bot_detection {video_id}: client={client_name} "
+                    f"cookie={cookie_file.name if cookie_file else 'none'}",
+                )
+                _cleanup_download_temps(target)
+                continue
+            except KeyboardInterrupt:
+                raise
+            except Exception:
+                _cleanup_download_temps(target)
+                raise
+        if client_idx == 0 and len(pytubefix_clients) > 1:
+            worker_log("download", f"all cookies failed for {video_id}; switching pytubefix client")
+
+    worker_log("download", f"pytubefix exhausted for {video_id}; trying yt-dlp fallback")
+    try:
+        return _download_video_local_ytdlp(
+            state,
+            config,
+            platform=platform,
+            video_id=video_id,
+            url=url,
+            category=category,
+            target=target,
+            proxy_rotator=proxy_rotator,
+            cookie_file=cookie_attempts[0],
+            started_at=started_at,
+        )
+    except BotDetectionDownloadError as fallback_exc:
+        raise BotDetectionDownloadError("; ".join(bot_errors[-3:] + [str(fallback_exc)[:300]])) from fallback_exc
+    except Exception as fallback_exc:
+        worker_log(
+            "download",
+            f"FAIL {video_id}: yt-dlp fallback {type(fallback_exc).__name__}: {fallback_exc}",
+        )
+        return None
+
+
+def _download_video_local_ytdlp(
+    state: DatasetState,
+    config: CampaignConfig,
+    *,
+    platform: str,
+    video_id: str,
+    url: str,
+    category: str,
+    target: Path,
+    proxy_rotator: ProxyRotator | None,
+    cookie_file: Path | None,
+    started_at: float,
+) -> Path:
+    try:
+        from yt_dlp import YoutubeDL
+    except ImportError as exc:
+        raise RuntimeError("yt-dlp is not installed") from exc
+
     proxy_url = proxy_rotator.next() if proxy_rotator else None
-    proxies = pytubefix_proxy_dict(proxy_url)
-    cookie_file = cookie_rotator.next() if cookie_rotator else None
-    install_pytubefix_session(proxies=proxies, cookie_file=cookie_file)
+    outtmpl = str(target.with_suffix(".%(ext)s"))
+    ydl_opts = {
+        "format": config.download_ytdlp_format,
+        "outtmpl": outtmpl,
+        "merge_output_format": "mp4",
+        "noplaylist": True,
+        "quiet": True,
+        "no_warnings": False,
+        "retries": 3,
+        "fragment_retries": 3,
+        "socket_timeout": 30,
+        "extractor_args": {
+            "youtube": {
+                "player_client": list(config.download_ytdlp_player_clients or ["android", "web"]),
+            },
+        },
+    }
+    if proxy_url:
+        ydl_opts["proxy"] = proxy_url
+    apply_cookiefile(ydl_opts, CookieRotator([cookie_file]) if cookie_file else None)
 
     worker_log(
         "download",
-        f"pytubefix start {video_id} category={category} proxy={proxy_url or 'direct'} "
+        f"yt-dlp start {video_id} category={category} proxy={proxy_url or 'direct'} "
         f"cookie={cookie_file.name if cookie_file else 'none'}",
     )
-    worker_log("download", f"  url={url}")
-    started_at = time.perf_counter()
-
     try:
-        yt = YouTube(url, on_progress_callback=_progress_callback(video_id))
-        label = download_youtube_mp4(
-            yt,
-            target=target,
-            max_height=MAX_DOWNLOAD_HEIGHT,
-            log=lambda msg: worker_log("download", msg),
-        )
-        worker_log("download", f"  saved as {label}")
-
-        if proxy_rotator and proxy_url:
-            proxy_rotator.record_success(proxy_url)
-
-        if target.exists() and target.stat().st_size > 0:
-            elapsed = time.perf_counter() - started_at
-            size_bytes = target.stat().st_size
-            state.record_performance_event(
-                "download",
-                {
-                    "platform": platform,
-                    "video_id": video_id,
-                    "category": category,
-                    "seconds": round(elapsed, 3),
-                    "size_bytes": size_bytes,
-                    "local_path": str(target.relative_to(state.root)),
-                },
-            )
-            worker_log(
-                "download",
-                f"OK {video_id} -> {target.relative_to(state.root)} "
-                f"({_format_bytes(size_bytes)}, {elapsed:.1f}s)",
-            )
-            return target
-
-        worker_log("download", f"FAIL {video_id}: file missing after download")
-        if proxy_rotator and proxy_url:
-            proxy_rotator.record_download_failure(proxy_url)
-        return None
-    except KeyboardInterrupt:
-        _cleanup_download_temps(target)
-        worker_log("download", f"STOP {video_id}: shutdown requested")
-        raise
-    except RuntimeError as exc:
-        worker_log("download", f"FAIL {video_id}: {exc}")
-        if proxy_rotator and proxy_url:
-            proxy_rotator.record_download_failure(proxy_url)
-        return None
-    except subprocess.CalledProcessError as exc:
-        worker_log("download", f"FAIL {video_id}: ffmpeg merge failed: {exc.stderr.decode(errors='replace')[:300]}")
-        if proxy_rotator and proxy_url:
-            proxy_rotator.record_download_failure(proxy_url)
-        return None
+        with YoutubeDL(ydl_opts) as ydl:
+            ydl.download([url])
     except Exception as exc:
         if proxy_rotator and proxy_url:
             proxy_rotator.record_download_failure(proxy_url)
-        worker_log("download", f"FAIL {video_id}: {type(exc).__name__}: {exc}")
-        return None
+        if is_bot_detection_error(exc):
+            raise BotDetectionDownloadError(str(exc)) from exc
+        raise
+
+    if not target.exists():
+        candidates = sorted(target.parent.glob(f"{target.stem}.*"))
+        for candidate in candidates:
+            if candidate.suffix == ".part":
+                continue
+            if candidate.is_file() and candidate.stat().st_size > 0:
+                candidate.replace(target)
+                break
+
+    if not target.exists() or target.stat().st_size <= 0:
+        raise RuntimeError("yt-dlp did not create a non-empty mp4")
+
+    if proxy_rotator and proxy_url:
+        proxy_rotator.record_success(proxy_url)
+
+    elapsed = time.perf_counter() - started_at
+    size_bytes = target.stat().st_size
+    state.record_performance_event(
+        "download",
+        {
+            "platform": platform,
+            "video_id": video_id,
+            "category": category,
+            "seconds": round(elapsed, 3),
+            "size_bytes": size_bytes,
+            "local_path": str(target.relative_to(state.root)),
+            "backend": "yt_dlp",
+        },
+    )
+    worker_log(
+        "download",
+        f"OK {video_id} -> {target.relative_to(state.root)} "
+        f"({_format_bytes(size_bytes)}, {elapsed:.1f}s, yt-dlp)",
+    )
+    return target
 
 
 def run_download_queue(
@@ -485,6 +715,16 @@ def run_download_queue(
         except KeyboardInterrupt:
             worker_log("download", "shutdown requested — exiting pass")
             break
+        except BotDetectionDownloadError as exc:
+            results["failed"] += 1
+            if record_queue_failure(
+                state,
+                service="download",
+                item=item,
+                error=f"bot_detection: {exc}",
+            ):
+                dead_letter_keys.add(retry_key)
+            continue
         if path is None:
             results["failed"] += 1
             if record_queue_failure(

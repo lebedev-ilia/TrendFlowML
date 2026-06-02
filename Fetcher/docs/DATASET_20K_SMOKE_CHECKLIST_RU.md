@@ -2,6 +2,19 @@
 
 ## Smoke 300-500
 
+Перед запуском в Colab обнови `yt-dlp` и поставь JS runtime:
+
+```bash
+apt-get update && apt-get install -y nodejs
+python -m pip install -U yt-dlp pytubefix
+```
+
+Если уже создан `runtime_dataset_campaign_20k.json`, удали его после обновления кода, чтобы bootstrap пересоздал config с новым `pytubefix` backend, cookie rotation и `WEB` fallback:
+
+```bash
+rm -f /content/drive/MyDrive/dataset_runs/20k-test/runtime_dataset_campaign_20k.json
+```
+
 1. Запусти discover на одной категории:
 
 ```bash

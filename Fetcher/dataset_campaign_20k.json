@@ -73,9 +73,14 @@
   "proxies_file": "fetcher/dataset_collector/proxies/proxies.txt",
   "proxy_default_scheme": "http",
   "include_local_proxies_for_discovery": false,
-  "use_proxies_for_discovery": true,
+  "use_proxies_for_discovery": false,
   "youtube_relevance_languages": ["ru", "en"],
   "youtube_region_codes": ["RU", "US"],
   "queue_max_attempts": 5,
-  "queue_retry_backoff_seconds": 900
+  "queue_retry_backoff_seconds": 900,
+  "download_backend": "pytubefix",
+  "download_cookie_rotate_successes": 20,
+  "download_pytubefix_clients": ["ANDROID_VR", "WEB"],
+  "download_ytdlp_player_clients": ["android", "web"],
+  "download_ytdlp_format": "bv*[height<=1080][ext=mp4]+ba[ext=m4a]/bv*[height<=1080]+ba/b[height<=1080]/b"
 }

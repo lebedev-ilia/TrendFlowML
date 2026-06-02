@@ -13,8 +13,9 @@ drive.mount("/content/drive")
 cd /content
 git clone <YOUR_REPO_URL> TrendFlowML
 cd TrendFlowML/Fetcher
+apt-get update && apt-get install -y nodejs
 python -m pip install -e .
-python -m pip install huggingface_hub yt-dlp pytubefix
+python -m pip install -U huggingface_hub yt-dlp pytubefix
 ```
 
 Секреты лучше хранить в Colab Secrets или в переменных окружения:
@@ -49,6 +50,16 @@ python scripts/colab_20k_bootstrap.py \
 ```
 
 `--lease-name` защищает общий Drive state от случайного двойного запуска одного набора workers.
+
+Для Colab профиль `dataset_campaign_20k.json` использует `pytubefix` как основной backend, но с ротацией cookies и fallback client `WEB` для генерации PO-token через Node.js. Если меняешь runtime config вручную, проверь:
+
+```json
+"download_backend": "pytubefix",
+"download_cookie_rotate_successes": 20,
+"download_pytubefix_clients": ["ANDROID_VR", "WEB"]
+```
+
+Если все cookies и `WEB` client поймают bot-detection, worker попробует резервный `yt-dlp` backend.
 
 ## 4. Snapshots
 

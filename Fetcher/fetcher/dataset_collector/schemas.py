@@ -192,6 +192,27 @@ class CampaignConfig(BaseModel):
         ge=0,
         description="Base retry backoff recorded for failed queue items.",
     )
+    download_backend: str = Field(
+        "pytubefix",
+        description="Video download backend: pytubefix, yt_dlp, or yt_dlp_first.",
+    )
+    download_ytdlp_format: str = Field(
+        "bv*[height<=1080][ext=mp4]+ba[ext=m4a]/bv*[height<=1080]+ba/b[height<=1080]/b",
+        description="yt-dlp format selector for mp4 downloads.",
+    )
+    download_ytdlp_player_clients: List[str] = Field(
+        default_factory=lambda: ["android", "web"],
+        description="YouTube player clients passed to yt-dlp extractor args.",
+    )
+    download_cookie_rotate_successes: int = Field(
+        20,
+        ge=1,
+        description="Rotate to the next cookie file after this many successful downloads.",
+    )
+    download_pytubefix_clients: List[str] = Field(
+        default_factory=lambda: ["ANDROID_VR", "WEB"],
+        description="pytubefix clients tried in order; WEB can generate PO tokens via Node.js.",
+    )
 
     @validator("snapshot_schedule_days")
     def schedule_starts_with_zero(cls, value: List[int]) -> List[int]:
