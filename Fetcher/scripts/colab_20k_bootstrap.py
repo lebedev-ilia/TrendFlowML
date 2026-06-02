@@ -50,12 +50,49 @@ def build_runtime_config(args: argparse.Namespace) -> Path:
         config["hf_upload_enabled"] = False
     runtime_config = output_dir / "runtime_dataset_campaign_20k.json"
     _write_json(runtime_config, config)
+    token_path = output_dir / ".dataset_drive_token.pickle"
+    if token_path.is_file():
+        os.environ.setdefault("DATASET_DRIVE_TOKEN_PATH", str(token_path))
     return runtime_config
+
+
+def _ensure_hf_token() -> None:
+    """Make HF token visible to worker subprocesses (notebook env != shell env on Colab)."""
+    for name in ("HF_TOKEN", "HUGGING_FACE_HUB_TOKEN"):
+        if (os.environ.get(name) or "").strip():
+            return
+    try:
+        from google.colab import userdata
+
+        token = (userdata.get("HF_TOKEN") or "").strip()
+        if token:
+            os.environ["HF_TOKEN"] = token
+    except Exception:
+        pass
+
+
+def _require_hf_token_for_upload(runtime_config: Path) -> None:
+    config = _read_json(runtime_config)
+    if not config.get("hf_upload_enabled", True):
+        return
+    _ensure_hf_token()
+    env_name = (config.get("hf_token_env") or "HF_TOKEN").strip()
+    if env_name.startswith("hf_") and len(env_name) > 20:
+        raise SystemExit(
+            'runtime config has the token in "hf_token_env"; set "hf_token_env": "HF_TOKEN" '
+            "and put the secret in env HF_TOKEN or Colab Secret HF_TOKEN."
+        )
+    if not (os.environ.get(env_name) or "").strip():
+        raise SystemExit(
+            f"{env_name} is not set for this shell. Before workers run:\n"
+            f'  export {env_name}=hf_...\n'
+            "or add Colab Secret HF_TOKEN (bootstrap loads it automatically)."
+        )
 
 
 def run_command(cmd: list[str]) -> int:
     print("+ " + " ".join(cmd), flush=True)
-    return subprocess.call(cmd, cwd=str(_fetcher_root()))
+    return subprocess.call(cmd, cwd=str(_fetcher_root()), env=os.environ.copy())
 
 
 def main(argv: list[str] | None = None) -> int:
@@ -84,6 +121,8 @@ def main(argv: list[str] | None = None) -> int:
     args = parser.parse_args(argv)
 
     runtime_config = build_runtime_config(args)
+    if args.role in {"discover", "workers"}:
+        _require_hf_token_for_upload(runtime_config)
     py = sys.executable
     base = [py, "-m", "fetcher.dataset_collector.cli"]
 

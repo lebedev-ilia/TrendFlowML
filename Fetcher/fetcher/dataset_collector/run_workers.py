@@ -340,6 +340,7 @@ def run_all_workers(
             stdout=log_file,
             stderr=subprocess.STDOUT,
             cwd=str(_fetcher_root()),
+            env=os.environ.copy(),
             start_new_session=True,
         )
         processes.append((name, proc))
@@ -363,6 +364,7 @@ def run_all_workers(
             stdout=log_file,
             stderr=subprocess.STDOUT,
             cwd=str(_fetcher_root()),
+            env=os.environ.copy(),
             start_new_session=True,
         )
         processes.append((name, proc))

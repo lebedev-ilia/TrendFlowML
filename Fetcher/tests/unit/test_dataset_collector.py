@@ -702,6 +702,28 @@ def test_hf_remote_paths():
 
 
 @pytest.mark.unit
+def test_resolve_hf_token_fallback_env(monkeypatch):
+    from fetcher.dataset_collector.hf_upload import HuggingFaceUploadError, resolve_hf_token
+
+    config = default_campaign_config()
+    config.hf_token_env = "HF_TOKEN"
+    monkeypatch.delenv("HF_TOKEN", raising=False)
+    monkeypatch.setenv("HUGGING_FACE_HUB_TOKEN", "hf_from_hub")
+    assert resolve_hf_token(config) == "hf_from_hub"
+
+
+@pytest.mark.unit
+def test_resolve_hf_token_rejects_token_in_hf_token_env():
+    from fetcher.dataset_collector.hf_upload import HuggingFaceUploadError, resolve_hf_token
+
+    config = default_campaign_config()
+    # Looks like a token but is a deliberate misconfiguration fixture (not a real secret).
+    config.hf_token_env = "hf_PASTED_TOKEN_VALUE_NOT_ENV_VAR_NAME"
+    with pytest.raises(HuggingFaceUploadError, match="hf_token_env"):
+        resolve_hf_token(config)
+
+
+@pytest.mark.unit
 def test_run_hf_shard_upload_queue(tmp_path, monkeypatch):
     config = default_campaign_config(output_dir=str(tmp_path), categories=["sports"])
     config.hf_repo_id = "org/test-dataset"
@@ -977,6 +999,7 @@ def test_video_filter_rejects_missing_duration():
 @pytest.mark.unit
 def test_should_permanent_delete_on_drive_for_colab_paths():
     from fetcher.dataset_collector.local_delete import (
+        is_ephemeral_download_artifact,
         is_google_drive_path,
         should_permanent_delete_on_drive,
     )
@@ -989,6 +1012,12 @@ def test_should_permanent_delete_on_drive_for_colab_paths():
         output_dir="/content/drive/MyDrive/dataset_runs/20k-test",
     )
     assert not should_permanent_delete_on_drive(path, enabled=False)
+
+    tmp = Path(
+        "/content/drive/MyDrive/dataset_runs/20k-test/downloads/videos/cat/vid.video.tmp"
+    )
+    assert is_ephemeral_download_artifact(tmp)
+    assert not should_permanent_delete_on_drive(tmp)
 
 
 @pytest.mark.unit

@@ -13,12 +13,39 @@ from fetcher.dataset_collector.schemas import CampaignConfig
 class HuggingFaceUploadError(RuntimeError):
     pass
 
+_HF_TOKEN_FALLBACK_ENVS = ("HF_TOKEN", "HUGGING_FACE_HUB_TOKEN")
+
+
+def _looks_like_hf_token(value: str) -> bool:
+    return value.startswith("hf_") and len(value) > 20
+
 
 def resolve_hf_token(config: CampaignConfig) -> str:
-    token = os.getenv(config.hf_token_env)
-    if not token:
-        raise HuggingFaceUploadError(f"{config.hf_token_env} is not set")
-    return token
+    """Read HF token from env. hf_token_env is the variable *name*, not the secret."""
+    env_name = (config.hf_token_env or "HF_TOKEN").strip()
+    if _looks_like_hf_token(env_name):
+        raise HuggingFaceUploadError(
+            'campaign config "hf_token_env" must be the environment variable name '
+            '(e.g. "HF_TOKEN"), not the token. Fix runtime_dataset_campaign_20k.json and '
+            "export HF_TOKEN=hf_... in the same shell that starts workers."
+        )
+
+    candidates: list[str] = []
+    for name in (env_name, *_HF_TOKEN_FALLBACK_ENVS):
+        if name and name not in candidates:
+            candidates.append(name)
+
+    for name in candidates:
+        token = (os.getenv(name) or "").strip()
+        if token:
+            return token
+
+    checked = ", ".join(candidates)
+    raise HuggingFaceUploadError(
+        f"Hugging Face token is not set (checked env: {checked}). "
+        "In Colab: export HF_TOKEN=hf_... in the terminal before bootstrap, "
+        "or set a Colab Secret named HF_TOKEN and load it in the notebook."
+    )
 
 
 def resolve_shards_repo_id(config: CampaignConfig, *, repo_id: str | None = None) -> str:

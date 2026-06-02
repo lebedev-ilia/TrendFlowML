@@ -221,6 +221,16 @@ class CampaignConfig(BaseModel):
         ),
     )
 
+    @validator("hf_token_env")
+    def validate_hf_token_env_is_name(cls, value: str) -> str:
+        name = (value or "HF_TOKEN").strip()
+        if name.startswith("hf_") and len(name) > 20:
+            raise ValueError(
+                'hf_token_env must be an environment variable name (e.g. "HF_TOKEN"), '
+                "not the Hugging Face token value"
+            )
+        return name
+
     @validator("snapshot_schedule_days")
     def schedule_starts_with_zero(cls, value: List[int]) -> List[int]:
         if not value or value[0] != 0:

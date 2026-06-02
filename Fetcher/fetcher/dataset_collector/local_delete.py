@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import os
+import pickle
 from pathlib import Path
 from typing import Optional
 
@@ -12,6 +13,9 @@ _DEFAULT_DRIVE_MOUNT_ROOTS = (
     "/content/drive/Shareddrives",
     "/content/drive/Shared drives",
 )
+
+DRIVE_SCOPE = "https://www.googleapis.com/auth/drive"
+TOKEN_FILENAME = ".dataset_drive_token.pickle"
 
 _drive_service = None
 
@@ -40,13 +44,19 @@ def is_google_drive_path(path: Path) -> bool:
     return False
 
 
+def is_ephemeral_download_artifact(path: Path) -> bool:
+    """Small temp files from ffmpeg merge; unlink to Trash is acceptable."""
+    name = path.name
+    return name.endswith((".video.tmp", ".audio.tmp"))
+
+
 def should_permanent_delete_on_drive(
     path: Path,
     *,
     output_dir: Optional[str] = None,
     enabled: Optional[bool] = None,
 ) -> bool:
-    if enabled is False:
+    if enabled is False or is_ephemeral_download_artifact(path):
         return False
     if not is_google_drive_path(path):
         return False
@@ -55,6 +65,17 @@ def should_permanent_delete_on_drive(
     if output_dir is not None:
         return is_google_drive_path(Path(output_dir))
     return True
+
+
+def drive_token_path(output_dir: Optional[str] = None) -> Optional[Path]:
+    explicit = os.environ.get("DATASET_DRIVE_TOKEN_PATH", "").strip()
+    if explicit:
+        return Path(explicit).expanduser()
+    if output_dir:
+        candidate = Path(output_dir).expanduser() / TOKEN_FILENAME
+        if candidate.is_file():
+            return candidate
+    return None
 
 
 def _escape_drive_query_value(value: str) -> str:
@@ -122,7 +143,39 @@ def _my_drive_root_for_path(path: Path) -> Optional[Path]:
     return None
 
 
-def _get_drive_service():
+def _refresh_credentials(credentials) -> None:
+    if not getattr(credentials, "expired", False):
+        return
+    if not getattr(credentials, "refresh_token", None):
+        return
+    from google.auth.transport.requests import Request
+
+    credentials.refresh(Request())
+
+
+def _load_drive_credentials(*, output_dir: Optional[str] = None):
+    token_path = drive_token_path(output_dir)
+    if token_path is not None:
+        with token_path.open("rb") as fh:
+            credentials = pickle.load(fh)
+        _refresh_credentials(credentials)
+        return credentials
+
+    sa_path = os.environ.get("GOOGLE_APPLICATION_CREDENTIALS", "").strip()
+    if sa_path:
+        from google.oauth2 import service_account
+
+        return service_account.Credentials.from_service_account_file(
+            sa_path,
+            scopes=[DRIVE_SCOPE],
+        )
+
+    import google.auth
+
+    return google.auth.default(scopes=[DRIVE_SCOPE])[0]
+
+
+def _get_drive_service(*, output_dir: Optional[str] = None):
     global _drive_service
     if _drive_service is not None:
         return _drive_service
@@ -134,28 +187,20 @@ def _get_drive_service():
             "google-api-python-client is required for permanent Google Drive deletes"
         ) from exc
 
-    credentials = None
     try:
-        from google.colab import auth as colab_auth
-
-        colab_auth.authenticate_user()
-    except ImportError:
-        pass
-
-    try:
-        import google.auth
-
-        credentials, _ = google.auth.default(
-            scopes=["https://www.googleapis.com/auth/drive"]
-        )
+        credentials = _load_drive_credentials(output_dir=output_dir)
     except Exception as exc:
-        raise RuntimeError("Google Drive credentials are not available") from exc
+        raise RuntimeError(
+            "Google Drive credentials are not available for worker subprocess. "
+            "In Colab, after auth.authenticate_user() in a notebook cell, run: "
+            "python scripts/export_colab_drive_token.py --output-dir <your output_dir>"
+        ) from exc
 
     _drive_service = build("drive", "v3", credentials=credentials, cache_discovery=False)
     return _drive_service
 
 
-def delete_drive_file_permanent(path: Path) -> bool:
+def delete_drive_file_permanent(path: Path, *, output_dir: Optional[str] = None) -> bool:
     path = path.resolve()
     if not path.exists():
         return True
@@ -165,7 +210,7 @@ def delete_drive_file_permanent(path: Path) -> bool:
         path.unlink()
         return True
 
-    service = _get_drive_service()
+    service = _get_drive_service(output_dir=output_dir)
     file_id = _drive_file_id_for_path(service, path, my_drive_root=my_drive_root)
     if not file_id:
         raise FileNotFoundError(f"Drive file id not found for {path}")
@@ -198,7 +243,7 @@ def delete_local_file(
         return True
 
     try:
-        delete_drive_file_permanent(path)
+        delete_drive_file_permanent(path, output_dir=output_dir)
         worker_log(log_channel, f"permanently deleted {path.name} on Google Drive")
         return True
     except Exception as exc:

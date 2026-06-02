@@ -18,14 +18,41 @@ python -m pip install -e .
 python -m pip install -U huggingface_hub yt-dlp pytubefix google-api-python-client
 ```
 
-После `drive.mount()` удаление локальных `.mp4` через обычный `unlink` отправляет файлы в корзину Drive. Collector при путях под `/content/drive/MyDrive` удаляет видео через Drive API (без корзины). Нужны те же Google-учётные данные, что и для mount (достаточно одной авторизации в сессии).
+После `drive.mount()` удаление локальных `.mp4` через обычный `unlink` отправляет файлы в корзину Drive. Workers запускаются отдельным subprocess — **не вызывай** `auth.authenticate_user()` внутри worker; один раз в ноутбуке:
+
+```python
+from google.colab import auth
+auth.authenticate_user()
+```
+
+Затем экспортируй токен для subprocess (после `auth` в той же сессии):
+
+```bash
+python scripts/export_colab_drive_token.py \
+  --output-dir /content/drive/MyDrive/dataset_runs/20k-test-2
+```
+
+Файл `.dataset_drive_token.pickle` в `output_dir` подхватится bootstrap автоматически. Без него большие `.mp4` после HF-upload уйдут в корзину; мелкие `.video.tmp`/`.audio.tmp` удаляются обычным `unlink` (в корзину, но они небольшие).
 
 Секреты лучше хранить в Colab Secrets или в переменных окружения:
 
-```python
-import os
-os.environ["HF_TOKEN"] = "<hf token>"
-os.environ["FETCHER_YOUTUBE_DATA_API_KEYS"] = "key1,key2,key3"
+Токен HF **нельзя** класть в `hf_token_env` в JSON — там только имя переменной: `"HF_TOKEN"`.
+
+Workers стартуют из **терминала**, не из ячейки ноутбука. Один из вариантов:
+
+```bash
+export HF_TOKEN=hf_...
+export FETCHER_YOUTUBE_DATA_API_KEYS=key1,key2,key3
+python scripts/colab_20k_bootstrap.py --role workers ...
+```
+
+Или Colab Secret `HF_TOKEN` — bootstrap подхватит его сам (нужен `google.colab.userdata`).
+
+Проверка в **том же терминале**, где запускаешь workers:
+
+```bash
+echo "${HF_TOKEN:0:7}..."   # должно показать hf_...
+python -c "import os; assert os.getenv('HF_TOKEN','').startswith('hf_')"
 ```
 
 ## 2. Discover по категории
