@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import json
 from datetime import timedelta
+from pathlib import Path
 
 import pytest
 
@@ -971,6 +972,33 @@ def test_video_filter_rejects_missing_duration():
     assert not filt.decide({"metadata": {"duration_seconds": None}}).accepted
     assert not filt.decide({"metadata": {"duration_seconds": 0}}).accepted
     assert filt.decide({"metadata": {"duration_seconds": 30}}).accepted
+
+
+@pytest.mark.unit
+def test_should_permanent_delete_on_drive_for_colab_paths():
+    from fetcher.dataset_collector.local_delete import (
+        is_google_drive_path,
+        should_permanent_delete_on_drive,
+    )
+
+    path = Path("/content/drive/MyDrive/dataset_runs/20k-test/videos/cat/v.mp4")
+    assert is_google_drive_path(path)
+    assert should_permanent_delete_on_drive(path)
+    assert should_permanent_delete_on_drive(
+        path,
+        output_dir="/content/drive/MyDrive/dataset_runs/20k-test",
+    )
+    assert not should_permanent_delete_on_drive(path, enabled=False)
+
+
+@pytest.mark.unit
+def test_delete_local_file_uses_unlink_off_drive(tmp_path):
+    from fetcher.dataset_collector.local_delete import delete_local_file
+
+    target = tmp_path / "clip.mp4"
+    target.write_bytes(b"abc")
+    assert delete_local_file(target)
+    assert not target.exists()
 
 
 @pytest.mark.unit

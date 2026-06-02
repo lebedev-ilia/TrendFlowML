@@ -213,6 +213,13 @@ class CampaignConfig(BaseModel):
         default_factory=lambda: ["ANDROID_VR", "WEB"],
         description="pytubefix clients tried in order; WEB can generate PO tokens via Node.js.",
     )
+    drive_permanent_delete: Optional[bool] = Field(
+        None,
+        description=(
+            "When output is on Google Drive (e.g. Colab), delete uploaded videos via Drive API "
+            "instead of unlink (which sends files to Trash). None = auto when output_dir is on Drive."
+        ),
+    )
 
     @validator("snapshot_schedule_days")
     def schedule_starts_with_zero(cls, value: List[int]) -> List[int]:

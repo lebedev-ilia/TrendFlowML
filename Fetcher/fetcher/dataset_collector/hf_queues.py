@@ -22,6 +22,7 @@ from fetcher.dataset_collector.queue_retries import (
     queue_item_key,
     record_queue_failure,
 )
+from fetcher.dataset_collector.local_delete import delete_local_file
 from fetcher.dataset_collector.worker_logging import (
     count_glob_files,
     count_jsonl_lines,
@@ -429,7 +430,12 @@ def run_hf_video_upload_queue(
                     category=item["category"],
                     local_path=item["local_relpath"],
                 )
-                item["local_path"].unlink(missing_ok=True)
+                delete_local_file(
+                    item["local_path"],
+                    output_dir=config.output_dir,
+                    permanent_on_drive=config.drive_permanent_delete,
+                    log_channel="hf-videos",
+                )
                 done_keys.add(item["key"])
                 results["uploaded"] += 1
                 worker_log("hf-videos", f"OK {item['video_id']} (uploaded; local file removed)")

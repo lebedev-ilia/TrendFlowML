@@ -15,8 +15,10 @@ git clone <YOUR_REPO_URL> TrendFlowML
 cd TrendFlowML/Fetcher
 apt-get update && apt-get install -y nodejs
 python -m pip install -e .
-python -m pip install -U huggingface_hub yt-dlp pytubefix
+python -m pip install -U huggingface_hub yt-dlp pytubefix google-api-python-client
 ```
+
+После `drive.mount()` удаление локальных `.mp4` через обычный `unlink` отправляет файлы в корзину Drive. Collector при путях под `/content/drive/MyDrive` удаляет видео через Drive API (без корзины). Нужны те же Google-учётные данные, что и для mount (достаточно одной авторизации в сессии).
 
 Секреты лучше хранить в Colab Secrets или в переменных окружения:
 
@@ -101,3 +103,9 @@ python scripts/colab_20k_bootstrap.py \
 3. Полный запуск: все категории примерно по `1112` accepted.
 
 Если после checkpoint-а `balancer_language` слишком часто отклоняет кандидатов, снизь `language.coefficient` в `dataset_balancer_20k.json` с `0.60` до `0.50-0.55`.
+
+## 7. Место на Google Drive
+
+Старые видео, уже попавшие в корзину, место не освобождают сами. Один раз очисти корзину вручную в Drive UI или через [Drive API `files.emptyTrash`](https://developers.google.com/drive/api/guides/delete).
+
+Чтобы отключить безвозвратное удаление (вернуть поведение с корзиной), в campaign JSON: `"drive_permanent_delete": false`.

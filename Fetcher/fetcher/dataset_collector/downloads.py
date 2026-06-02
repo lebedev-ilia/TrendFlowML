@@ -16,6 +16,7 @@ from fetcher.dataset_collector.cookies import (
 from fetcher.dataset_collector.proxy import ProxyRotator, configured_proxies, pytubefix_proxy_dict
 from fetcher.dataset_collector.schemas import CampaignConfig
 from fetcher.dataset_collector.state import DatasetState
+from fetcher.dataset_collector.local_delete import delete_local_file
 from fetcher.dataset_collector.worker_shutdown import should_stop
 from fetcher.dataset_collector.queue_retries import (
     load_dead_letter_keys,
@@ -159,11 +160,26 @@ def _check_shutdown() -> None:
         raise KeyboardInterrupt("worker shutdown requested")
 
 
-def _cleanup_download_temps(target: Path) -> None:
+def _cleanup_download_temps(
+    target: Path,
+    *,
+    output_dir: str | None = None,
+    permanent_on_drive: bool | None = None,
+) -> None:
     for suffix in (".video.tmp", ".audio.tmp"):
-        target.with_name(f"{target.stem}{suffix}").unlink(missing_ok=True)
+        delete_local_file(
+            target.with_name(f"{target.stem}{suffix}"),
+            output_dir=output_dir,
+            permanent_on_drive=permanent_on_drive,
+            log_channel="download",
+        )
     if target.exists() and target.stat().st_size == 0:
-        target.unlink(missing_ok=True)
+        delete_local_file(
+            target,
+            output_dir=output_dir,
+            permanent_on_drive=permanent_on_drive,
+            log_channel="download",
+        )
 
 
 def _merge_av_with_ffmpeg(video_path: Path, audio_path: Path, output_path: Path) -> None:
@@ -225,8 +241,8 @@ def _download_youtube_mp4_at_height(
             _check_shutdown()
             _merge_av_with_ffmpeg(tmp_video, tmp_audio, target)
         finally:
-            tmp_video.unlink(missing_ok=True)
-            tmp_audio.unlink(missing_ok=True)
+            delete_local_file(tmp_video, log_channel="download")
+            delete_local_file(tmp_audio, log_channel="download")
         return f"{video_stream.resolution} (merged)"
 
     if progressive is None:
@@ -333,7 +349,11 @@ def _download_video_local_pytubefix_attempt(
         )
         worker_log("download", f"  saved as {label}")
     except KeyboardInterrupt:
-        _cleanup_download_temps(target)
+        _cleanup_download_temps(
+            target,
+            output_dir=config.output_dir,
+            permanent_on_drive=config.drive_permanent_delete,
+        )
         worker_log("download", f"STOP {video_id}: shutdown requested")
         raise
     except subprocess.CalledProcessError as exc:
@@ -408,7 +428,12 @@ def download_video_local(
         return target
 
     if target.exists() and target.stat().st_size == 0:
-        target.unlink(missing_ok=True)
+        delete_local_file(
+            target,
+            output_dir=config.output_dir,
+            permanent_on_drive=config.drive_permanent_delete,
+            log_channel="download",
+        )
         worker_log("download", f"removed empty partial file {video_id}")
 
     target.parent.mkdir(parents=True, exist_ok=True)
@@ -437,7 +462,11 @@ def download_video_local(
             worker_log("download", f"FAIL {video_id}: yt-dlp bot detection: {exc}")
             raise
         except KeyboardInterrupt:
-            _cleanup_download_temps(target)
+            _cleanup_download_temps(
+                target,
+                output_dir=config.output_dir,
+                permanent_on_drive=config.drive_permanent_delete,
+            )
             worker_log("download", f"STOP {video_id}: shutdown requested")
             raise
         except Exception as exc:
@@ -472,12 +501,20 @@ def download_video_local(
                     f"bot_detection {video_id}: client={client_name} "
                     f"cookie={cookie_file.name if cookie_file else 'none'}",
                 )
-                _cleanup_download_temps(target)
+                _cleanup_download_temps(
+                    target,
+                    output_dir=config.output_dir,
+                    permanent_on_drive=config.drive_permanent_delete,
+                )
                 continue
             except KeyboardInterrupt:
                 raise
             except Exception:
-                _cleanup_download_temps(target)
+                _cleanup_download_temps(
+                    target,
+                    output_dir=config.output_dir,
+                    permanent_on_drive=config.drive_permanent_delete,
+                )
                 raise
         if client_idx == 0 and len(pytubefix_clients) > 1:
             worker_log("download", f"all cookies failed for {video_id}; switching pytubefix client")
