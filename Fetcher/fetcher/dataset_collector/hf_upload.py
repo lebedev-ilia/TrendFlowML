@@ -7,6 +7,7 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Callable, Iterable
 
+from fetcher.dataset_collector.hf_commit_budget import resolve_hf_commit_limits
 from fetcher.dataset_collector.schemas import CampaignConfig
 
 
@@ -185,11 +186,12 @@ def upload_local_files_commit(
     if not items:
         return
     if state_dir is not None:
+        limits = resolve_hf_commit_limits(config)
         wait_for_commit_slot(
             state_dir=state_dir,
             repo_id=repo_id,
-            min_interval_seconds=config.hf_commit_min_interval_seconds,
-            hourly_limit=config.hf_commit_hourly_limit,
+            min_interval_seconds=limits.min_interval_seconds,
+            hourly_limit=limits.hourly_limit_per_colab,
         )
     api = get_hf_api(config)
     if len(items) == 1:

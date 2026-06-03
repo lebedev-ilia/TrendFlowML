@@ -702,6 +702,82 @@ def test_hf_remote_paths():
 
 
 @pytest.mark.unit
+def test_hf_commit_limits_single_colab_defaults():
+    from fetcher.dataset_collector.hf_commit_budget import resolve_hf_commit_limits
+    from fetcher.dataset_collector.schemas import CampaignConfig
+
+    cfg = CampaignConfig.parse_obj(
+        {
+            "name": "t",
+            "output_dir": "out",
+            "categories": [{"name": "Sport", "keywords": ["x"], "target_count": 1, "collect_count": 1}],
+        }
+    )
+    limits = resolve_hf_commit_limits(cfg)
+    assert limits.parallel_colab_count == 1
+    assert limits.hourly_limit_per_colab == 100
+    assert limits.min_interval_seconds == 37
+
+
+@pytest.mark.unit
+def test_hf_commit_limits_split_across_parallel_colabs():
+    from fetcher.dataset_collector.hf_commit_budget import resolve_hf_commit_limits
+    from fetcher.dataset_collector.schemas import CampaignConfig
+
+    cfg = CampaignConfig.parse_obj(
+        {
+            "name": "t",
+            "output_dir": "out",
+            "categories": [{"name": "Sport", "keywords": ["x"], "target_count": 1, "collect_count": 1}],
+            "hf_parallel_colab_count": 3,
+            "hf_repo_hourly_commit_limit": 128,
+            "hf_commit_budget_reserve": 0.9,
+        }
+    )
+    limits = resolve_hf_commit_limits(cfg)
+    assert limits.parallel_colab_count == 3
+    assert limits.hourly_limit_per_colab == 38
+    assert limits.min_interval_seconds >= 95
+    assert limits.coord_upload_min_interval_seconds >= 120
+
+
+@pytest.mark.unit
+def test_coord_flush_batches_hf_uploads(tmp_path, monkeypatch):
+    from fetcher.dataset_collector.hf_coordination import WorkerCoordination
+    from fetcher.dataset_collector.schemas import CampaignConfig
+    from fetcher.dataset_collector.state import DatasetState
+
+    uploads: list[str] = []
+
+    def fake_upload(local_path, remote):
+        uploads.append(remote)
+
+    cfg = CampaignConfig.parse_obj(
+        {
+            "name": "t",
+            "output_dir": str(tmp_path),
+            "categories": [{"name": "Sport", "keywords": ["x"], "target_count": 1, "collect_count": 1}],
+            "hf_coord_enabled": True,
+            "hf_upload_enabled": True,
+            "hf_shards_repo_id": "org/repo",
+            "worker_id": "w1",
+            "hf_parallel_colab_count": 3,
+        }
+    )
+    state = DatasetState(cfg)
+    state.initialize()
+    coord = WorkerCoordination(state, cfg)
+    monkeypatch.setattr(coord, "_upload_coord_file", fake_upload)
+    key = "youtube:Sport:v1"
+    assert coord.try_claim("download", key)
+    assert uploads == []
+    coord.mark_done("download", key, video_id="v1")
+    assert uploads == []
+    coord.flush_coord_uploads("download", force=True)
+    assert len(uploads) == 2
+
+
+@pytest.mark.unit
 def test_stable_shard_slot_is_deterministic():
     from fetcher.dataset_collector.hf_coordination import stable_shard_slot
     from fetcher.dataset_collector.schemas import CampaignConfig

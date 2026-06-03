@@ -361,6 +361,10 @@ def command_run_workers(args: argparse.Namespace) -> None:
 
     config = load_campaign_config(args.config)
     log_dir = Path(args.log_dir) if args.log_dir else Path(config.output_dir) / "logs" / "workers"
+    worker_kinds = None
+    if getattr(args, "worker_kinds", None):
+        worker_kinds = [part.strip() for part in args.worker_kinds.split(",") if part.strip()]
+
     run_all_workers(
         config_path=args.config,
         category=args.category,
@@ -372,6 +376,7 @@ def command_run_workers(args: argparse.Namespace) -> None:
         lease_name=args.lease_name,
         lease_owner=args.lease_owner,
         lease_ttl_sec=args.lease_ttl_sec,
+        worker_kinds=worker_kinds,
     )
 
 
@@ -488,6 +493,10 @@ def build_parser() -> argparse.ArgumentParser:
     run_workers.add_argument("--lease-name", help="Optional shared-state worker lease name for multi-Colab runs.")
     run_workers.add_argument("--lease-owner", help="Optional owner label for --lease-name.")
     run_workers.add_argument("--lease-ttl-sec", type=int, default=600)
+    run_workers.add_argument(
+        "--worker-kinds",
+        help="Comma-separated: download, enrich-metadata, upload-hf-shards, upload-hf-videos, upload-hf-enrich.",
+    )
     run_workers.set_defaults(func=command_run_workers)
 
     enrich = sub.add_parser(

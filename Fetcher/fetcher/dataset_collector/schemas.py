@@ -136,6 +136,40 @@ class CampaignConfig(BaseModel):
     hf_token_env: str = "HF_TOKEN"
     hf_upload_enabled: bool = False
     hf_upload_every_shards: int = 10
+    hf_parallel_colab_count: Optional[int] = Field(
+        None,
+        ge=1,
+        description=(
+            "How many Colab instances upload to the same HF repos at once (you set this). "
+            "Divides the Hub per-repo commit budget; also via env HF_PARALLEL_COLAB_COUNT."
+        ),
+    )
+    hf_repo_hourly_commit_limit: int = Field(
+        128,
+        ge=1,
+        description="Hugging Face commits/hour cap per dataset repo (Hub default 128).",
+    )
+    hf_commit_budget_reserve: float = Field(
+        0.9,
+        gt=0.0,
+        le=1.0,
+        description="Fraction of hf_repo_hourly_commit_limit to use when splitting across Colabs.",
+    )
+    hf_commit_limits_manual: bool = Field(
+        False,
+        description=(
+            "If true, keep hf_commit_min_interval_seconds and hf_commit_hourly_limit as written "
+            "even when hf_parallel_colab_count > 1."
+        ),
+    )
+    hf_coord_upload_min_interval_seconds: Optional[int] = Field(
+        None,
+        ge=30,
+        description=(
+            "Minimum seconds between batched HF uploads of coord claims/done files. "
+            "Auto from parallel Colab count if unset."
+        ),
+    )
     hf_commit_min_interval_seconds: int = Field(
         37,
         description="Minimum delay between commits per HF repo (37s keeps below 100 commits/hour).",
@@ -143,7 +177,7 @@ class CampaignConfig(BaseModel):
     hf_commit_hourly_limit: int = Field(
         100,
         ge=1,
-        description="Rolling per-repo commit cap over the last hour.",
+        description="Rolling per-repo commit cap over the last hour (single Colab default).",
     )
     hf_shard_upload_batch_files: int = 25
     hf_video_upload_batch_files: int = 25

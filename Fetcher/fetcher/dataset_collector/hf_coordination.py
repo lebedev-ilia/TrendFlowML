@@ -3,10 +3,15 @@ from __future__ import annotations
 import hashlib
 import os
 import re
+import time
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from typing import Iterable
 
+from fetcher.dataset_collector.hf_commit_budget import (
+    format_hf_commit_limits_summary,
+    resolve_hf_commit_limits,
+)
 from fetcher.dataset_collector.hf_upload import (
     get_hf_api,
     resolve_shards_repo_id,
@@ -80,10 +85,14 @@ class WorkerCoordination:
         self._active_claims: dict[str, dict] = {}
         self.global_done_keys: set[str] = set()
         self._shard_sync_cache = state.state_dir / "hf_shard_sync.json"
+        self._commit_limits = resolve_hf_commit_limits(config)
+        self._coord_dirty: set[str] = set()
+        self._coord_upload_at: dict[str, float] = {}
         if coord_enabled(config):
             from fetcher.dataset_collector.metrics import record_coord_worker_identity
 
             record_coord_worker_identity(config, self.worker_id)
+            worker_log("coord", format_hf_commit_limits_summary(self._commit_limits))
 
     def _remote(self, *parts: str) -> str:
         return "/".join([self.remote_prefix, *parts])
@@ -314,7 +323,7 @@ class WorkerCoordination:
         with file_lock(self.state.state_dir / f"coord_claim_{service}.lock"):
             append_jsonl(path, record)
         self._active_claims[key] = record
-        self._upload_claims_file(service)
+        self._coord_dirty.add(service)
         from fetcher.dataset_collector.metrics import record_coord_claim
 
         record_coord_claim(self.worker_id, service, ok=True)
@@ -343,8 +352,27 @@ class WorkerCoordination:
         append_jsonl(self._local_claims_path(service), release)
         self.global_done_keys.add(key)
         self._active_claims.pop(key, None)
-        self._upload_claims_file(service)
-        self._upload_done_file(service)
+        self._coord_dirty.add(service)
+
+    def flush_coord_uploads(self, service: str | None = None, *, force: bool = False) -> None:
+        """Batch HF uploads of claims/done (avoids one commit per video)."""
+        if not coord_enabled(self.config):
+            return
+        targets = [service] if service else sorted(self._coord_dirty)
+        now = time.time()
+        for svc in targets:
+            if svc not in self._coord_dirty and not force:
+                continue
+            last = self._coord_upload_at.get(svc, 0.0)
+            if (
+                not force
+                and (now - last) < self._commit_limits.coord_upload_min_interval_seconds
+            ):
+                continue
+            self._upload_claims_file(svc)
+            self._upload_done_file(svc)
+            self._coord_upload_at[svc] = time.time()
+            self._coord_dirty.discard(svc)
 
     def _upload_claims_file(self, service: str) -> None:
         local_path = self._local_claims_path(service)
@@ -365,8 +393,8 @@ class WorkerCoordination:
             wait_for_commit_slot(
                 state_dir=self.state.state_dir,
                 repo_id=self.repo_id,
-                min_interval_seconds=self.config.hf_commit_min_interval_seconds,
-                hourly_limit=self.config.hf_commit_hourly_limit,
+                min_interval_seconds=self._commit_limits.min_interval_seconds,
+                hourly_limit=self._commit_limits.hourly_limit_per_colab,
             )
             upload_local_file(self.config, local_path, repo_id=self.repo_id, path_in_repo=remote)
             record_commit(state_dir=self.state.state_dir, repo_id=self.repo_id, files=1)

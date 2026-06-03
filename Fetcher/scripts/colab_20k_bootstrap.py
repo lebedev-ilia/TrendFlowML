@@ -25,6 +25,20 @@ def _write_json(path: Path, payload: dict) -> None:
     path.write_text(json.dumps(payload, ensure_ascii=False, indent=2), encoding="utf-8")
 
 
+def _apply_parallel_colab_hf_tuning(config: dict, parallel: int) -> None:
+    """Larger HF batches when several Colabs share the same repos."""
+    if parallel <= 1:
+        return
+    config["hf_parallel_colab_count"] = parallel
+    for key, floor in (
+        ("hf_shard_upload_batch_files", 50),
+        ("hf_video_upload_batch_files", 100),
+        ("hf_enrich_upload_batch_files", 100),
+    ):
+        current = int(config.get(key) or 25)
+        config[key] = max(current, floor)
+
+
 def build_runtime_config(args: argparse.Namespace) -> Path:
     fetcher_root = _fetcher_root()
     template_path = fetcher_root / args.template
@@ -56,6 +70,11 @@ def build_runtime_config(args: argparse.Namespace) -> Path:
         config["worker_shard_index"] = args.worker_shard_index
     if args.worker_shard_count is not None:
         config["worker_shard_count"] = args.worker_shard_count
+    parallel_colab = args.parallel_colab_count
+    if parallel_colab is None and args.worker_shard_count is not None:
+        parallel_colab = args.worker_shard_count
+    if parallel_colab is not None:
+        _apply_parallel_colab_hf_tuning(config, max(int(parallel_colab), 1))
     runtime_config = output_dir / "runtime_dataset_campaign_20k.json"
     _write_json(runtime_config, config)
     token_path = output_dir / ".dataset_drive_token.pickle"
@@ -134,6 +153,14 @@ def main(argv: list[str] | None = None) -> int:
     )
     parser.add_argument("--worker-shard-index", type=int, help="0..N-1 slot for static hash sharding across Colabs.")
     parser.add_argument("--worker-shard-count", type=int, help="Number of parallel download/enrich Colabs.")
+    parser.add_argument(
+        "--parallel-colab-count",
+        type=int,
+        help=(
+            "How many Colab instances share HF repos (you set this). "
+            "Splits Hub 128 commits/h per repo. Defaults to --worker-shard-count when omitted."
+        ),
+    )
     parser.add_argument(
         "--hf-coord",
         action="store_true",

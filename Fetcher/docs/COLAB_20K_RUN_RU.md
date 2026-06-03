@@ -124,6 +124,7 @@ python scripts/colab_20k_bootstrap.py \
   --worker-id colab-account-2 \
   --worker-shard-index 1 \
   --worker-shard-count 3 \
+  --parallel-colab-count 3 \
   --hf-repo-prefix Ilialebedev \
   --metrics-port 0
 ```
@@ -145,6 +146,34 @@ python scripts/colab_20k_bootstrap.py \
 ```
 
 Важно: на discover-Colab `upload-hf-shards` должен успевать пушить метадату; download-Colab без локального discover всё равно увидит новые ID после sync с HF.
+
+### Лимит HF commits (128/час на repo) и число Colab
+
+Hub ограничивает **128 commit’ов в час на один dataset repo** суммарно по всем Colab. Ты задаёшь, сколько инстансов работают параллельно — от этого код считает бюджет **на этот Colab**:
+
+```bash
+# 3 Colab одновременно (A discover+shards, B и C download) — на КАЖДОМ:
+python scripts/colab_20k_bootstrap.py \
+  ... \
+  --parallel-colab-count 3 \
+  --worker-shard-count 3
+```
+
+Или в `runtime_dataset_campaign_20k.json` / env:
+
+```json
+"hf_parallel_colab_count": 3,
+"hf_repo_hourly_commit_limit": 128,
+"hf_commit_budget_reserve": 0.9
+```
+
+```bash
+export HF_PARALLEL_COLAB_COUNT=3
+```
+
+При `hf_parallel_colab_count: 3` (и reserve 0.9): **≤38 commit’ов/час на Colab**, интервал **≥95 с** между commit’ами в один repo; claims/done на HF выгружаются **батчом в конце pass**, а не после каждого видео.
+
+Если нужны свои числа: `"hf_commit_limits_manual": true` и явно `hf_commit_hourly_limit` / `hf_commit_min_interval_seconds`.
 
 Для Colab профиль `dataset_campaign_20k.json` использует `pytubefix` как основной backend, но с ротацией cookies и fallback client `WEB` для генерации PO-token через Node.js. Если меняешь runtime config вручную, проверь:
 

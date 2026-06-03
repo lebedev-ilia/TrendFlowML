@@ -876,6 +876,9 @@ def run_download_queue(
 
     from fetcher.dataset_collector.inventory import refresh_summary
 
+    if coord_enabled(config):
+        coord.flush_coord_uploads("download", force=True)
+
     refresh_summary(state)
     results["attempted"] = attempted
     log_pass_footer("download", results)

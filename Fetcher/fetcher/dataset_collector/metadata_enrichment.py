@@ -493,6 +493,9 @@ def run_metadata_enrich_queue(
             ):
                 dead_letter_keys.add(retry_key)
 
+    if coord_enabled(config):
+        coord.flush_coord_uploads("enrich", force=True)
+
     written_enrich_shards = state.flush_all_enrich_pending()
     if written_enrich_shards:
         worker_log("enrich", f"flushed enrich shards: {len(written_enrich_shards)}")
