@@ -54,6 +54,7 @@ provision_grafana() {
   cp "${MONITORING}/grafana/dashboards/"*.json \
     /var/lib/grafana/dashboards/
   chown -R grafana:grafana /var/lib/grafana/dashboards 2>/dev/null || true
+  chown -R grafana:grafana /etc/grafana/provisioning 2>/dev/null || true
 }
 
 stop_monitoring() {
@@ -152,9 +153,12 @@ case "$cmd" in
     if ! _prometheus_up; then
       start_prometheus
     fi
-    if ! _grafana_up; then
-      start_grafana
+    # Restart Grafana so provisioning (datasource uid=prometheus) is always loaded.
+    if _grafana_up; then
+      pkill -f grafana-server 2>/dev/null || true
+      sleep 2
     fi
+    start_grafana
     wait_ready || true
     echo ""
     echo "IMPORTANT: do not re-run the Colab start cell — Jupyter sends SIGINT and kills Grafana."

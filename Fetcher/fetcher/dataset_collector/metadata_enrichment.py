@@ -249,7 +249,7 @@ def enrich_shard_video(
             worker_log("enrich", f"skip {video_id}: metadata already has yt-dlp fields")
         return "ok"
 
-    worker_log("enrich", f"yt-dlp fetch {video_id} ù")
+    worker_log("enrich", f"yt-dlp fetch {video_id}")
     started_at = time.perf_counter()
     info = fetch_ytdlp_info(url, cookie_rotator=cookie_rotator, proxy_rotator=proxy_rotator)
     if info is None:
@@ -398,7 +398,7 @@ def run_metadata_enrich_queue(
     )
 
     if queue_lines == 0:
-        worker_log("enrich", "queue empty ù wait until discover writes a metadata shard")
+        worker_log("enrich", "queue empty - wait until discover writes a metadata shard")
         result = {"enriched": 0, "failed": 0, "skipped": 0, "rejected": 0, "attempted": 0}
         log_pass_footer("enrich", result)
         return result
@@ -409,7 +409,7 @@ def run_metadata_enrich_queue(
 
     for item in iter_metadata_enrich_queue(queue_path):
         if should_stop():
-            worker_log("enrich", "shutdown requested ù stopping pass")
+            worker_log("enrich", "shutdown requested - stopping pass")
             break
         if limit is not None and results["enriched"] + results["failed"] + results["rejected"] >= limit:
             worker_log("enrich", f"limit reached ({limit}), stopping this pass")
@@ -500,7 +500,7 @@ def run_metadata_enrich_queue(
     if skip_reasons:
         log_kv_block("enrich", [(f"skipped_{k}", v) for k, v in sorted(skip_reasons.items())])
     if attempted == 0 and results["skipped"] > 0:
-        worker_log("enrich", "no new items processed ù all queue rows already done or filtered")
+        worker_log("enrich", "no new items processed - all queue rows already done or filtered")
 
     from fetcher.dataset_collector.inventory import refresh_summary
 
