@@ -58,3 +58,5 @@ dataset_runs/
 Fetcher/fetcher/dataset_collector/keys/
 Fetcher/fetcher/dataset_collector/cookies/
 Fetcher/fetcher/dataset_collector/proxies/
+
+Fetcher/tests/full_results/

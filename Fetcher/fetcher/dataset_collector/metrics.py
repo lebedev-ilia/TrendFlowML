@@ -621,6 +621,90 @@ dataset_collector_hf_commit_files_total = Counter(
     labelnames=("repo_type",),
 )
 
+# Multi-Colab HF coordination (coord_sync)
+dataset_collector_coord_enabled = Gauge(
+    "dataset_collector_coord_enabled",
+    "1 when hf_coord_enabled is active on this worker.",
+)
+
+dataset_collector_coord_worker_info = Gauge(
+    "dataset_collector_coord_worker_info",
+    "Coordination worker identity (always 1 for this process).",
+    labelnames=("worker_id", "shard_index", "shard_count"),
+)
+
+dataset_collector_coord_sync_gauge = Gauge(
+    "dataset_collector_coord_sync_gauge",
+    "Last HF coordination sync snapshot.",
+    labelnames=("worker_id", "service", "metric"),
+)
+
+dataset_collector_coord_skip_total = Counter(
+    "dataset_collector_coord_skip_total",
+    "Queue items skipped by HF coordination.",
+    labelnames=("worker_id", "service", "reason"),
+)
+
+dataset_collector_coord_claim_total = Counter(
+    "dataset_collector_coord_claim_total",
+    "HF coordination claim attempts.",
+    labelnames=("worker_id", "service", "result"),
+)
+
+dataset_collector_coord_sync_errors_total = Counter(
+    "dataset_collector_coord_sync_errors_total",
+    "HF list_repo_files / sync failures.",
+    labelnames=("worker_id", "service"),
+)
+
+
+def record_coord_worker_identity(config, worker_id: str) -> None:
+    from fetcher.dataset_collector.hf_coordination import coord_enabled
+
+    if not coord_enabled(config):
+        dataset_collector_coord_enabled.set(0)
+        return
+    dataset_collector_coord_enabled.set(1)
+    shard_index = config.worker_shard_index
+    shard_count = config.worker_shard_count or 1
+    dataset_collector_coord_worker_info.labels(
+        worker_id=worker_id,
+        shard_index=str(shard_index if shard_index is not None else -1),
+        shard_count=str(shard_count),
+    ).set(1)
+
+
+def record_coord_sync(worker_id: str, service: str, stats: dict[str, int], *, active_claims: int, global_done: int) -> None:
+    labels = {"worker_id": worker_id, "service": service}
+    for metric, value in (
+        ("claims_files", stats.get("claims_files", 0)),
+        ("done_files", stats.get("done_files", 0)),
+        ("metadata_shards", stats.get("metadata_shards", 0)),
+        ("active_claims", active_claims),
+        ("global_done", global_done),
+    ):
+        dataset_collector_coord_sync_gauge.labels(metric=metric, **labels).set(value)
+
+
+def record_coord_skip(worker_id: str, service: str, reason: str) -> None:
+    dataset_collector_coord_skip_total.labels(
+        worker_id=worker_id,
+        service=service,
+        reason=reason,
+    ).inc()
+
+
+def record_coord_claim(worker_id: str, service: str, *, ok: bool) -> None:
+    dataset_collector_coord_claim_total.labels(
+        worker_id=worker_id,
+        service=service,
+        result="claimed" if ok else "busy",
+    ).inc()
+
+
+def record_coord_sync_error(worker_id: str, service: str) -> None:
+    dataset_collector_coord_sync_errors_total.labels(worker_id=worker_id, service=service).inc()
+
 
 def update_gauges(stats: dict) -> None:
     dataset_collector_run_accepted.set(stats.get("run_accepted", 0))

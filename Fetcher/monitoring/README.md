@@ -28,7 +28,10 @@ docker compose up -d
 | **Grafana** | http://127.0.0.1:3001 | admin / admin |
 | **Prometheus** | http://127.0.0.1:9090 | — |
 
-Дашборд **Dataset Collector** появится в папке *Dataset Collector* (home dashboard).
+Дашборды в папке *Dataset Collector*:
+
+- **Dataset Collector** — discover, балансер, inventory (home dashboard)
+- **Dataset Collector — Coord Sync** — multi-Colab HF coordination (`hf_coord_enabled`)
 
 ## Проверка scrape
 
@@ -51,6 +54,22 @@ Job `dataset-collector` → **UP**.
 5. Обновите дашборд: `docker compose restart grafana` в `Fetcher/monitoring`, затем Ctrl+Shift+R в браузере.
 
 Проверка в Prometheus: http://127.0.0.1:9090/graph → запрос `dataset_collector_session_accepted` — должно быть число ~700+.
+
+## Colab + Cloudflare tunnel
+
+Grafana is on **host port 3001** (container 3000). Point cloudflared at **3001**, not 3000:
+
+```bash
+cloudflared tunnel --url http://127.0.0.1:3001
+```
+
+Set `GF_SERVER_ROOT_URL` to your trycloudflare URL (see `docker-compose.colab-tunnel.yml` and `docs/COLAB_20K_RUN_RU.md` §8).
+
+Colab scrape targets (discover `9095`, workers `9096`):
+
+```bash
+docker compose -f docker-compose.yml -f docker-compose.colab.yml up -d
+```
 
 ## Остановка
 

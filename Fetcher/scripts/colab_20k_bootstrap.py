@@ -48,6 +48,14 @@ def build_runtime_config(args: argparse.Namespace) -> Path:
     config["use_proxies_for_discovery"] = bool(args.use_discovery_proxies)
     if args.disable_hf_upload:
         config["hf_upload_enabled"] = False
+    if args.hf_coord or args.role in ("workers-download", "workers-enrich"):
+        config["hf_coord_enabled"] = True
+    if args.worker_id:
+        config["worker_id"] = args.worker_id
+    if args.worker_shard_index is not None:
+        config["worker_shard_index"] = args.worker_shard_index
+    if args.worker_shard_count is not None:
+        config["worker_shard_count"] = args.worker_shard_count
     runtime_config = output_dir / "runtime_dataset_campaign_20k.json"
     _write_json(runtime_config, config)
     token_path = output_dir / ".dataset_drive_token.pickle"
@@ -100,7 +108,19 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--template", default="dataset_campaign_20k.json")
     parser.add_argument("--output-dir", default="/content/drive/MyDrive/dataset_runs/20k-test")
     parser.add_argument("--run-name", default="dataset-20k-colab")
-    parser.add_argument("--role", choices=["discover", "workers", "snapshot", "status", "inventory-rebuild"], default="workers")
+    parser.add_argument(
+        "--role",
+        choices=[
+            "discover",
+            "workers",
+            "workers-download",
+            "workers-enrich",
+            "snapshot",
+            "status",
+            "inventory-rebuild",
+        ],
+        default="workers",
+    )
     parser.add_argument("--category")
     parser.add_argument("--limit", type=int)
     parser.add_argument("--snapshot-index", type=int)
@@ -108,6 +128,17 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--metrics-port", type=int, default=0, help="0 disables Prometheus server for Colab.")
     parser.add_argument("--lease-name", help="Shared lease name for multi-Colab coordination.")
     parser.add_argument("--lease-owner", default=os.getenv("COLAB_RELEASE_TAG") or os.getenv("HOSTNAME"))
+    parser.add_argument(
+        "--worker-id",
+        help="Unique worker id for HF coordination (defaults to COLAB_RELEASE_TAG or hostname).",
+    )
+    parser.add_argument("--worker-shard-index", type=int, help="0..N-1 slot for static hash sharding across Colabs.")
+    parser.add_argument("--worker-shard-count", type=int, help="Number of parallel download/enrich Colabs.")
+    parser.add_argument(
+        "--hf-coord",
+        action="store_true",
+        help="Enable HF coordination (auto for workers-download / workers-enrich roles).",
+    )
     parser.add_argument("--hf-repo-prefix", help="HF namespace, e.g. Ilialebedev.")
     parser.add_argument("--youtube-keys-file")
     parser.add_argument("--cookie-files-dir")
@@ -118,10 +149,14 @@ def main(argv: list[str] | None = None) -> int:
         help="Use configured proxies for YouTube Data API discovery/enrich. Default is direct API calls on Colab.",
     )
     parser.add_argument("--disable-hf-upload", action="store_true")
+    parser.add_argument(
+        "--worker-kinds",
+        help="Comma-separated for role=workers: download, enrich-metadata, upload-hf-shards, upload-hf-videos, upload-hf-enrich.",
+    )
     args = parser.parse_args(argv)
 
     runtime_config = build_runtime_config(args)
-    if args.role in {"discover", "workers"}:
+    if args.role in {"discover", "workers", "workers-download", "workers-enrich"}:
         _require_hf_token_for_upload(runtime_config)
     py = sys.executable
     base = [py, "-m", "fetcher.dataset_collector.cli"]
@@ -136,7 +171,7 @@ def main(argv: list[str] | None = None) -> int:
             cmd += ["--metrics-port", str(args.metrics_port)]
         return run_command(cmd)
 
-    if args.role == "workers":
+    if args.role in ("workers", "workers-download", "workers-enrich"):
         cmd = [*base, "run-workers", str(runtime_config), "--interval", str(args.interval)]
         if args.category:
             cmd += ["--category", args.category]
@@ -144,6 +179,12 @@ def main(argv: list[str] | None = None) -> int:
             cmd += ["--metrics-port", str(args.metrics_port)]
         else:
             cmd += ["--metrics-port", "0"]
+        if args.worker_kinds:
+            cmd += ["--worker-kinds", args.worker_kinds]
+        elif args.role == "workers-download":
+            cmd += ["--worker-kinds", "download,upload-hf-videos"]
+        elif args.role == "workers-enrich":
+            cmd += ["--worker-kinds", "enrich-metadata,upload-hf-enrich"]
         if args.lease_name:
             cmd += ["--lease-name", args.lease_name]
             if args.lease_owner:

@@ -1,0 +1,16 @@
+# Use with Cloudflare quick tunnel (trycloudflare.com):
+#
+#   export GRAFANA_ROOT_URL="https://YOUR-SUBDOMAIN.trycloudflare.com/"
+#   docker compose -f docker-compose.yml -f docker-compose.colab-tunnel.yml up -d
+#   cloudflared tunnel --url http://127.0.0.1:3001
+#
+# Update GRAFANA_ROOT_URL every time cloudflared prints a new URL.
+
+services:
+  grafana:
+    environment:
+      GF_SERVER_ROOT_URL: "${GRAFANA_ROOT_URL:-http://127.0.0.1:3001/}"
+      GF_SERVER_DOMAIN: "${GRAFANA_DOMAIN:-}"
+      GF_SERVER_ENFORCE_DOMAIN: "false"
+      GF_SECURITY_COOKIE_SAMESITE: lax
+      GF_SECURITY_COOKIE_SECURE: "true"

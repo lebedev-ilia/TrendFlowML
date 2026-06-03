@@ -249,7 +249,7 @@ def enrich_shard_video(
             worker_log("enrich", f"skip {video_id}: metadata already has yt-dlp fields")
         return "ok"
 
-    worker_log("enrich", f"yt-dlp fetch {video_id} ‚Ä¶")
+    worker_log("enrich", f"yt-dlp fetch {video_id} ù")
     started_at = time.perf_counter()
     info = fetch_ytdlp_info(url, cookie_rotator=cookie_rotator, proxy_rotator=proxy_rotator)
     if info is None:
@@ -364,8 +364,20 @@ def run_metadata_enrich_queue(
         worker_log("enrich", "proxies: direct (use_proxies_for_discovery=false)")
     proxy_rotator = ProxyRotator(proxies=enrich_proxies) if enrich_proxies else None
     log_pass_header("enrich", "pass start")
+    from fetcher.dataset_collector.hf_coordination import WorkerCoordination, coord_enabled
+
+    coord = WorkerCoordination(state, config)
+    if coord_enabled(config):
+        coord_stats = coord.sync_from_hf("enrich")
+        worker_log("enrich", f"coord_sync worker={coord.worker_id} {coord_stats}")
 
     done_keys = state.load_metadata_enrich_done()
+    if coord_enabled(config):
+        done_keys |= coord.global_done_keys
+    queued_from_shards = scan_shards_for_enrichment(state, category=category, done_keys=done_keys)
+    if queued_from_shards:
+        worker_log("enrich", f"queued_from_metadata_shards: {queued_from_shards}")
+
     hf_enrich_done = state.load_hf_enrich_upload_done()
     hf_enrich_queued = state.load_hf_enrich_upload_queued()
     dead_letter_keys = load_dead_letter_keys(state, service="enrich")
@@ -386,7 +398,7 @@ def run_metadata_enrich_queue(
     )
 
     if queue_lines == 0:
-        worker_log("enrich", "queue empty ‚Äî wait until discover writes a metadata shard")
+        worker_log("enrich", "queue empty ù wait until discover writes a metadata shard")
         result = {"enriched": 0, "failed": 0, "skipped": 0, "rejected": 0, "attempted": 0}
         log_pass_footer("enrich", result)
         return result
@@ -397,7 +409,7 @@ def run_metadata_enrich_queue(
 
     for item in iter_metadata_enrich_queue(queue_path):
         if should_stop():
-            worker_log("enrich", "shutdown requested ‚Äî stopping pass")
+            worker_log("enrich", "shutdown requested ù stopping pass")
             break
         if limit is not None and results["enriched"] + results["failed"] + results["rejected"] >= limit:
             worker_log("enrich", f"limit reached ({limit}), stopping this pass")
@@ -434,6 +446,17 @@ def run_metadata_enrich_queue(
             results["skipped"] += 1
             skip_reasons["pending_hf_upload"] = skip_reasons.get("pending_hf_upload", 0) + 1
             continue
+        coord_skip = coord.skip_reason("enrich", key)
+        if coord_skip:
+            coord.record_skip("enrich", coord_skip)
+            results["skipped"] += 1
+            skip_reasons[coord_skip] = skip_reasons.get(coord_skip, 0) + 1
+            continue
+        if not coord.try_claim("enrich", key):
+            coord.record_skip("enrich", "coord_claim_busy")
+            results["skipped"] += 1
+            skip_reasons["coord_claim_busy"] = skip_reasons.get("coord_claim_busy", 0) + 1
+            continue
 
         attempted += 1
         worker_log(
@@ -453,9 +476,11 @@ def run_metadata_enrich_queue(
             proxy_rotator=proxy_rotator,
         )
         if ok == "ok":
+            coord.mark_done("enrich", key, video_id=video_id)
             hf_enrich_queued.add(key)
             results["enriched"] += 1
         elif ok == "rejected":
+            coord.mark_done("enrich", key, video_id=video_id, result="rejected")
             hf_enrich_queued.add(key)
             results["rejected"] += 1
         else:
@@ -475,7 +500,7 @@ def run_metadata_enrich_queue(
     if skip_reasons:
         log_kv_block("enrich", [(f"skipped_{k}", v) for k, v in sorted(skip_reasons.items())])
     if attempted == 0 and results["skipped"] > 0:
-        worker_log("enrich", "no new items processed ‚Äî all queue rows already done or filtered")
+        worker_log("enrich", "no new items processed ù all queue rows already done or filtered")
 
     from fetcher.dataset_collector.inventory import refresh_summary
 

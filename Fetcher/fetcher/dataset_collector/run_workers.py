@@ -103,6 +103,11 @@ def _queue_worker_daemon(
     signal.signal(signal.SIGTERM, lambda *_: request_shutdown())
     signal.signal(signal.SIGINT, lambda *_: request_shutdown())
 
+    if kind == "download":
+        from fetcher.dataset_collector.worker_logging import install_sanitized_worker_stderr
+
+        install_sanitized_worker_stderr()
+
     with log_path.open("a", encoding="utf-8") as log:
         log.write(
             f"=== {name} worker; idle_interval={idle_interval_sec}s "
@@ -246,6 +251,15 @@ def _stop_worker_process(proc: subprocess.Popen, *, name: str, grace_sec: float 
     print(f"killed {name} (pid={proc.pid})", flush=True)
 
 
+DEFAULT_QUEUE_WORKERS: list[QueueWorkerSpec] = [
+    ("enrich-metadata", "enrich-metadata", False),
+    ("download", "download", False),
+    ("upload-hf-shards", "upload-hf-shards", False),
+    ("upload-hf-videos", "upload-hf-videos", False),
+    ("upload-hf-enrich", "upload-hf-enrich", False),
+]
+
+
 def run_all_workers(
     *,
     config_path: str,
@@ -258,6 +272,7 @@ def run_all_workers(
     lease_name: str | None = None,
     lease_owner: str | None = None,
     lease_ttl_sec: int = 600,
+    worker_kinds: list[str] | None = None,
 ) -> None:
     """Run long-lived queue services. Discover is opt-in and normally run separately."""
     reset_shutdown()
@@ -312,15 +327,12 @@ def run_all_workers(
             discover_args.extend(["--category", category])
         subprocess_workers.append(("discover", discover_args, True))
 
-    queue_workers.extend(
-        [
-            ("enrich-metadata", "enrich-metadata", False),
-            ("download", "download", False),
-            ("upload-hf-shards", "upload-hf-shards", False),
-            ("upload-hf-videos", "upload-hf-videos", False),
-            ("upload-hf-enrich", "upload-hf-enrich", False),
-        ]
-    )
+    kind_filter = {k.strip() for k in worker_kinds} if worker_kinds else None
+    for spec in DEFAULT_QUEUE_WORKERS:
+        if kind_filter is None or spec[1] in kind_filter:
+            queue_workers.append(spec)
+    if kind_filter and not queue_workers:
+        raise ValueError(f"no queue workers match --worker-kinds {sorted(kind_filter)}")
 
     processes: list[tuple[str, subprocess.Popen]] = []
 
@@ -426,7 +438,15 @@ def main(argv: List[str] | None = None) -> None:
     parser.add_argument("--lease-name", help="Optional shared-state worker lease name for multi-Colab runs.")
     parser.add_argument("--lease-owner", help="Optional owner label for --lease-name.")
     parser.add_argument("--lease-ttl-sec", type=int, default=600)
+    parser.add_argument(
+        "--worker-kinds",
+        help="Comma-separated queue workers: download, enrich-metadata, upload-hf-shards, upload-hf-videos, upload-hf-enrich.",
+    )
     args = parser.parse_args(argv)
+
+    worker_kinds = None
+    if args.worker_kinds:
+        worker_kinds = [part.strip() for part in args.worker_kinds.split(",") if part.strip()]
 
     log_dir = args.log_dir
     if log_dir is None:
@@ -446,6 +466,7 @@ def main(argv: List[str] | None = None) -> None:
         lease_name=args.lease_name,
         lease_owner=args.lease_owner,
         lease_ttl_sec=args.lease_ttl_sec,
+        worker_kinds=worker_kinds,
     )
 
 

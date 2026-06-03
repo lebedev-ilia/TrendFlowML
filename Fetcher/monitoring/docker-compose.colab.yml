@@ -1,0 +1,7 @@
+# Colab / Linux VM: same as docker-compose.yml but Prometheus uses prometheus.colab.yml
+# (discover :9095, workers :9096 on host).
+
+services:
+  prometheus:
+    volumes:
+      - ./prometheus/prometheus.colab.yml:/etc/prometheus/prometheus.yml:ro

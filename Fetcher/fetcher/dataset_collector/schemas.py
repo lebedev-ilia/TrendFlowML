@@ -220,6 +220,36 @@ class CampaignConfig(BaseModel):
             "instead of unlink (which sends files to Trash). None = auto when output_dir is on Drive."
         ),
     )
+    hf_coord_enabled: bool = Field(
+        False,
+        description=(
+            "Multi-Colab: sync metadata/claims/done via HF shards repo so download/enrich workers "
+            "do not process the same video_id."
+        ),
+    )
+    hf_coord_path_prefix: str = Field(
+        "state/coordination",
+        description="Path prefix inside hf_shards_repo_id for claims and per-worker done files.",
+    )
+    hf_coord_claim_ttl_seconds: int = Field(
+        7200,
+        ge=300,
+        description="Active claim TTL; expired claims can be taken by another worker.",
+    )
+    worker_id: Optional[str] = Field(
+        None,
+        description="Unique label for this Colab/process (claims file name on HF).",
+    )
+    worker_shard_index: Optional[int] = Field(
+        None,
+        ge=0,
+        description="Optional static shard index 0..worker_shard_count-1 (hash of video key).",
+    )
+    worker_shard_count: Optional[int] = Field(
+        None,
+        ge=1,
+        description="Number of parallel download/enrich Colabs; use with worker_shard_index.",
+    )
 
     @validator("hf_token_env")
     def validate_hf_token_env_is_name(cls, value: str) -> str:

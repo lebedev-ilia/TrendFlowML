@@ -1,0 +1,236 @@
+{
+  "annotations": { "list": [] },
+  "editable": true,
+  "fiscalYearStartMonth": 0,
+  "graphTooltip": 1,
+  "id": null,
+  "links": [
+    {
+      "title": "Dataset Collector (main)",
+      "type": "link",
+      "url": "/d/dataset-collector/dataset-collector"
+    }
+  ],
+  "liveNow": true,
+  "refresh": "10s",
+  "schemaVersion": 39,
+  "tags": ["dataset-collector", "coord-sync", "multi-colab", "trendflow"],
+  "templating": {
+    "list": [
+      {
+        "current": { "selected": false, "text": "All", "value": "$__all" },
+        "datasource": { "type": "prometheus", "uid": "prometheus" },
+        "definition": "label_values(dataset_collector_coord_worker_info, worker_id)",
+        "includeAll": true,
+        "multi": true,
+        "name": "worker_id",
+        "query": "label_values(dataset_collector_coord_worker_info, worker_id)",
+        "refresh": 2,
+        "type": "query"
+      },
+      {
+        "current": { "selected": false, "text": "All", "value": "$__all" },
+        "datasource": { "type": "prometheus", "uid": "prometheus" },
+        "definition": "label_values(dataset_collector_coord_sync_gauge, service)",
+        "includeAll": true,
+        "multi": true,
+        "name": "service",
+        "query": "label_values(dataset_collector_coord_sync_gauge, service)",
+        "refresh": 2,
+        "type": "query"
+      }
+    ]
+  },
+  "time": { "from": "now-1h", "to": "now" },
+  "timezone": "browser",
+  "title": "Dataset Collector — Coord Sync",
+  "uid": "dataset-collector-coord-sync",
+  "version": 1,
+  "panels": [
+    {
+      "collapsed": false,
+      "gridPos": { "h": 1, "w": 24, "x": 0, "y": 0 },
+      "id": 200,
+      "title": "Worker / HF coordination",
+      "type": "row"
+    },
+    {
+      "datasource": { "type": "prometheus", "uid": "prometheus" },
+      "fieldConfig": {
+        "defaults": { "unit": "none", "decimals": 0, "color": { "mode": "thresholds" }, "thresholds": { "mode": "absolute", "steps": [{ "color": "red", "value": null }, { "color": "green", "value": 1 }] } }
+      },
+      "gridPos": { "h": 4, "w": 4, "x": 0, "y": 1 },
+      "id": 201,
+      "options": { "colorMode": "value", "graphMode": "none", "reduceOptions": { "calcs": ["lastNotNull"] } },
+      "targets": [{ "expr": "max(dataset_collector_coord_enabled)", "refId": "A", "instant": true }],
+      "title": "Coord enabled",
+      "type": "stat"
+    },
+    {
+      "datasource": { "type": "prometheus", "uid": "prometheus" },
+      "fieldConfig": { "defaults": { "unit": "none" } },
+      "gridPos": { "h": 4, "w": 8, "x": 4, "y": 1 },
+      "id": 202,
+      "options": { "showHeader": true },
+      "targets": [{ "expr": "dataset_collector_coord_worker_info == 1", "format": "table", "instant": true, "refId": "A" }],
+      "title": "Worker identity",
+      "type": "table"
+    },
+    {
+      "datasource": { "type": "prometheus", "uid": "prometheus" },
+      "fieldConfig": { "defaults": { "unit": "none", "decimals": 0 } },
+      "gridPos": { "h": 4, "w": 4, "x": 12, "y": 1 },
+      "id": 203,
+      "options": { "colorMode": "value", "graphMode": "area", "reduceOptions": { "calcs": ["lastNotNull"] } },
+      "targets": [{ "expr": "max(dataset_collector_coord_sync_gauge{metric=\"global_done\", service=~\"$service\", worker_id=~\"$worker_id\"})", "refId": "A", "instant": true }],
+      "title": "Global done keys",
+      "type": "stat"
+    },
+    {
+      "datasource": { "type": "prometheus", "uid": "prometheus" },
+      "fieldConfig": { "defaults": { "unit": "none", "decimals": 0 } },
+      "gridPos": { "h": 4, "w": 4, "x": 16, "y": 1 },
+      "id": 204,
+      "options": { "colorMode": "value", "graphMode": "area", "reduceOptions": { "calcs": ["lastNotNull"] } },
+      "targets": [{ "expr": "max(dataset_collector_coord_sync_gauge{metric=\"active_claims\", service=~\"$service\", worker_id=~\"$worker_id\"})", "refId": "A", "instant": true }],
+      "title": "Active claims",
+      "type": "stat"
+    },
+    {
+      "datasource": { "type": "prometheus", "uid": "prometheus" },
+      "fieldConfig": { "defaults": { "unit": "none", "decimals": 0, "color": { "mode": "fixed", "fixedColor": "orange" } } },
+      "gridPos": { "h": 4, "w": 4, "x": 20, "y": 1 },
+      "id": 205,
+      "options": { "colorMode": "value", "graphMode": "none", "reduceOptions": { "calcs": ["lastNotNull"] } },
+      "targets": [{ "expr": "sum(increase(dataset_collector_coord_sync_errors_total{service=~\"$service\", worker_id=~\"$worker_id\"}[$__range]))", "refId": "A", "instant": true }],
+      "title": "Sync errors (range)",
+      "type": "stat"
+    },
+    {
+      "collapsed": false,
+      "gridPos": { "h": 1, "w": 24, "x": 0, "y": 5 },
+      "id": 210,
+      "title": "Last HF sync (per pass)",
+      "type": "row"
+    },
+    {
+      "datasource": { "type": "prometheus", "uid": "prometheus" },
+      "fieldConfig": { "defaults": { "unit": "none", "custom": { "drawStyle": "line", "fillOpacity": 20, "lineWidth": 2 } } },
+      "gridPos": { "h": 8, "w": 12, "x": 0, "y": 6 },
+      "id": 211,
+      "options": { "legend": { "displayMode": "table", "placement": "bottom" } },
+      "targets": [
+        { "expr": "dataset_collector_coord_sync_gauge{metric=\"metadata_shards\", service=~\"$service\", worker_id=~\"$worker_id\"}", "legendFormat": "{{worker_id}} {{service}} shards", "refId": "A" },
+        { "expr": "dataset_collector_coord_sync_gauge{metric=\"claims_files\", service=~\"$service\", worker_id=~\"$worker_id\"}", "legendFormat": "{{worker_id}} claim files", "refId": "B" },
+        { "expr": "dataset_collector_coord_sync_gauge{metric=\"done_files\", service=~\"$service\", worker_id=~\"$worker_id\"}", "legendFormat": "{{worker_id}} done files", "refId": "C" }
+      ],
+      "title": "HF sync: shards pulled / remote files",
+      "type": "timeseries"
+    },
+    {
+      "datasource": { "type": "prometheus", "uid": "prometheus" },
+      "fieldConfig": { "defaults": { "unit": "none", "custom": { "drawStyle": "line", "fillOpacity": 15 } } },
+      "gridPos": { "h": 8, "w": 12, "x": 12, "y": 6 },
+      "id": 212,
+      "options": { "legend": { "displayMode": "table", "placement": "bottom" } },
+      "targets": [
+        { "expr": "dataset_collector_coord_sync_gauge{metric=\"active_claims\", service=~\"$service\", worker_id=~\"$worker_id\"}", "legendFormat": "{{worker_id}} {{service}} active", "refId": "A" },
+        { "expr": "dataset_collector_coord_sync_gauge{metric=\"global_done\", service=~\"$service\", worker_id=~\"$worker_id\"}", "legendFormat": "{{worker_id}} {{service}} done", "refId": "B" }
+      ],
+      "title": "Claims & global done over time",
+      "type": "timeseries"
+    },
+    {
+      "collapsed": false,
+      "gridPos": { "h": 1, "w": 24, "x": 0, "y": 14 },
+      "id": 220,
+      "title": "Skips & claims (coord)",
+      "type": "row"
+    },
+    {
+      "datasource": { "type": "prometheus", "uid": "prometheus" },
+      "fieldConfig": { "defaults": { "unit": "ops", "custom": { "stacking": { "mode": "normal" } } } },
+      "gridPos": { "h": 8, "w": 12, "x": 0, "y": 15 },
+      "id": 221,
+      "options": { "legend": { "displayMode": "table", "placement": "bottom" } },
+      "targets": [
+        { "expr": "sum by (reason) (rate(dataset_collector_coord_skip_total{service=~\"$service\", worker_id=~\"$worker_id\"}[5m]))", "legendFormat": "{{reason}}", "refId": "A" }
+      ],
+      "title": "Coord skip rate by reason",
+      "type": "timeseries"
+    },
+    {
+      "datasource": { "type": "prometheus", "uid": "prometheus" },
+      "fieldConfig": { "defaults": { "unit": "ops" } },
+      "gridPos": { "h": 8, "w": 12, "x": 12, "y": 15 },
+      "id": 222,
+      "options": { "legend": { "displayMode": "table", "placement": "bottom" } },
+      "targets": [
+        { "expr": "sum by (result) (rate(dataset_collector_coord_claim_total{service=~\"$service\", worker_id=~\"$worker_id\"}[5m]))", "legendFormat": "{{result}}", "refId": "A" }
+      ],
+      "title": "Claim rate (claimed vs busy)",
+      "type": "timeseries"
+    },
+    {
+      "collapsed": false,
+      "gridPos": { "h": 1, "w": 24, "x": 0, "y": 23 },
+      "id": 230,
+      "title": "Pipeline lag & worker throughput",
+      "type": "row"
+    },
+    {
+      "datasource": { "type": "prometheus", "uid": "prometheus" },
+      "fieldConfig": { "defaults": { "unit": "none", "decimals": 0 } },
+      "gridPos": { "h": 7, "w": 12, "x": 0, "y": 24 },
+      "id": 231,
+      "options": { "legend": { "displayMode": "list", "placement": "bottom" } },
+      "targets": [
+        { "expr": "max by (stage) (dataset_collector_lifecycle_lag{category=\"all\"})", "legendFormat": "{{stage}}", "refId": "A" }
+      ],
+      "title": "Lifecycle lag (all categories)",
+      "type": "timeseries"
+    },
+    {
+      "datasource": { "type": "prometheus", "uid": "prometheus" },
+      "fieldConfig": { "defaults": { "unit": "none" } },
+      "gridPos": { "h": 7, "w": 12, "x": 12, "y": 24 },
+      "id": 232,
+      "options": { "legend": { "displayMode": "table", "placement": "bottom" } },
+      "targets": [
+        { "expr": "sum by (service, status) (rate(dataset_collector_service_items_total{service=~\"download|enrich-metadata\"}[5m]))", "legendFormat": "{{service}} {{status}}", "refId": "A" }
+      ],
+      "title": "Worker items/s (download / enrich)",
+      "type": "timeseries"
+    },
+    {
+      "datasource": { "type": "prometheus", "uid": "prometheus" },
+      "fieldConfig": { "defaults": { "unit": "none", "decimals": 0 } },
+      "gridPos": { "h": 6, "w": 8, "x": 0, "y": 31 },
+      "id": 233,
+      "options": { "colorMode": "value", "reduceOptions": { "calcs": ["lastNotNull"] } },
+      "targets": [{ "expr": "max(dataset_collector_videos_on_hf{category=\"all\"})", "refId": "A", "instant": true }],
+      "title": "Videos on HF",
+      "type": "stat"
+    },
+    {
+      "datasource": { "type": "prometheus", "uid": "prometheus" },
+      "fieldConfig": { "defaults": { "unit": "none", "decimals": 0 } },
+      "gridPos": { "h": 6, "w": 8, "x": 8, "y": 31 },
+      "id": 234,
+      "options": { "colorMode": "value", "reduceOptions": { "calcs": ["lastNotNull"] } },
+      "targets": [{ "expr": "max(dataset_collector_enrich_on_hf{category=\"all\"})", "refId": "A", "instant": true }],
+      "title": "Enrich on HF",
+      "type": "stat"
+    },
+    {
+      "datasource": { "type": "prometheus", "uid": "prometheus" },
+      "fieldConfig": { "defaults": { "unit": "none", "decimals": 0 } },
+      "gridPos": { "h": 6, "w": 8, "x": 16, "y": 31 },
+      "id": 235,
+      "options": { "colorMode": "value", "reduceOptions": { "calcs": ["lastNotNull"] } },
+      "targets": [{ "expr": "max(dataset_collector_shards_on_hf{category=\"all\"})", "refId": "A", "instant": true }],
+      "title": "Metadata shards on HF",
+      "type": "stat"
+    }
+  ]
+}

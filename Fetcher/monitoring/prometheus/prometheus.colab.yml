@@ -1,0 +1,19 @@
+# Prometheus on Colab: scrape discover (9095) and run-workers parent (9096) on the VM host.
+global:
+  scrape_interval: 10s
+  evaluation_interval: 10s
+
+scrape_configs:
+  - job_name: dataset-collector-discover
+    metrics_path: /metrics
+    static_configs:
+      - targets: ["host.docker.internal:9095"]
+        labels:
+          service: dataset-collector-discover
+
+  - job_name: dataset-collector-workers
+    metrics_path: /metrics
+    static_configs:
+      - targets: ["host.docker.internal:9096"]
+        labels:
+          service: dataset-collector-workers

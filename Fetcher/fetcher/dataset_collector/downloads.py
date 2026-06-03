@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+import os
 import subprocess
 import time
 from pathlib import Path
@@ -23,6 +24,7 @@ from fetcher.dataset_collector.queue_retries import (
     queue_item_key,
     record_queue_failure,
 )
+from fetcher.dataset_collector.hf_coordination import WorkerCoordination, coord_enabled
 from fetcher.dataset_collector.worker_logging import (
     count_glob_files,
     count_jsonl_lines,
@@ -39,6 +41,14 @@ DOWNLOAD_HEIGHT_TIERS = (1080, 720, 480, 360, 240, 144)
 
 class BotDetectionDownloadError(RuntimeError):
     """YouTube rejected the download request as automated traffic."""
+
+
+def is_pytubefix_client_error(exc: BaseException) -> bool:
+    """YouTube innertube parse failures (visitorData / empty params) — try another client."""
+    if isinstance(exc, (IndexError, KeyError)):
+        return True
+    text = str(exc).lower()
+    return "visitordata" in text or "list index out of range" in text
 
 
 def is_bot_detection_error(exc_or_text: Exception | str) -> bool:
@@ -305,9 +315,56 @@ def _progress_callback(video_id: str) -> Callable:
     return _on_progress
 
 
+_node_ok_for_web: bool | None = None
+_web_client_skip_logged = False
+
+
+def _short_error(exc: BaseException, *, limit: int = 400) -> str:
+    message = f"{type(exc).__name__}: {exc}"
+    if len(message) <= limit:
+        return message
+    return message[:limit] + "... [truncated]"
+
+
+def _nodejs_ok_for_pytubefix_web() -> bool:
+    """WEB client needs Node for botGuard poToken; Colab often has apt node but not nodejs-wheel."""
+    global _node_ok_for_web
+    if _node_ok_for_web is not None:
+        return _node_ok_for_web
+    try:
+        from pytubefix.botGuard.bot_guard import NODE_PATH
+
+        node = Path(NODE_PATH)
+        if not node.is_file() or not os.access(node, os.X_OK):
+            _node_ok_for_web = False
+            return False
+        proc = subprocess.run(
+            [str(node), "--version"],
+            capture_output=True,
+            timeout=15,
+            check=False,
+        )
+        _node_ok_for_web = proc.returncode == 0
+    except Exception:
+        _node_ok_for_web = False
+    return _node_ok_for_web
+
+
 def _pytubefix_client_sequence(config: CampaignConfig) -> list[str]:
+    global _web_client_skip_logged
     clients = [str(item).strip() for item in (config.download_pytubefix_clients or []) if str(item).strip()]
-    return clients or ["ANDROID_VR", "WEB"]
+    if not clients:
+        clients = ["ANDROID_VR", "WEB"]
+    if "WEB" in clients and not _nodejs_ok_for_pytubefix_web():
+        if not _web_client_skip_logged:
+            worker_log(
+                "download",
+                "skip WEB client: Node.js for pytubefix botGuard unavailable "
+                "(pip install nodejs-wheel-binaries; Colab: apt-get install -y nodejs)",
+            )
+            _web_client_skip_logged = True
+        clients = [client for client in clients if client.upper() != "WEB"]
+    return clients or ["ANDROID_VR"]
 
 
 def _download_video_local_pytubefix_attempt(
@@ -366,7 +423,13 @@ def _download_video_local_pytubefix_attempt(
             proxy_rotator.record_download_failure(proxy_url)
         if is_bot_detection_error(exc):
             raise BotDetectionDownloadError(str(exc)) from exc
-        worker_log("download", f"FAIL {video_id}: {type(exc).__name__}: {exc}")
+        if is_pytubefix_client_error(exc):
+            worker_log(
+                "download",
+                f"pytubefix client error {video_id} client={client_name}: {_short_error(exc)}",
+            )
+            return None
+        worker_log("download", f"FAIL {video_id}: {_short_error(exc)}")
         return None
 
     if proxy_rotator and proxy_url:
@@ -480,7 +543,7 @@ def download_video_local(
     for client_idx, client_name in enumerate(pytubefix_clients):
         for cookie_file in cookie_attempts:
             try:
-                return _download_video_local_pytubefix_attempt(
+                downloaded = _download_video_local_pytubefix_attempt(
                     state,
                     config,
                     platform=platform,
@@ -494,6 +557,8 @@ def download_video_local(
                     client_name=client_name,
                     started_at=started_at,
                 )
+                if downloaded is not None:
+                    return downloaded
             except BotDetectionDownloadError as exc:
                 bot_errors.append(str(exc)[:300])
                 worker_log(
@@ -651,6 +716,11 @@ def run_download_queue(
         )
 
     log_pass_header("download", "pass start")
+    coord = WorkerCoordination(state, config)
+    if coord_enabled(config):
+        coord_stats = coord.sync_from_hf("download")
+        worker_log("download", f"coord_sync worker={coord.worker_id} {coord_stats}")
+
     queued_from_metadata = scan_metadata_shards_for_downloads(state)
     if queued_from_metadata:
         worker_log("download", f"queued_from_metadata_shards: {queued_from_metadata}")
@@ -663,6 +733,8 @@ def run_download_queue(
     proxy_rotator = ProxyRotator(proxies=proxy_list)
 
     done_keys = state.load_download_done()
+    if coord_enabled(config):
+        done_keys |= coord.global_done_keys
     hf_done_keys = state.load_hf_video_upload_done()
     hf_queued_keys = state.load_hf_video_upload_queued()
     post_enrich_rejected = state.load_post_enrich_rejected_video_ids()
@@ -730,6 +802,17 @@ def run_download_queue(
             results["skipped"] += 1
             skip_reasons["post_enrich_rejected"] = skip_reasons.get("post_enrich_rejected", 0) + 1
             continue
+        coord_skip = coord.skip_reason("download", key)
+        if coord_skip:
+            coord.record_skip("download", coord_skip)
+            results["skipped"] += 1
+            skip_reasons[coord_skip] = skip_reasons.get(coord_skip, 0) + 1
+            continue
+        if not coord.try_claim("download", key):
+            coord.record_skip("download", "coord_claim_busy")
+            results["skipped"] += 1
+            skip_reasons["coord_claim_busy"] = skip_reasons.get("coord_claim_busy", 0) + 1
+            continue
 
         attempted += 1
         worker_log(
@@ -780,6 +863,7 @@ def run_download_queue(
             category=category,
             local_path=rel,
         )
+        coord.mark_done("download", key, video_id=video_id, category=category)
         hf_queued_keys.add(key)
         results["downloaded"] += 1
         worker_log("download", f"  -> enqueued HF video upload for {video_id}; done after HF commit")

@@ -702,6 +702,77 @@ def test_hf_remote_paths():
 
 
 @pytest.mark.unit
+def test_stable_shard_slot_is_deterministic():
+    from fetcher.dataset_collector.hf_coordination import stable_shard_slot
+    from fetcher.dataset_collector.schemas import CampaignConfig
+
+    key = "youtube:Sport:abc123"
+    assert stable_shard_slot(key, 3) == stable_shard_slot(key, 3)
+    cfg = CampaignConfig.parse_obj(
+        {
+            "name": "t",
+            "output_dir": "out",
+            "categories": [{"name": "Sport", "keywords": ["x"], "target_count": 1, "collect_count": 1}],
+            "worker_shard_index": stable_shard_slot(key, 3),
+            "worker_shard_count": 3,
+        }
+    )
+    from fetcher.dataset_collector.hf_coordination import key_in_worker_shard
+
+    assert key_in_worker_shard(key, cfg)
+
+
+@pytest.mark.unit
+def test_merge_claims_expires_stale(tmp_path):
+    from fetcher.dataset_collector.hf_coordination import WorkerCoordination
+    from fetcher.dataset_collector.schemas import CampaignConfig
+    from fetcher.dataset_collector.state import DatasetState
+
+    cfg = CampaignConfig.parse_obj(
+        {
+            "name": "t",
+            "output_dir": str(tmp_path),
+            "categories": [{"name": "Sport", "keywords": ["x"], "target_count": 1, "collect_count": 1}],
+            "hf_coord_enabled": True,
+            "hf_upload_enabled": True,
+            "hf_shards_repo_id": "org/repo",
+            "worker_id": "w1",
+        }
+    )
+    state = DatasetState(cfg)
+    state.initialize()
+    coord = WorkerCoordination(state, cfg)
+    rows = [
+        {
+            "key": "youtube:Sport:v1",
+            "owner": "other",
+            "status": "active",
+            "claimed_at": "2020-01-01T00:00:00+00:00",
+            "expires_at": "2020-01-02T00:00:00+00:00",
+        }
+    ]
+    merged = coord._merge_claim_rows(rows, ttl_seconds=7200)
+    assert "youtube:Sport:v1" not in merged
+
+
+@pytest.mark.unit
+def test_should_suppress_huge_botguard_stderr():
+    from fetcher.dataset_collector.worker_logging import _should_suppress_stderr_line
+
+    assert _should_suppress_stderr_line("/path/botGuard.js:1\n!function(e,t){..." + "x" * 500)
+    assert not _should_suppress_stderr_line("[download] bot_detection vid123\n")
+
+
+@pytest.mark.unit
+def test_is_pytubefix_client_error_detects_innertube_parse_failures():
+    from fetcher.dataset_collector.downloads import is_pytubefix_client_error
+
+    assert is_pytubefix_client_error(IndexError("list index out of range"))
+    assert is_pytubefix_client_error(KeyError("visitorData"))
+    assert not is_pytubefix_client_error(RuntimeError("disk full"))
+
+
+@pytest.mark.unit
 def test_resolve_hf_token_fallback_env(monkeypatch):
     from fetcher.dataset_collector.hf_upload import HuggingFaceUploadError, resolve_hf_token
 
