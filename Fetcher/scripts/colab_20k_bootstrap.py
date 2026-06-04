@@ -8,6 +8,11 @@ import sys
 import time
 from pathlib import Path
 
+# Allow `python scripts/colab_20k_bootstrap.py` without prior `pip install -e .`
+_FETCHER_PKG_ROOT = Path(__file__).resolve().parents[1]
+if str(_FETCHER_PKG_ROOT) not in sys.path:
+    sys.path.insert(0, str(_FETCHER_PKG_ROOT))
+
 CAMPAIGN_PROFILE_TEMPLATES = {
     "20k": "dataset_campaign_20k.json",
     "snapshot-smoke": "dataset_campaign_snapshot_smoke.json",
@@ -24,7 +29,7 @@ def _repo_root() -> Path:
 
 
 def _fetcher_root() -> Path:
-    return Path(__file__).resolve().parents[1]
+    return _FETCHER_PKG_ROOT
 
 
 def _read_json(path: Path) -> dict:
