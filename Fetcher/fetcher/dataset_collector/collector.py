@@ -243,6 +243,7 @@ class DatasetCollector:
                                         video,
                                         self.config.snapshot_schedule_days,
                                         schedule_hours=self.config.snapshot_schedule_hours,
+                                        schedule_minutes=self.config.snapshot_schedule_minutes,
                                     )
                                 )
                                 self.state.enqueue_download(video)

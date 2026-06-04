@@ -57,6 +57,18 @@ def _resolve_template_path(args: argparse.Namespace, fetcher_root: Path) -> Path
     return fetcher_root / template_name
 
 
+def _sanitize_hf_token_env(config: dict) -> None:
+    """hf_token_env must be the env var name (HF_TOKEN), not the secret value."""
+    env_name = (config.get("hf_token_env") or "HF_TOKEN").strip()
+    if env_name.startswith("hf_") and len(env_name) > 20:
+        config["hf_token_env"] = "HF_TOKEN"
+        print(
+            "WARN: hf_token_env in campaign JSON looked like a token; "
+            'reset to "HF_TOKEN". Store the secret in Colab Secret HF_TOKEN only.',
+            flush=True,
+        )
+
+
 def _platform_cli_flags(args: argparse.Namespace) -> list[str]:
     flags: list[str] = []
     for platform in ("tiktok", "twitch", "rutube", "instagram"):
@@ -105,25 +117,64 @@ def build_runtime_config(args: argparse.Namespace) -> Path:
         parallel_colab = args.worker_shard_count
     if parallel_colab is not None:
         _apply_parallel_colab_hf_tuning(config, max(int(parallel_colab), 1))
+    _sanitize_hf_token_env(config)
     runtime_config = output_dir / "runtime_dataset_campaign_20k.json"
     _write_json(runtime_config, config)
+    _ensure_hf_token(output_dir=output_dir)
     token_path = output_dir / ".dataset_drive_token.pickle"
     if token_path.is_file():
         os.environ.setdefault("DATASET_DRIVE_TOKEN_PATH", str(token_path))
     return runtime_config
 
 
-def _ensure_hf_token() -> None:
+def hf_token_file_path(output_dir: str | Path) -> Path:
+    return Path(output_dir).expanduser() / ".hf_token"
+
+
+def _load_hf_token_from_output_dir(output_dir: str | Path | None) -> bool:
+    """Colab: notebook sets os.environ in kernel; bootstrap subprocess reads .hf_token from output_dir."""
+    if not output_dir:
+        return False
+    path = hf_token_file_path(output_dir)
+    if not path.is_file():
+        return False
+    token = path.read_text(encoding="utf-8").strip()
+    if token.startswith("hf_") and len(token) > 20:
+        os.environ["HF_TOKEN"] = token
+        return True
+    return False
+
+
+def _persist_hf_token_for_subprocesses(output_dir: str | Path) -> None:
+    token = (os.environ.get("HF_TOKEN") or os.environ.get("HUGGING_FACE_HUB_TOKEN") or "").strip()
+    if not token.startswith("hf_"):
+        return
+    path = hf_token_file_path(output_dir)
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text(token + "\n", encoding="utf-8")
+    try:
+        path.chmod(0o600)
+    except OSError:
+        pass
+
+
+def _ensure_hf_token(*, output_dir: str | Path | None = None) -> None:
     """Make HF token visible to worker subprocesses (notebook env != shell env on Colab)."""
     for name in ("HF_TOKEN", "HUGGING_FACE_HUB_TOKEN"):
         if (os.environ.get(name) or "").strip():
+            if output_dir:
+                _persist_hf_token_for_subprocesses(output_dir)
             return
+    if output_dir and _load_hf_token_from_output_dir(output_dir):
+        return
     try:
         from google.colab import userdata
 
         token = (userdata.get("HF_TOKEN") or "").strip()
         if token:
             os.environ["HF_TOKEN"] = token
+            if output_dir:
+                _persist_hf_token_for_subprocesses(output_dir)
     except Exception:
         pass
 
@@ -132,13 +183,17 @@ def _require_hf_token_for_upload(runtime_config: Path) -> None:
     config = _read_json(runtime_config)
     if not config.get("hf_upload_enabled", True):
         return
-    _ensure_hf_token()
+    output_dir = config.get("output_dir")
+    _load_hf_token_from_output_dir(output_dir)
+    _ensure_hf_token(output_dir=output_dir)
+    _sanitize_hf_token_env(config)
     env_name = (config.get("hf_token_env") or "HF_TOKEN").strip()
     if env_name.startswith("hf_") and len(env_name) > 20:
         raise SystemExit(
             'runtime config has the token in "hf_token_env"; set "hf_token_env": "HF_TOKEN" '
             "and put the secret in env HF_TOKEN or Colab Secret HF_TOKEN."
         )
+    _write_json(runtime_config, config)
     if not (os.environ.get(env_name) or "").strip():
         raise SystemExit(
             f"{env_name} is not set for this shell. Before workers run:\n"
@@ -147,7 +202,18 @@ def _require_hf_token_for_upload(runtime_config: Path) -> None:
         )
 
 
-def run_command(cmd: list[str]) -> int:
+def _output_dir_from_cmd(cmd: list[str]) -> str | None:
+    for arg in cmd:
+        if arg.endswith(".json") and Path(arg).is_file():
+            return _read_json(Path(arg)).get("output_dir")
+    return None
+
+
+def run_command(cmd: list[str], *, output_dir: str | Path | None = None) -> int:
+    if output_dir is None:
+        output_dir = _output_dir_from_cmd(cmd)
+    _load_hf_token_from_output_dir(output_dir)
+    _ensure_hf_token(output_dir=output_dir)
     print("+ " + " ".join(cmd), flush=True)
     return subprocess.call(cmd, cwd=str(_fetcher_root()), env=os.environ.copy())
 
@@ -242,18 +308,24 @@ def main(argv: list[str] | None = None) -> int:
         if args.metrics_port:
             cmd += ["--metrics-port", str(args.metrics_port)]
         cmd += _platform_cli_flags(args)
-        return run_command(cmd)
+        return run_command(cmd, output_dir=args.output_dir)
 
     if args.role == "snapshot-loop":
-        config = _read_json(runtime_config)
-        hours = config.get("snapshot_schedule_hours") or []
-        if len(hours) < 2:
-            raise SystemExit("snapshot-loop requires snapshot_schedule_hours with at least [0, N] in campaign JSON")
-        for idx in range(1, len(hours)):
-            if args.snapshot_sleep_seconds is not None:
-                wait_sec = args.snapshot_sleep_seconds
-            else:
-                wait_sec = max(0, (hours[idx] - hours[idx - 1]) * 3600)
+        from fetcher.dataset_collector.config import load_campaign_config
+        from fetcher.dataset_collector.snapshots import snapshot_follow_up_indices, snapshot_loop_wait_seconds
+
+        config = load_campaign_config(runtime_config)
+        indices = snapshot_follow_up_indices(config)
+        if not indices:
+            raise SystemExit(
+                "snapshot-loop requires snapshot_schedule_minutes/hours with at least [0, N] in campaign JSON"
+            )
+        for idx in indices:
+            wait_sec = snapshot_loop_wait_seconds(
+                config,
+                idx,
+                override_seconds=args.snapshot_sleep_seconds,
+            )
             if wait_sec > 0:
                 print(f"snapshot-loop: sleeping {wait_sec}s before snapshot-index {idx}", flush=True)
                 time.sleep(wait_sec)
@@ -261,7 +333,7 @@ def main(argv: list[str] | None = None) -> int:
             if args.limit is not None:
                 cmd += ["--limit", str(args.limit)]
             cmd += _platform_cli_flags(args)
-            code = run_command(cmd)
+            code = run_command(cmd, output_dir=args.output_dir)
             if code != 0:
                 return code
         return 0
@@ -284,7 +356,7 @@ def main(argv: list[str] | None = None) -> int:
             cmd += ["--lease-name", args.lease_name]
             if args.lease_owner:
                 cmd += ["--lease-owner", args.lease_owner]
-        return run_command(cmd)
+        return run_command(cmd, output_dir=args.output_dir)
 
     if args.role == "snapshot":
         if args.snapshot_index is None:
@@ -293,15 +365,15 @@ def main(argv: list[str] | None = None) -> int:
         if args.limit is not None:
             cmd += ["--limit", str(args.limit)]
         cmd += _platform_cli_flags(args)
-        return run_command(cmd)
+        return run_command(cmd, output_dir=args.output_dir)
 
     if args.role == "inventory-rebuild":
         cmd = [*base, "inventory-rebuild", str(runtime_config)]
         if args.category:
             cmd += ["--category", args.category]
-        return run_command(cmd)
+        return run_command(cmd, output_dir=args.output_dir)
 
-    return run_command([*base, "status", str(runtime_config)])
+    return run_command([*base, "status", str(runtime_config)], output_dir=args.output_dir)
 
 
 if __name__ == "__main__":

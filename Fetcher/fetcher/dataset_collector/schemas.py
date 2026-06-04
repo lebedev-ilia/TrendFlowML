@@ -105,7 +105,14 @@ class CampaignConfig(BaseModel):
         None,
         description=(
             "If set, follow-up snapshot due times use hours from snapshot_0 (smoke tests). "
-            "Overrides snapshot_schedule_days. Must start with 0."
+            "Overrides snapshot_schedule_days unless snapshot_schedule_minutes is set."
+        ),
+    )
+    snapshot_schedule_minutes: Optional[List[int]] = Field(
+        None,
+        description=(
+            "If set, follow-up snapshot due times use minutes from snapshot_0 (fast smoke). "
+            "Overrides snapshot_schedule_hours and snapshot_schedule_days. Must start with 0."
         ),
     )
     default_filters: Dict[str, Any] = Field(default_factory=dict)
@@ -347,6 +354,12 @@ class CampaignConfig(BaseModel):
     def schedule_hours_starts_with_zero(cls, value: Optional[List[int]]) -> Optional[List[int]]:
         if value is not None and (not value or value[0] != 0):
             raise ValueError("snapshot_schedule_hours must start with 0")
+        return value
+
+    @validator("snapshot_schedule_minutes")
+    def schedule_minutes_starts_with_zero(cls, value: Optional[List[int]]) -> Optional[List[int]]:
+        if value is not None and (not value or value[0] != 0):
+            raise ValueError("snapshot_schedule_minutes must start with 0")
         return value
 
 

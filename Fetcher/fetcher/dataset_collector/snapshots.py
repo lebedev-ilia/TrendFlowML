@@ -13,7 +13,11 @@ def _schedule_offsets(
     *,
     schedule_days: Iterable[int] | None = None,
     schedule_hours: Iterable[int] | None = None,
+    schedule_minutes: Iterable[int] | None = None,
 ) -> tuple[str, List[int]]:
+    minutes = list(schedule_minutes or [])
+    if minutes:
+        return "minutes", minutes
     hours = list(schedule_hours or [])
     if hours:
         return "hours", hours
@@ -25,13 +29,20 @@ def build_schedule_entry(
     schedule_days: Iterable[int] | None = None,
     *,
     schedule_hours: Iterable[int] | None = None,
+    schedule_minutes: Iterable[int] | None = None,
 ) -> ScheduleEntry:
-    unit, offsets = _schedule_offsets(schedule_days=schedule_days, schedule_hours=schedule_hours)
+    unit, offsets = _schedule_offsets(
+        schedule_days=schedule_days,
+        schedule_hours=schedule_hours,
+        schedule_minutes=schedule_minutes,
+    )
     due_at = {}
     for index, offset in enumerate(offsets):
         if index == 0:
             continue
-        if unit == "hours":
+        if unit == "minutes":
+            due_at[str(index)] = video.snapshot_0.collected_at + timedelta(minutes=offset)
+        elif unit == "hours":
             due_at[str(index)] = video.snapshot_0.collected_at + timedelta(hours=offset)
         else:
             due_at[str(index)] = video.snapshot_0.collected_at + timedelta(days=offset)
@@ -47,9 +58,29 @@ def build_schedule_entry(
 
 def snapshot_follow_up_indices(config) -> List[int]:
     """Indices 1..N for scheduled follow-up snapshots (index 0 is snapshot_0 at discover)."""
+    if getattr(config, "snapshot_schedule_minutes", None):
+        return list(range(1, len(config.snapshot_schedule_minutes)))
     if getattr(config, "snapshot_schedule_hours", None):
         return list(range(1, len(config.snapshot_schedule_hours)))
     return list(range(1, len(config.snapshot_schedule_days)))
+
+
+def snapshot_loop_wait_seconds(
+    config,
+    snapshot_index: int,
+    *,
+    override_seconds: int | None = None,
+) -> int:
+    """Seconds to wait before collecting snapshot_index (1-based follow-up index)."""
+    if override_seconds is not None:
+        return max(0, override_seconds)
+    minutes = list(getattr(config, "snapshot_schedule_minutes", None) or [])
+    if minutes and snapshot_index < len(minutes):
+        return max(0, (minutes[snapshot_index] - minutes[snapshot_index - 1]) * 60)
+    hours = list(getattr(config, "snapshot_schedule_hours", None) or [])
+    if hours and snapshot_index < len(hours):
+        return max(0, (hours[snapshot_index] - hours[snapshot_index - 1]) * 3600)
+    return 0
 
 
 class SnapshotRunner:

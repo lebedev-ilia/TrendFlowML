@@ -1337,6 +1337,26 @@ def test_build_schedule_entry_hours():
 
 
 @pytest.mark.unit
+def test_build_schedule_entry_minutes():
+    video = make_video("v1")
+    entry = build_schedule_entry(video, schedule_minutes=[0, 15, 30, 45])
+    assert entry.due_at["1"] == video.snapshot_0.collected_at + timedelta(minutes=15)
+    assert entry.due_at["3"] == video.snapshot_0.collected_at + timedelta(minutes=45)
+
+
+@pytest.mark.unit
+def test_snapshot_loop_wait_seconds_minutes():
+    from fetcher.dataset_collector.config import default_campaign_config
+    from fetcher.dataset_collector.snapshots import snapshot_loop_wait_seconds
+
+    config = default_campaign_config()
+    config.snapshot_schedule_minutes = [0, 15, 30, 45]
+    assert snapshot_loop_wait_seconds(config, 1) == 15 * 60
+    assert snapshot_loop_wait_seconds(config, 2) == 15 * 60
+    assert snapshot_loop_wait_seconds(config, 1, override_seconds=30) == 30
+
+
+@pytest.mark.unit
 def test_is_allowed_metadata_shard_relpath():
     from fetcher.dataset_collector.hf_upload import is_allowed_metadata_shard_relpath
 

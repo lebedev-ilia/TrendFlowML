@@ -1,6 +1,6 @@
 {
-  "name": "dataset-snapshot-smoke",
-  "campaign_profile": "snapshot-smoke-v1",
+  "name": "dataset-snapshot-smoke-500",
+  "campaign_profile": "snapshot-smoke-500-15m-v1",
   "sampling_policy_version": "sampling-20k-popularity-v1",
   "balancer_policy_version": "balancer-20k-hybrid-ru-en-v1",
   "baseline_accepted": 0,
@@ -14,7 +14,7 @@
     {"name": "Iumor", "keywords": [""], "target_count": 100, "collect_count": 100, "platform_weights": {"youtube": 0.75, "tiktok": 0.1, "rutube": 0.05, "twitch": 0.05, "instagram": 0.05}, "filters": {}},
     {"name": "Nauka", "keywords": [""], "target_count": 100, "collect_count": 100, "platform_weights": {"youtube": 0.75, "tiktok": 0.1, "rutube": 0.05, "twitch": 0.05, "instagram": 0.05}, "filters": {}}
   ],
-  "snapshot_schedule_hours": [0, 1, 2, 3],
+  "snapshot_schedule_minutes": [0, 15, 30, 45],
   "snapshot_schedule_days": [0, 7, 14, 21],
   "default_filters": {
     "duration_min_seconds": 4,

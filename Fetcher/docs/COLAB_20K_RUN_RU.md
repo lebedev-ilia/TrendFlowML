@@ -11,6 +11,7 @@
 | [notebooks/Colab_20k_A_main.ipynb](../notebooks/Colab_20k_A_main.ipynb) | **A** | discover + все workers + HF |
 | [notebooks/Colab_20k_BC_worker.ipynb](../notebooks/Colab_20k_BC_worker.ipynb) | **B** | workers без discover, shard 1/3 |
 | [notebooks/Colab_20k_C_worker.ipynb](../notebooks/Colab_20k_C_worker.ipynb) | **C** | workers без discover, shard 2/3 |
+| [notebooks/Colab_snapshot_smoke.ipynb](../notebooks/Colab_snapshot_smoke.ipynb) | **A** | 500 видео, снапшоты каждые **15 мин** |
 
 Тест на **3 Colab:** A (`shard 0/3`, `20k-main`), B (`shard 1/3`, `20k-worker-b`), C (`shard 2/3`, `20k-worker-c`).
 
@@ -646,7 +647,9 @@ python scripts/colab_20k_bootstrap.py \
   --output-dir /content/dataset_runs/snapshot-smoke
 ```
 
-В campaign: `snapshot_schedule_hours: [0, 1, 2, 3]`. Для CI/теста due time: `export DATASET_SNAPSHOT_TEST_NOW=2026-06-04T12:00:00+00:00`.
+В campaign: `snapshot_schedule_minutes: [0, 15, 30, 45]` (15 мин между снапшотами). Альтернатива: `snapshot_schedule_hours`. Для CI: `export DATASET_SNAPSHOT_TEST_NOW=2026-06-04T12:00:00+00:00`.
+
+Готовый ноутбук: `notebooks/Colab_snapshot_smoke.ipynb` (`discover_limit=500`, `snapshot_sleep_seconds=900`).
 
 Twitch: `export FETCHER_TWITCH_CLIENT_ID=...` и `FETCHER_TWITCH_ACCESS_TOKEN=...` + `--enable-twitch`.
 
