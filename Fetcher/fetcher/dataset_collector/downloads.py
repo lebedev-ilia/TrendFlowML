@@ -24,6 +24,7 @@ from fetcher.dataset_collector.queue_retries import (
     queue_item_key,
     record_queue_failure,
 )
+from fetcher.dataset_collector.download_pacing import apply_download_pause
 from fetcher.dataset_collector.hf_coordination import WorkerCoordination, coord_enabled
 from fetcher.dataset_collector.worker_logging import (
     count_glob_files,
@@ -41,6 +42,10 @@ DOWNLOAD_HEIGHT_TIERS = (1080, 720, 480, 360, 240, 144)
 
 class BotDetectionDownloadError(RuntimeError):
     """YouTube rejected the download request as automated traffic."""
+
+
+class VideoUnavailableDownloadError(RuntimeError):
+    """Video deleted, private, or region-blocked — no point retrying cookies/clients."""
 
 
 def is_pytubefix_client_error(exc: BaseException) -> bool:
@@ -61,8 +66,16 @@ def is_bot_detection_error(exc_or_text: Exception | str) -> bool:
             "sign in to confirm",
             "not a bot",
             "po_token",
+            "potoken invalid",
+            "sabr maximum reload",
+            "sabrerror",
         )
     )
+
+
+def is_video_unavailable_error(exc_or_text: Exception | str) -> bool:
+    text = str(exc_or_text).lower()
+    return "is unavailable" in text or "videounavailable" in text
 
 
 def iter_download_queue(path: Path) -> Iterable[dict]:
@@ -117,6 +130,26 @@ def scan_metadata_shards_for_downloads(
 
 def local_video_path(state: DatasetState, *, category: str, video_id: str) -> Path:
     return state.download_dir / "videos" / category / f"{video_id}.mp4"
+
+
+def _maybe_remove_orphan_local_mp4(
+    target: Path,
+    *,
+    config: CampaignConfig,
+    video_id: str,
+    reason: str,
+) -> bool:
+    """Remove local mp4 left after HF upload or when video is already on HF."""
+    if not target.is_file() or target.stat().st_size <= 0:
+        return False
+    delete_local_file(
+        target,
+        output_dir=config.output_dir,
+        permanent_on_drive=config.drive_permanent_delete,
+        log_channel="download",
+    )
+    worker_log("download", f"orphan_local_removed {video_id}: {reason}")
+    return True
 
 
 def _format_bytes(size: int) -> str:
@@ -317,6 +350,8 @@ def _progress_callback(video_id: str) -> Callable:
 
 _node_ok_for_web: bool | None = None
 _web_client_skip_logged = False
+# Sticky pytubefix client across videos: stay on last working client until all cookies bot.
+_pytubefix_sticky_client_index: int = 0
 
 
 def _short_error(exc: BaseException, *, limit: int = 400) -> str:
@@ -421,6 +456,8 @@ def _download_video_local_pytubefix_attempt(
     except Exception as exc:
         if proxy_rotator and proxy_url:
             proxy_rotator.record_download_failure(proxy_url)
+        if is_video_unavailable_error(exc):
+            raise VideoUnavailableDownloadError(str(exc)) from exc
         if is_bot_detection_error(exc):
             raise BotDetectionDownloadError(str(exc)) from exc
         if is_pytubefix_client_error(exc):
@@ -538,9 +575,16 @@ def download_video_local(
                 return None
             worker_log("download", f"yt-dlp failed for {video_id}, trying pytubefix: {type(exc).__name__}: {exc}")
 
+    global _pytubefix_sticky_client_index
+
     bot_errors: list[str] = []
     pytubefix_clients = _pytubefix_client_sequence(config)
-    for client_idx, client_name in enumerate(pytubefix_clients):
+    client_count = len(pytubefix_clients)
+    start_sticky = _pytubefix_sticky_client_index
+    for offset in range(client_count):
+        client_idx = (start_sticky + offset) % client_count
+        client_name = pytubefix_clients[client_idx]
+        client_exhausted = False
         for cookie_file in cookie_attempts:
             try:
                 downloaded = _download_video_local_pytubefix_attempt(
@@ -558,7 +602,10 @@ def download_video_local(
                     started_at=started_at,
                 )
                 if downloaded is not None:
+                    _pytubefix_sticky_client_index = client_idx
                     return downloaded
+            except VideoUnavailableDownloadError:
+                raise
             except BotDetectionDownloadError as exc:
                 bot_errors.append(str(exc)[:300])
                 worker_log(
@@ -571,6 +618,7 @@ def download_video_local(
                     output_dir=config.output_dir,
                     permanent_on_drive=config.drive_permanent_delete,
                 )
+                apply_download_pause(config, "cookie_bot")
                 continue
             except KeyboardInterrupt:
                 raise
@@ -581,8 +629,17 @@ def download_video_local(
                     permanent_on_drive=config.drive_permanent_delete,
                 )
                 raise
-        if client_idx == 0 and len(pytubefix_clients) > 1:
-            worker_log("download", f"all cookies failed for {video_id}; switching pytubefix client")
+        else:
+            client_exhausted = True
+        if client_exhausted and client_idx + 1 < client_count:
+            next_idx = client_idx + 1
+            next_client = pytubefix_clients[next_idx]
+            _pytubefix_sticky_client_index = next_idx
+            worker_log(
+                "download",
+                f"all cookies failed for {video_id} client={client_name}; "
+                f"sticky -> {next_client}",
+            )
 
     worker_log("download", f"pytubefix exhausted for {video_id}; trying yt-dlp fallback")
     try:
@@ -715,6 +772,16 @@ def run_download_queue(
             f"cookies: {', '.join(p.name for p in cookie_rotator.cookie_files)}",
         )
 
+    clients = _pytubefix_client_sequence(config)
+    if clients:
+        sticky_name = clients[_pytubefix_sticky_client_index % len(clients)]
+        worker_log(
+            "download",
+            f"pytubefix sticky client: {sticky_name} "
+            f"(index {_pytubefix_sticky_client_index + 1}/{len(clients)}, "
+            f"order: {', '.join(clients)})",
+        )
+
     log_pass_header("download", "pass start")
     coord = WorkerCoordination(state, config)
     if coord_enabled(config):
@@ -789,12 +856,28 @@ def run_download_queue(
             results["skipped"] += 1
             skip_reasons["dead_letter"] = skip_reasons.get("dead_letter", 0) + 1
             continue
+        target = local_video_path(state, category=category, video_id=video_id)
         if key in done_keys or key in hf_done_keys:
+            if key in hf_done_keys:
+                if _maybe_remove_orphan_local_mp4(
+                    target,
+                    config=config,
+                    video_id=video_id,
+                    reason="already_on_hf",
+                ):
+                    skip_reasons["orphan_local_removed"] = skip_reasons.get("orphan_local_removed", 0) + 1
             results["skipped"] += 1
             skip_reasons["already_done"] = skip_reasons.get("already_done", 0) + 1
             continue
-        target = local_video_path(state, category=category, video_id=video_id)
         if key in hf_queued_keys and target.exists() and target.stat().st_size > 0:
+            if key in hf_done_keys:
+                if _maybe_remove_orphan_local_mp4(
+                    target,
+                    config=config,
+                    video_id=video_id,
+                    reason="hf_done_pending_queue",
+                ):
+                    skip_reasons["orphan_local_removed"] = skip_reasons.get("orphan_local_removed", 0) + 1
             results["skipped"] += 1
             skip_reasons["pending_hf_upload"] = skip_reasons.get("pending_hf_upload", 0) + 1
             continue
@@ -835,6 +918,18 @@ def run_download_queue(
         except KeyboardInterrupt:
             worker_log("download", "shutdown requested — exiting pass")
             break
+        except VideoUnavailableDownloadError as exc:
+            results["failed"] += 1
+            worker_log("download", f"unavailable {video_id}: {_short_error(exc)}")
+            if record_queue_failure(
+                state,
+                service="download",
+                item=item,
+                error=f"unavailable: {exc}",
+            ):
+                dead_letter_keys.add(retry_key)
+            apply_download_pause(config, "unavailable")
+            continue
         except BotDetectionDownloadError as exc:
             results["failed"] += 1
             if record_queue_failure(
@@ -844,6 +939,7 @@ def run_download_queue(
                 error=f"bot_detection: {exc}",
             ):
                 dead_letter_keys.add(retry_key)
+            apply_download_pause(config, "bot")
             continue
         if path is None:
             results["failed"] += 1
@@ -854,6 +950,7 @@ def run_download_queue(
                 error="download returned no local file",
             ):
                 dead_letter_keys.add(retry_key)
+            apply_download_pause(config, "fail")
             continue
 
         rel = str(path.relative_to(state.root))
@@ -867,6 +964,7 @@ def run_download_queue(
         hf_queued_keys.add(key)
         results["downloaded"] += 1
         worker_log("download", f"  -> enqueued HF video upload for {video_id}; done after HF commit")
+        apply_download_pause(config, "success")
 
     if skip_reasons:
         log_kv_block("download", [(f"skipped_{k}", v) for k, v in sorted(skip_reasons.items())])

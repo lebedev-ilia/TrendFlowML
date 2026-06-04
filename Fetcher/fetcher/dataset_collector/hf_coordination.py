@@ -77,7 +77,8 @@ class WorkerCoordination:
         self.state = state
         self.config = config
         self.worker_id = resolve_worker_id(config)
-        self.repo_id = resolve_shards_repo_id(config)
+        # Use combined/legacy repo for coordination blobs so shards repo stays metadata-only.
+        self.repo_id = config.hf_repo_id or resolve_shards_repo_id(config)
         prefix = (config.hf_coord_path_prefix or "state/coordination").strip("/")
         self.remote_prefix = prefix
         self.local_root = state.state_dir / "coordination"

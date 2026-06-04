@@ -1,4 +1,5 @@
 from fetcher.dataset_collector.discovery.base import DiscoveryAdapter, DiscoveryCapabilities
+from fetcher.dataset_collector.discovery.instagram import InstagramDiscoveryAdapter
 from fetcher.dataset_collector.discovery.rutube import RutubeDiscoveryAdapter
 from fetcher.dataset_collector.discovery.tiktok import TikTokDiscoveryAdapter
 from fetcher.dataset_collector.discovery.twitch import TwitchDiscoveryAdapter
@@ -7,6 +8,7 @@ from fetcher.dataset_collector.discovery.youtube import YouTubeDiscoveryAdapter,
 __all__ = [
     "DiscoveryAdapter",
     "DiscoveryCapabilities",
+    "InstagramDiscoveryAdapter",
     "RutubeDiscoveryAdapter",
     "TikTokDiscoveryAdapter",
     "TwitchDiscoveryAdapter",

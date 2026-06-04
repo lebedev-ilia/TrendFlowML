@@ -5,7 +5,18 @@ import json
 import os
 import subprocess
 import sys
+import time
 from pathlib import Path
+
+CAMPAIGN_PROFILE_TEMPLATES = {
+    "20k": "dataset_campaign_20k.json",
+    "snapshot-smoke": "dataset_campaign_snapshot_smoke.json",
+}
+
+HF_REPO_BASE_BY_PROFILE = {
+    "20k": "dataset_20k_colab",
+    "snapshot-smoke": "dataset_snapshot_smoke",
+}
 
 
 def _repo_root() -> Path:
@@ -39,9 +50,24 @@ def _apply_parallel_colab_hf_tuning(config: dict, parallel: int) -> None:
         config[key] = max(current, floor)
 
 
+def _resolve_template_path(args: argparse.Namespace, fetcher_root: Path) -> Path:
+    template_name = args.template
+    if args.campaign_profile:
+        template_name = CAMPAIGN_PROFILE_TEMPLATES.get(args.campaign_profile, template_name)
+    return fetcher_root / template_name
+
+
+def _platform_cli_flags(args: argparse.Namespace) -> list[str]:
+    flags: list[str] = []
+    for platform in ("tiktok", "twitch", "rutube", "instagram"):
+        if getattr(args, f"enable_{platform}", False):
+            flags.append(f"--enable-{platform}")
+    return flags
+
+
 def build_runtime_config(args: argparse.Namespace) -> Path:
     fetcher_root = _fetcher_root()
-    template_path = fetcher_root / args.template
+    template_path = _resolve_template_path(args, fetcher_root)
     config = _read_json(template_path)
     output_dir = Path(args.output_dir).expanduser()
     config["output_dir"] = str(output_dir)
@@ -49,10 +75,14 @@ def build_runtime_config(args: argparse.Namespace) -> Path:
     config["campaign_profile"] = config.get("campaign_profile") or "20k-colab-free-popularity-v1"
     if args.hf_repo_prefix:
         prefix = args.hf_repo_prefix.rstrip("/")
-        config["hf_repo_id"] = f"{prefix}/dataset_20k_colab"
-        config["hf_shards_repo_id"] = f"{prefix}/dataset_20k_colab_shards"
-        config["hf_videos_repo_id"] = f"{prefix}/dataset_20k_colab_videos"
-        config["hf_enrich_repo_id"] = f"{prefix}/dataset_20k_colab_enrich"
+        profile = args.campaign_profile or "20k"
+        base = HF_REPO_BASE_BY_PROFILE.get(profile, "dataset_20k_colab")
+        if "snapshot_smoke" in template_path.name:
+            base = "dataset_snapshot_smoke"
+        config["hf_repo_id"] = f"{prefix}/{base}"
+        config["hf_shards_repo_id"] = f"{prefix}/{base}_shards"
+        config["hf_videos_repo_id"] = f"{prefix}/{base}_videos"
+        config["hf_enrich_repo_id"] = f"{prefix}/{base}_enrich"
     if args.youtube_keys_file:
         config["youtube_keys_file"] = args.youtube_keys_file
     if args.cookie_files_dir:
@@ -125,6 +155,11 @@ def run_command(cmd: list[str]) -> int:
 def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(description="Google Colab bootstrap for the 20k dataset collector run.")
     parser.add_argument("--template", default="dataset_campaign_20k.json")
+    parser.add_argument(
+        "--campaign-profile",
+        choices=sorted(CAMPAIGN_PROFILE_TEMPLATES),
+        help="Shortcut for campaign JSON template (20k or snapshot-smoke).",
+    )
     parser.add_argument("--output-dir", default="/content/drive/MyDrive/dataset_runs/20k-test")
     parser.add_argument("--run-name", default="dataset-20k-colab")
     parser.add_argument(
@@ -135,6 +170,7 @@ def main(argv: list[str] | None = None) -> int:
             "workers-download",
             "workers-enrich",
             "snapshot",
+            "snapshot-loop",
             "status",
             "inventory-rebuild",
         ],
@@ -176,6 +212,15 @@ def main(argv: list[str] | None = None) -> int:
         help="Use configured proxies for YouTube Data API discovery/enrich. Default is direct API calls on Colab.",
     )
     parser.add_argument("--disable-hf-upload", action="store_true")
+    parser.add_argument("--enable-tiktok", action="store_true", help="Enable TikTok discovery adapter.")
+    parser.add_argument("--enable-twitch", action="store_true", help="Enable Twitch discovery (needs FETCHER_TWITCH_* env).")
+    parser.add_argument("--enable-rutube", action="store_true", help="Enable Rutube discovery adapter.")
+    parser.add_argument("--enable-instagram", action="store_true", help="Enable Instagram discovery adapter.")
+    parser.add_argument(
+        "--snapshot-sleep-seconds",
+        type=int,
+        help="For snapshot-loop: override hour gaps with this many seconds between indices (smoke/debug).",
+    )
     parser.add_argument(
         "--worker-kinds",
         help="Comma-separated for role=workers: download, enrich-metadata, upload-hf-shards, upload-hf-videos, upload-hf-enrich.",
@@ -196,7 +241,30 @@ def main(argv: list[str] | None = None) -> int:
             cmd += ["--limit", str(args.limit)]
         if args.metrics_port:
             cmd += ["--metrics-port", str(args.metrics_port)]
+        cmd += _platform_cli_flags(args)
         return run_command(cmd)
+
+    if args.role == "snapshot-loop":
+        config = _read_json(runtime_config)
+        hours = config.get("snapshot_schedule_hours") or []
+        if len(hours) < 2:
+            raise SystemExit("snapshot-loop requires snapshot_schedule_hours with at least [0, N] in campaign JSON")
+        for idx in range(1, len(hours)):
+            if args.snapshot_sleep_seconds is not None:
+                wait_sec = args.snapshot_sleep_seconds
+            else:
+                wait_sec = max(0, (hours[idx] - hours[idx - 1]) * 3600)
+            if wait_sec > 0:
+                print(f"snapshot-loop: sleeping {wait_sec}s before snapshot-index {idx}", flush=True)
+                time.sleep(wait_sec)
+            cmd = [*base, "snapshot", str(runtime_config), "--snapshot-index", str(idx)]
+            if args.limit is not None:
+                cmd += ["--limit", str(args.limit)]
+            cmd += _platform_cli_flags(args)
+            code = run_command(cmd)
+            if code != 0:
+                return code
+        return 0
 
     if args.role in ("workers", "workers-download", "workers-enrich"):
         cmd = [*base, "run-workers", str(runtime_config), "--interval", str(args.interval)]
@@ -224,6 +292,7 @@ def main(argv: list[str] | None = None) -> int:
         cmd = [*base, "snapshot", str(runtime_config), "--snapshot-index", str(args.snapshot_index)]
         if args.limit is not None:
             cmd += ["--limit", str(args.limit)]
+        cmd += _platform_cli_flags(args)
         return run_command(cmd)
 
     if args.role == "inventory-rebuild":

@@ -36,7 +36,7 @@ from fetcher.dataset_collector.schemas import (
     ScheduleEntry,
     Snapshot,
 )
-from fetcher.dataset_collector.snapshots import SnapshotRunner
+from fetcher.dataset_collector.snapshots import SnapshotRunner, build_schedule_entry
 from fetcher.dataset_collector.state import DatasetState, format_time_get, utcnow
 
 
@@ -840,6 +840,145 @@ def test_should_suppress_huge_botguard_stderr():
 
 
 @pytest.mark.unit
+def test_pytubefix_sticky_client_stays_after_web_success(tmp_path, monkeypatch):
+    import fetcher.dataset_collector.downloads as downloads_mod
+    from fetcher.dataset_collector.downloads import BotDetectionDownloadError, download_video_local
+    from fetcher.dataset_collector.schemas import CampaignConfig
+    from fetcher.dataset_collector.state import DatasetState
+
+    downloads_mod._pytubefix_sticky_client_index = 0
+    clients_used: list[str] = []
+
+    cfg = CampaignConfig.parse_obj(
+        {
+            "name": "t",
+            "output_dir": str(tmp_path),
+            "categories": [{"name": "Avto", "keywords": ["x"], "target_count": 1, "collect_count": 1}],
+            "download_pytubefix_clients": ["ANDROID_VR", "WEB"],
+        }
+    )
+    state = DatasetState(cfg)
+    state.initialize()
+
+    def fake_attempt(*_args, client_name: str, target: Path, **_kwargs):
+        clients_used.append(client_name)
+        if client_name == "ANDROID_VR":
+            raise BotDetectionDownloadError("bot")
+        target.parent.mkdir(parents=True, exist_ok=True)
+        target.write_bytes(b"x" * 1024)
+        return target
+
+    monkeypatch.setattr(downloads_mod, "_pytubefix_client_sequence", lambda _cfg: ["ANDROID_VR", "WEB"])
+    monkeypatch.setattr(downloads_mod, "_download_video_local_pytubefix_attempt", fake_attempt)
+    monkeypatch.setattr(downloads_mod, "_download_video_local_ytdlp", lambda *_a, **_k: None)
+
+    download_video_local(
+        state,
+        cfg,
+        platform="youtube",
+        video_id="vid1",
+        url="https://www.youtube.com/watch?v=vid1",
+        category="Avto",
+        proxy_rotator=None,
+        cookie_rotator=None,
+    )
+    assert "WEB" in clients_used
+    assert downloads_mod._pytubefix_sticky_client_index == 1
+
+    clients_used.clear()
+    download_video_local(
+        state,
+        cfg,
+        platform="youtube",
+        video_id="vid2",
+        url="https://www.youtube.com/watch?v=vid2",
+        category="Avto",
+        proxy_rotator=None,
+        cookie_rotator=None,
+    )
+    assert clients_used[0] == "WEB"
+    assert "ANDROID_VR" not in clients_used
+
+
+@pytest.mark.unit
+def test_download_pacing_bot_backoff_escalates():
+    from fetcher.dataset_collector.download_pacing import (
+        compute_download_pause_seconds,
+        reset_download_pacing,
+    )
+    from fetcher.dataset_collector.schemas import CampaignConfig
+
+    reset_download_pacing()
+    cfg = CampaignConfig.parse_obj(
+        {
+            "name": "t",
+            "output_dir": "out",
+            "categories": [{"name": "Sport", "keywords": ["x"], "target_count": 1, "collect_count": 1}],
+            "download_pause_after_bot_seconds": 60,
+            "download_pause_after_bot_max_seconds": 200,
+            "download_pause_bot_backoff_multiplier": 2.0,
+        }
+    )
+    assert compute_download_pause_seconds(cfg, "bot") == 60
+    assert compute_download_pause_seconds(cfg, "bot") == 120
+    assert compute_download_pause_seconds(cfg, "bot") == 200
+    compute_download_pause_seconds(cfg, "success")
+    assert compute_download_pause_seconds(cfg, "bot") == 60
+
+
+@pytest.mark.unit
+def test_pytubefix_sticky_advances_after_all_cookies_bot_without_success(tmp_path, monkeypatch):
+    import fetcher.dataset_collector.downloads as downloads_mod
+    from fetcher.dataset_collector.downloads import BotDetectionDownloadError, download_video_local
+    from fetcher.dataset_collector.schemas import CampaignConfig
+    from fetcher.dataset_collector.state import DatasetState
+
+    downloads_mod._pytubefix_sticky_client_index = 0
+
+    cfg = CampaignConfig.parse_obj(
+        {
+            "name": "t",
+            "output_dir": str(tmp_path),
+            "categories": [{"name": "Avto", "keywords": ["x"], "target_count": 1, "collect_count": 1}],
+            "download_pytubefix_clients": ["ANDROID_VR", "WEB"],
+        }
+    )
+    state = DatasetState(cfg)
+    state.initialize()
+
+    def fake_attempt(*_args, client_name: str, **_kwargs):
+        raise BotDetectionDownloadError("bot")
+
+    monkeypatch.setattr(downloads_mod, "_pytubefix_client_sequence", lambda _cfg: ["ANDROID_VR", "WEB"])
+    monkeypatch.setattr(downloads_mod, "_download_video_local_pytubefix_attempt", fake_attempt)
+    monkeypatch.setattr(downloads_mod, "_download_video_local_ytdlp", lambda *_a, **_k: None)
+
+    download_video_local(
+        state,
+        cfg,
+        platform="youtube",
+        video_id="vid1",
+        url="https://www.youtube.com/watch?v=vid1",
+        category="Avto",
+        proxy_rotator=None,
+        cookie_rotator=None,
+    )
+    assert downloads_mod._pytubefix_sticky_client_index == 1
+
+    download_video_local(
+        state,
+        cfg,
+        platform="youtube",
+        video_id="vid2",
+        url="https://www.youtube.com/watch?v=vid2",
+        category="Avto",
+        proxy_rotator=None,
+        cookie_rotator=None,
+    )
+    assert downloads_mod._pytubefix_sticky_client_index == 1
+
+
+@pytest.mark.unit
 def test_is_pytubefix_client_error_detects_innertube_parse_failures():
     from fetcher.dataset_collector.downloads import is_pytubefix_client_error
 
@@ -1187,3 +1326,59 @@ def test_video_filter_rejects_live_after_enrich():
     )
     assert not decision.accepted
     assert decision.reason == "live_stream"
+
+
+@pytest.mark.unit
+def test_build_schedule_entry_hours():
+    video = make_video("v1")
+    entry = build_schedule_entry(video, schedule_hours=[0, 1, 2, 3])
+    assert entry.due_at["1"] == video.snapshot_0.collected_at + timedelta(hours=1)
+    assert entry.due_at["2"] == video.snapshot_0.collected_at + timedelta(hours=2)
+
+
+@pytest.mark.unit
+def test_is_allowed_metadata_shard_relpath():
+    from fetcher.dataset_collector.hf_upload import is_allowed_metadata_shard_relpath
+
+    assert is_allowed_metadata_shard_relpath("shards/metadata/category=Sport/part_000000.json")
+    assert not is_allowed_metadata_shard_relpath("state/coordination/done/download/x.jsonl")
+
+
+@pytest.mark.unit
+def test_is_video_unavailable_error_detected():
+    from fetcher.dataset_collector.downloads import is_video_unavailable_error
+
+    assert is_video_unavailable_error("VideoUnavailable: abc is unavailable")
+    assert not is_video_unavailable_error("bot_detection detected")
+
+
+@pytest.mark.unit
+def test_orphan_mp4_removed_when_already_on_hf(tmp_path, monkeypatch):
+    from fetcher.dataset_collector.downloads import run_download_queue
+
+    config = default_campaign_config(output_dir=str(tmp_path), categories=["Sport"])
+    config.hf_repo_id = "org/test-dataset"
+    config.hf_coord_enabled = False
+    state = DatasetState(config)
+    state.initialize()
+    video = make_video("orphan1")
+    state.buffer_accepted("sports", video)
+    state.flush_pending("sports", shard_size=config.shard_size)
+    state.enqueue_download(video)
+    local = state.download_dir / "videos" / "sports" / "orphan1.mp4"
+    local.parent.mkdir(parents=True, exist_ok=True)
+    local.write_bytes(b"fake-mp4")
+    key = "youtube:sports:orphan1"
+    state.mark_hf_video_upload_done(key, video_id="orphan1", category="sports", local_path=str(local.relative_to(state.root)))
+
+    deleted: list[Path] = []
+
+    def fake_delete(path, **kwargs):
+        deleted.append(Path(path))
+        Path(path).unlink(missing_ok=True)
+        return True
+
+    monkeypatch.setattr("fetcher.dataset_collector.downloads.delete_local_file", fake_delete)
+    result = run_download_queue(state, config, state.download_dir / "queue.jsonl", limit=5)
+    assert result["skipped"] >= 1
+    assert deleted and deleted[0].name == "orphan1.mp4"

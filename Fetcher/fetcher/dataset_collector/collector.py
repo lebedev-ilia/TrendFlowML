@@ -239,7 +239,11 @@ class DatasetCollector:
                                 self.balancer.observe_accept(video)
                                 self.state.mark_seen(video.dedup_key, category=category.name)
                                 self.state.append_schedule(
-                                    build_schedule_entry(video, self.config.snapshot_schedule_days)
+                                    build_schedule_entry(
+                                        video,
+                                        self.config.snapshot_schedule_days,
+                                        schedule_hours=self.config.snapshot_schedule_hours,
+                                    )
                                 )
                                 self.state.enqueue_download(video)
                                 self.state.buffer_accepted(category.name, video)

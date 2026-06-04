@@ -70,7 +70,17 @@ def resolve_enrich_repo_id(config: CampaignConfig, *, repo_id: str | None = None
     return target
 
 
+def is_allowed_metadata_shard_relpath(shard_relpath: str) -> bool:
+    """Only metadata shard JSON belongs in the shards HF dataset repo."""
+    rel = shard_relpath.lstrip("/").replace("\\", "/")
+    if rel.startswith("state/") or "/coordination/" in rel:
+        return False
+    return rel.startswith("shards/metadata/")
+
+
 def remote_shard_path(config: CampaignConfig, shard_relpath: str) -> str:
+    if not is_allowed_metadata_shard_relpath(shard_relpath):
+        raise HuggingFaceUploadError(f"refusing to upload non-metadata path to shards repo: {shard_relpath}")
     prefix = (config.hf_shards_path_prefix or "").strip("/")
     rel = shard_relpath.lstrip("/")
     return f"{prefix}/{rel}" if prefix else rel

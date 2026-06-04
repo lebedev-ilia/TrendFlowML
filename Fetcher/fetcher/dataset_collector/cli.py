@@ -19,6 +19,7 @@ from fetcher.dataset_collector.status_report import build_status_report
 from fetcher.dataset_collector.config import load_campaign_config, write_campaign_template
 from fetcher.dataset_collector.cookies import CookieRotator
 from fetcher.dataset_collector.discovery.base import DiscoveryAdapter
+from fetcher.dataset_collector.discovery.instagram import InstagramDiscoveryAdapter
 from fetcher.dataset_collector.discovery.rutube import RutubeDiscoveryAdapter
 from fetcher.dataset_collector.discovery.tiktok import TikTokDiscoveryAdapter
 from fetcher.dataset_collector.discovery.twitch import TwitchDiscoveryAdapter
@@ -98,6 +99,11 @@ def build_adapters(
         adapters["twitch"] = TwitchDiscoveryAdapter(client_id=twitch_client_id, access_token=twitch_token)
     if getattr(args, "enable_rutube", False):
         adapters["rutube"] = RutubeDiscoveryAdapter()
+    if getattr(args, "enable_instagram", False):
+        adapters["instagram"] = InstagramDiscoveryAdapter(
+            proxy_rotator=ProxyRotator(config=config, include_local=False),
+            cookie_rotator=cookie_rotator,
+        )
     return adapters
 
 
@@ -395,6 +401,7 @@ def build_parser() -> argparse.ArgumentParser:
         command.add_argument("--enable-tiktok", action="store_true")
         command.add_argument("--enable-twitch", action="store_true")
         command.add_argument("--enable-rutube", action="store_true")
+        command.add_argument("--enable-instagram", action="store_true")
 
     discover = sub.add_parser("discover")
     add_common(discover)

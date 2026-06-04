@@ -187,6 +187,29 @@ export HF_PARALLEL_COLAB_COUNT=3
 
 Для клиента `WEB` pytubefix вызывает Node (`botGuard.js`). Без `nodejs-wheel-binaries` в лог может сыпаться огромный stderr — worker теперь режет такой мусор; лучше установить Node-пакет выше. При bot-detection на `ANDROID_VR` worker переключится на `WEB` или yt-dlp.
 
+### Паузы между скачиваниями (снижение bot / rate-limit)
+
+В `runtime_dataset_campaign_20k.json` (или шаблоне):
+
+```json
+"download_pause_after_success_seconds": 3,
+"download_pause_after_fail_seconds": 15,
+"download_pause_after_unavailable_seconds": 1,
+"download_pause_after_cookie_bot_seconds": 2,
+"download_pause_after_bot_seconds": 60,
+"download_pause_after_bot_max_seconds": 300,
+"download_pause_bot_backoff_multiplier": 1.5
+```
+
+| Событие | Пауза |
+|--------|--------|
+| OK | 3 с (базовая) |
+| `VideoUnavailable` | 1 с, без перебора cookies |
+| bot на одном cookie | 2 с перед следующей попыткой |
+| bot на всём видео | 60 с → 90 с → … (×1.5), макс. 300 с; сброс после успешного OK |
+
+В логе: `pace sleep 60.0s after bot, bot_streak=1`. При серии bot увеличивай `download_pause_after_bot_seconds` или включи прокси.
+
 ## 4. Snapshots
 
 Для таргетов моделей нужны `14d` и `21d`; `7d` можно использовать с mask.
@@ -568,7 +591,66 @@ python scripts/colab_20k_bootstrap.py --role workers-download ... --metrics-port
 
 Очереди и coord claims подхватываются из локального state + HF sync.
 
-### Snapshots (позже, с Colab A или отдельного)
+### Аудит `20-test-in-par-3-colab-2` (кратко)
+
+| Этап | Результат |
+|------|-----------|
+| Discover (main) | 1273 accepted (Avto 1112, Deti 161), checkpoint в Deti |
+| Download | main 309 OK; B 245 OK / 98× VideoUnavailable (старый код без fast-fail) |
+| HF videos | 400 upload OK в этом прогоне; в repo ~1101 mp4 (наследие прошлых тестов) |
+| Локальные mp4 | 42 в Deti = `pending_hf_upload` (ждут `upload-hf-videos`) |
+
+Перед следующим прогоном: **`git pull`** на всех Colab и перезапуск workers (в логах должны быть `sticky ->`, `unavailable`, `pace sleep`).
+
+Сверка с HF после экспорта state:
+
+```bash
+python scripts/compare_hf_run_state.py tests/full_results/20-test-in-par-3-colab-2/dataset_runs-main
+python scripts/audit_dataset_run.py tests/full_results/20-test-in-par-3-colab-2/dataset_runs-main --check-hf
+```
+
+**Важно:** на discover-Colab тоже укажи `--parallel-colab-count 3` (или `HF_PARALLEL_COLAB_COUNT=3`), иначе в `runtime_*.json` останется `hf_parallel_colab_count: 1` и лимит commit’ов не поделится между тремя машинами.
+
+### Snapshot smoke (~600 видео, шаг 1 час)
+
+Отдельные HF repos (`dataset_snapshot_smoke_*`), не смешивать с боевым `dataset_20k_colab_*`.
+
+```bash
+# 1) Discover + multi-platform (опционально)
+python scripts/colab_20k_bootstrap.py \
+  --campaign-profile snapshot-smoke \
+  --role discover \
+  --limit 600 \
+  --parallel-colab-count 1 \
+  --hf-repo-prefix Ilialebedev \
+  --enable-tiktok --enable-rutube --enable-instagram \
+  --output-dir /content/dataset_runs/snapshot-smoke
+
+# 2) Workers (без Drive или с export_colab_drive_token.py)
+python scripts/colab_20k_bootstrap.py \
+  --campaign-profile snapshot-smoke \
+  --role workers \
+  --output-dir /content/dataset_runs/snapshot-smoke
+
+# 3) Follow-up snapshots по часам (индексы 1,2,3 = +1h,+2h,+3h от snapshot_0)
+python scripts/colab_20k_bootstrap.py \
+  --campaign-profile snapshot-smoke \
+  --role snapshot-loop \
+  --output-dir /content/dataset_runs/snapshot-smoke
+
+# Быстрая отладка без ожидания часа:
+python scripts/colab_20k_bootstrap.py \
+  --campaign-profile snapshot-smoke \
+  --role snapshot-loop \
+  --snapshot-sleep-seconds 30 \
+  --output-dir /content/dataset_runs/snapshot-smoke
+```
+
+В campaign: `snapshot_schedule_hours: [0, 1, 2, 3]`. Для CI/теста due time: `export DATASET_SNAPSHOT_TEST_NOW=2026-06-04T12:00:00+00:00`.
+
+Twitch: `export FETCHER_TWITCH_CLIENT_ID=...` и `FETCHER_TWITCH_ACCESS_TOKEN=...` + `--enable-twitch`.
+
+### Snapshots (production, дни)
 
 ```bash
 python scripts/colab_20k_bootstrap.py \
@@ -577,7 +659,7 @@ python scripts/colab_20k_bootstrap.py \
   --output-dir /content/drive/MyDrive/dataset_runs/20k-main
 ```
 
-Индексы: `1=7d`, `2=14d`, `3=21d`, `4=28d`.
+Индексы при `snapshot_schedule_days: [0,7,14,21,28]`: `1=7d`, `2=14d`, `3=21d`, `4=28d`.
 
 ### Типичные ошибки
 

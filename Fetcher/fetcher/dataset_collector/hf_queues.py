@@ -6,6 +6,7 @@ from pathlib import Path
 from typing import Iterable
 
 from fetcher.dataset_collector.hf_upload import (
+    is_allowed_metadata_shard_relpath,
     HuggingFaceUploadError,
     remote_enrich_path,
     remote_shard_path,
@@ -208,6 +209,10 @@ def run_hf_shard_upload_queue(
         if not shard_relpath:
             results["skipped"] += 1
             skip_reasons["invalid_row"] = skip_reasons.get("invalid_row", 0) + 1
+            continue
+        if not is_allowed_metadata_shard_relpath(shard_relpath):
+            results["skipped"] += 1
+            skip_reasons["disallowed_path"] = skip_reasons.get("disallowed_path", 0) + 1
             continue
         if category and item.get("category") != category:
             results["skipped"] += 1

@@ -167,8 +167,23 @@ def main() -> None:
     parser = argparse.ArgumentParser(description="Audit a dataset collector run after smoke/checkpoint/full collection.")
     parser.add_argument("run_dir", type=Path)
     parser.add_argument("--out", type=Path)
+    parser.add_argument(
+        "--check-hf",
+        action="store_true",
+        help="Also compare local state with Hugging Face repos (requires huggingface_hub and HF_TOKEN).",
+    )
     args = parser.parse_args()
     result = audit(args.run_dir)
+    if args.check_hf:
+        import importlib.util
+
+        compare_path = Path(__file__).resolve().parent / "compare_hf_run_state.py"
+        spec = importlib.util.spec_from_file_location("compare_hf_run_state", compare_path)
+        if spec is None or spec.loader is None:
+            raise RuntimeError(f"cannot load {compare_path}")
+        module = importlib.util.module_from_spec(spec)
+        spec.loader.exec_module(module)
+        result["hf_compare"] = module.compare_run(args.run_dir, check_hf=True)
     payload = json.dumps(result, ensure_ascii=False, indent=2)
     if args.out:
         args.out.parent.mkdir(parents=True, exist_ok=True)

@@ -101,6 +101,13 @@ class CampaignConfig(BaseModel):
     )
     categories: List[CategoryConfig]
     snapshot_schedule_days: List[int] = Field(default_factory=lambda: [0, 7, 14, 21])
+    snapshot_schedule_hours: Optional[List[int]] = Field(
+        None,
+        description=(
+            "If set, follow-up snapshot due times use hours from snapshot_0 (smoke tests). "
+            "Overrides snapshot_schedule_days. Must start with 0."
+        ),
+    )
     default_filters: Dict[str, Any] = Field(default_factory=dict)
     platform_weights: Dict[str, float] = Field(default_factory=lambda: {"youtube": 1.0})
     time_interval_buckets: List[Dict[str, Any]] = Field(default_factory=list)
@@ -247,6 +254,41 @@ class CampaignConfig(BaseModel):
         default_factory=lambda: ["ANDROID_VR", "WEB"],
         description="pytubefix clients tried in order; WEB can generate PO tokens via Node.js.",
     )
+    download_pause_after_success_seconds: float = Field(
+        3.0,
+        ge=0.0,
+        description="Sleep after a successful download before the next queue item.",
+    )
+    download_pause_after_fail_seconds: float = Field(
+        12.0,
+        ge=0.0,
+        description="Sleep after a failed download (non-bot, non-unavailable).",
+    )
+    download_pause_after_unavailable_seconds: float = Field(
+        1.0,
+        ge=0.0,
+        description="Sleep after VideoUnavailable (no retry benefit).",
+    )
+    download_pause_after_cookie_bot_seconds: float = Field(
+        2.0,
+        ge=0.0,
+        description="Sleep after each bot_detection hit while trying another cookie/client.",
+    )
+    download_pause_after_bot_seconds: float = Field(
+        45.0,
+        ge=0.0,
+        description="Base sleep after bot_detection ends a video attempt; grows with streak.",
+    )
+    download_pause_after_bot_max_seconds: float = Field(
+        300.0,
+        ge=0.0,
+        description="Cap for bot backoff sleep (5 min default).",
+    )
+    download_pause_bot_backoff_multiplier: float = Field(
+        1.5,
+        ge=1.0,
+        description="Multiply bot pause by this for each consecutive bot fail on queue items.",
+    )
     drive_permanent_delete: Optional[bool] = Field(
         None,
         description=(
@@ -299,6 +341,12 @@ class CampaignConfig(BaseModel):
     def schedule_starts_with_zero(cls, value: List[int]) -> List[int]:
         if not value or value[0] != 0:
             raise ValueError("snapshot_schedule_days must start with 0")
+        return value
+
+    @validator("snapshot_schedule_hours")
+    def schedule_hours_starts_with_zero(cls, value: Optional[List[int]]) -> Optional[List[int]]:
+        if value is not None and (not value or value[0] != 0):
+            raise ValueError("snapshot_schedule_hours must start with 0")
         return value
 
 

@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import os
 from datetime import timedelta
 from typing import Dict, Iterable, List
 
@@ -8,12 +9,32 @@ from fetcher.dataset_collector.schemas import ScheduleEntry, Snapshot
 from fetcher.dataset_collector.state import DatasetState, utcnow
 
 
-def build_schedule_entry(video, schedule_days: Iterable[int]) -> ScheduleEntry:
+def _schedule_offsets(
+    *,
+    schedule_days: Iterable[int] | None = None,
+    schedule_hours: Iterable[int] | None = None,
+) -> tuple[str, List[int]]:
+    hours = list(schedule_hours or [])
+    if hours:
+        return "hours", hours
+    return "days", list(schedule_days or [0])
+
+
+def build_schedule_entry(
+    video,
+    schedule_days: Iterable[int] | None = None,
+    *,
+    schedule_hours: Iterable[int] | None = None,
+) -> ScheduleEntry:
+    unit, offsets = _schedule_offsets(schedule_days=schedule_days, schedule_hours=schedule_hours)
     due_at = {}
-    for index, days in enumerate(schedule_days):
+    for index, offset in enumerate(offsets):
         if index == 0:
             continue
-        due_at[str(index)] = video.snapshot_0.collected_at + timedelta(days=days)
+        if unit == "hours":
+            due_at[str(index)] = video.snapshot_0.collected_at + timedelta(hours=offset)
+        else:
+            due_at[str(index)] = video.snapshot_0.collected_at + timedelta(days=offset)
     return ScheduleEntry(
         platform=video.platform,
         video_id=video.video_id,
@@ -22,6 +43,13 @@ def build_schedule_entry(video, schedule_days: Iterable[int]) -> ScheduleEntry:
         baseline_collected_at=video.snapshot_0.collected_at,
         due_at=due_at,
     )
+
+
+def snapshot_follow_up_indices(config) -> List[int]:
+    """Indices 1..N for scheduled follow-up snapshots (index 0 is snapshot_0 at discover)."""
+    if getattr(config, "snapshot_schedule_hours", None):
+        return list(range(1, len(config.snapshot_schedule_hours)))
+    return list(range(1, len(config.snapshot_schedule_days)))
 
 
 class SnapshotRunner:
@@ -36,8 +64,16 @@ class SnapshotRunner:
         self.adapters = adapters
         self.comments_limit = comments_limit
 
+    def _now(self):
+        override = os.environ.get("DATASET_SNAPSHOT_TEST_NOW", "").strip()
+        if override:
+            from datetime import datetime, timezone
+
+            return datetime.fromisoformat(override.replace("Z", "+00:00"))
+        return utcnow()
+
     def due_entries(self, *, snapshot_index: int) -> List[ScheduleEntry]:
-        now = utcnow()
+        now = self._now()
         due_key = str(snapshot_index)
         completed = self.state.load_completed_snapshots()
         result = []
