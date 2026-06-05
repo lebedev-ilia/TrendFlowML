@@ -1359,6 +1359,28 @@ def test_build_schedule_entry_per_video_seconds():
 
 
 @pytest.mark.unit
+def test_snapshot_poll_report_format(tmp_path):
+    from fetcher.dataset_collector.snapshots import format_snapshot_poll_report, snapshot_poll_report
+
+    config = default_campaign_config(output_dir=str(tmp_path))
+    config.snapshot_sleep_seconds = 240
+    config.snapshot_follow_up_count = 2
+    state = DatasetState(config)
+    state.initialize()
+    state.append_schedule(
+        build_schedule_entry(
+            make_video("v1"),
+            snapshot_sleep_seconds=240,
+            snapshot_follow_up_count=2,
+        )
+    )
+    text = format_snapshot_poll_report(snapshot_poll_report(state, config))
+    assert "[snapshot-poll]" in text
+    assert "index 1" in text
+    assert "pending=1" in text
+
+
+@pytest.mark.unit
 def test_seconds_until_next_snapshot_due(tmp_path):
     from fetcher.dataset_collector.snapshots import seconds_until_next_snapshot_due
 

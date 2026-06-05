@@ -204,6 +204,7 @@ def command_snapshot_poll(args: argparse.Namespace) -> None:
         state,
         config,
         poll_interval_seconds=args.poll_interval_seconds,
+        verbose=not getattr(args, "quiet", False),
     )
     print(json.dumps(totals, ensure_ascii=False))
 
@@ -439,6 +440,11 @@ def build_parser() -> argparse.ArgumentParser:
         type=int,
         default=30,
         help="Fallback sleep when due times are in the past but collection yielded nothing.",
+    )
+    snapshot_poll.add_argument(
+        "--quiet",
+        action="store_true",
+        help="Suppress per-pass snapshot-poll status logs.",
     )
     snapshot_poll.set_defaults(func=command_snapshot_poll)
 
