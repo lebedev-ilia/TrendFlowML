@@ -72,7 +72,22 @@ class PlatformAdapter:
 
 ---
 
-## 3. YouTubeAdapter (первая реализация)
+## 3. Dual-Mode Providers
+
+Все адаптеры поддерживают режимы `api_first`, `api_only`, `sdk_only`, `parallel`.
+См. [DUAL_MODE_PROVIDERS.md](DUAL_MODE_PROVIDERS.md) и [PLATFORM_CREDENTIALS.md](PLATFORM_CREDENTIALS.md).
+
+| Платформа | API | SDK fallback |
+|-----------|-----|--------------|
+| YouTube | Data API v3 | yt-dlp |
+| TikTok | Display API | TikTokApi |
+| Instagram | Graph API | Instaloader |
+| Twitch | Helix | twitchAPI |
+| RuTube | — | yt-dlp |
+
+---
+
+## 4. YouTubeAdapter (первая реализация)
 
 Первая целевая реализация — `YouTubeAdapter(PlatformAdapter)`.
 

@@ -96,6 +96,24 @@ class FetcherSettings(BaseSettings):
         False,
         description="Флаг включения TikTok адаптера.",
     )
+    instagram_enabled: bool = Field(
+        False,
+        description="Флаг включения Instagram адаптера.",
+    )
+    rutube_enabled: bool = Field(
+        False,
+        description="Флаг включения RuTube адаптера.",
+    )
+    twitch_enabled: bool = Field(
+        False,
+        description="Флаг включения Twitch адаптера.",
+    )
+
+    # Credentials directory (API keys / tokens without editing code)
+    credentials_dir: str = Field(
+        "fetcher/credentials",
+        description="Каталог с JSON/txt файлами credentials для платформ.",
+    )
 
     # Rate limiting (YouTube, базовые значения; точные подберём экспериментально)
     youtube_metadata_limit_per_window: int = Field(
@@ -185,6 +203,10 @@ class FetcherSettings(BaseSettings):
         5,
         description="Базовый лимит запросов в секунду к YouTube Data API.",
     )
+    youtube_provider_mode: str = Field(
+        "api_first",
+        description="Режим провайдера YouTube: api_first, api_only, sdk_only, parallel.",
+    )
 
     # Моковое скачивание видео для E2E/локальной разработки
     youtube_mock_video_download: bool = Field(
@@ -213,6 +235,70 @@ class FetcherSettings(BaseSettings):
         8,
         description="Количество sample‑файлов в директории мок‑видео TikTok.",
     )
+
+    # TikTok Display API + TikTokApi SDK
+    tiktok_data_enabled: bool = Field(
+        False,
+        description="Включить TikTok Display API для метаданных.",
+    )
+    tiktok_provider_mode: str = Field(
+        "api_first",
+        description="Режим провайдера TikTok: api_first, api_only, sdk_only, parallel.",
+    )
+    tiktok_client_key: str | None = Field(None, description="TikTok OAuth Client Key.")
+    tiktok_client_secret: str | None = Field(None, description="TikTok OAuth Client Secret.")
+    tiktok_access_token: str | None = Field(None, description="TikTok User/Client Access Token.")
+    tiktok_open_id: str | None = Field(None, description="TikTok user open_id из OAuth.")
+    tiktok_ms_token: str | None = Field(None, description="TikTok msToken cookie для TikTokApi SDK.")
+
+    # Instagram Graph API + Instaloader SDK
+    instagram_data_enabled: bool = Field(
+        False,
+        description="Включить Instagram Graph API для метаданных.",
+    )
+    instagram_provider_mode: str = Field(
+        "api_first",
+        description="Режим провайдера Instagram: api_first, api_only, sdk_only, parallel.",
+    )
+    instagram_access_token: str | None = Field(None, description="Instagram Graph API long-lived token.")
+    instagram_ig_user_id: str | None = Field(None, description="Instagram Business/Creator user id.")
+    instagram_instaloader_session: str | None = Field(
+        None,
+        description="Путь к session-файлу Instaloader.",
+    )
+
+    # Twitch Helix API + twitchAPI SDK
+    twitch_data_enabled: bool = Field(
+        False,
+        description="Включить Twitch Helix API.",
+    )
+    twitch_provider_mode: str = Field(
+        "api_first",
+        description="Режим провайдера Twitch: api_first, api_only, sdk_only, parallel.",
+    )
+    twitch_client_id: str | None = Field(None, description="Twitch application Client-ID.")
+    twitch_client_secret: str | None = Field(None, description="Twitch application Client Secret.")
+    twitch_access_token: str | None = Field(None, description="Twitch OAuth/App access token.")
+
+    # RuTube (только yt-dlp SDK — официального API нет)
+    rutube_provider_mode: str = Field(
+        "sdk_only",
+        description="Режим провайдера RuTube (только sdk_only поддерживается).",
+    )
+
+    # Rate limiting (Instagram)
+    instagram_metadata_limit_per_window: int = Field(200, description="Instagram metadata requests per window.")
+    instagram_metadata_window_sec: int = Field(3600, description="Instagram metadata window seconds.")
+
+    # Rate limiting (Twitch)
+    twitch_metadata_limit_per_window: int = Field(800, description="Twitch metadata requests per window.")
+    twitch_metadata_window_sec: int = Field(60, description="Twitch metadata window seconds.")
+
+    # Rate limiting (RuTube)
+    rutube_metadata_limit_per_window: int = Field(400, description="RuTube metadata requests per window.")
+    rutube_metadata_window_sec: int = Field(3600, description="RuTube metadata window seconds.")
+    rutube_download_limit_per_window: int = Field(80, description="RuTube download requests per window.")
+    rutube_download_window_sec: int = Field(3600, description="RuTube download window seconds.")
 
     # Локальный E2E / dev‑режим: позволять завершать пайплайн без comments_file
     allow_finalize_without_comments: bool = Field(

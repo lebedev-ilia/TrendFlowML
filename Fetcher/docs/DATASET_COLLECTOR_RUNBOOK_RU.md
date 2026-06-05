@@ -67,7 +67,10 @@
 - `collect_count`: объем с запасом под дубли/rejected.
 - `snapshot_schedule_days`: сейчас `[0, 7, 14, 21, 28]`.
 - `time_interval_buckets`: стратификация по возрасту видео.
-- `youtube_keys_file`: путь к `keys.txt`.
+- `youtube_keys_file`: путь к `youtube_keys.txt` (default: `fetcher/credentials/youtube_keys.txt`).
+- `tiktok_credentials_file`, `instagram_credentials_file`, `twitch_credentials_file`: JSON в `fetcher/credentials/`.
+- `credentials_dir`: каталог credentials (см. `docs/PLATFORM_CREDENTIALS.md`).
+- Проверка: `python scripts/check_platform_credentials.py`.
 - `proxies_file`: путь к `proxies.txt`.
 - `cookie_files_dir`: папка cookie-файлов.
 - `hf_repo_id`, `hf_upload_enabled`: HF upload, пока лучше держать выключенным до стабильного smoke.

@@ -50,6 +50,19 @@ def _batch(items: list[dict], size: int) -> Iterable[list[dict]]:
         yield items[idx : idx + size]
 
 
+def _dedupe_pending_uploads(pending_uploads: list[dict]) -> list[dict]:
+    """One remote path per Hub commit (duplicate queue rows caused huggingface_hub warnings)."""
+    seen: set[str] = set()
+    deduped: list[dict] = []
+    for item in pending_uploads:
+        key = item.get("key") or item.get("remote") or ""
+        if key in seen:
+            continue
+        seen.add(key)
+        deduped.append(item)
+    return deduped
+
+
 def scan_shards_for_hf_upload(
     state: DatasetState,
     *,
@@ -258,6 +271,7 @@ def run_hf_shard_upload_queue(
         if limit is not None and attempted >= limit:
             break
 
+    pending_uploads = _dedupe_pending_uploads(pending_uploads)
     for batch in _batch(pending_uploads, config.hf_shard_upload_batch_files):
         label = ", ".join(item["shard_relpath"] for item in batch[:3])
         if len(batch) > 3:
@@ -409,6 +423,7 @@ def run_hf_video_upload_queue(
         if limit is not None and attempted >= limit:
             break
 
+    pending_uploads = _dedupe_pending_uploads(pending_uploads)
     for batch in _batch(pending_uploads, config.hf_video_upload_batch_files):
         label = ", ".join(item["video_id"] for item in batch[:5])
         if len(batch) > 5:
@@ -577,6 +592,7 @@ def run_hf_enrich_upload_queue(
         if limit is not None and attempted >= limit:
             break
 
+    pending_uploads = _dedupe_pending_uploads(pending_uploads)
     for batch in _batch(pending_uploads, config.hf_enrich_upload_batch_files):
         label = ", ".join(item["video_id"] for item in batch[:5])
         if len(batch) > 5:

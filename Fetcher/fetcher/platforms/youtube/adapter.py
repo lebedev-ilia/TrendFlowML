@@ -26,8 +26,12 @@ from fetcher.proxies import get_next_proxy, record_proxy_result
 from fetcher.snapshots import create_initial_snapshot_from_info
 from fetcher.storage import storage_client
 from fetcher.platforms.base import PlatformAdapter
+from fetcher.platforms.dual_provider import fetch_comments_with_fallback, fetch_with_fallback
+from fetcher.platforms.provider_mode import ProviderMode
+from fetcher.schemas.platform_video import from_youtube_api, from_ytdlp
 from fetcher.services.youtube_data_client import (
     CommentDto,
+    QuotaExceededError,
     VideoMetadataDto,
     YouTubeDataClient,
 )
@@ -128,6 +132,47 @@ class YouTubeAdapter(PlatformAdapter):
             self._data_client = YouTubeDataClient()
         return self._data_client
 
+    def _youtube_provider_mode(self) -> ProviderMode:
+        if not settings.youtube_data_enabled:
+            return ProviderMode.SDK_ONLY
+        return ProviderMode.from_value(settings.youtube_provider_mode)
+
+    def _fetch_metadata_via_ytdlp(self, source: str) -> dict[str, Any]:
+        if not acquire_token(
+            key="rate:youtube:metadata:default",
+            limit=settings.youtube_metadata_limit_per_window,
+            window_sec=settings.youtube_metadata_window_sec,
+        ):
+            raise RuntimeError("YouTube metadata rate limit exceeded")
+
+        proxy = get_next_proxy()
+        ydl_opts = {"skip_download": True, "quiet": True, "proxy": proxy}
+        apply_cookiefile(ydl_opts)
+        start_time = time.time()
+        try:
+            with yt_dlp.YoutubeDL(ydl_opts) as ydl:
+                info = ydl.extract_info(source, download=False)
+            latency_ms = int((time.time() - start_time) * 1000)
+            if proxy:
+                record_proxy_result(proxy, success=True, operation="metadata", latency_ms=latency_ms)
+            return info
+        except DownloadError as e:
+            latency_ms = int((time.time() - start_time) * 1000)
+            msg = str(e)
+            if "HTTP Error 429" in msg:
+                fetcher_youtube_429_total.labels(operation="metadata").inc()
+            if "HTTP Error 403" in msg:
+                fetcher_youtube_403_total.labels(operation="metadata", error_code="HTTP_403").inc()
+            if proxy:
+                record_proxy_result(
+                    proxy,
+                    success=False,
+                    operation="metadata",
+                    latency_ms=latency_ms,
+                    error_message=msg[:500],
+                )
+            raise
+
     def fetch_metadata(self, source: str, *, run_id: str) -> None:
         """Загрузить метаданные видео и канала и сохранить их в БД/хранилище.
 
@@ -152,69 +197,65 @@ class YouTubeAdapter(PlatformAdapter):
             info = _synthetic_youtube_info_dict(platform_video_id, duration)
             if duration is None:
                 duration = int(info["duration"])
-        # Если включен режим YouTube Data API — используем его как источник правды.
-        elif settings.youtube_data_enabled:
-            dto = self.data_client.get_video_metadata(source)
-            platform_video_id = dto.video_id
-            info = dto.raw_json
-            duration = dto.duration_seconds
         else:
-            # 2) Rate limiting: metadata window per IP/proxy (MVP — один глобальный ключ)
-            # Для MVP не учитываем IP/proxy_id, используем один ключ.
-            if not acquire_token(
-                key="rate:youtube:metadata:default",
-                limit=settings.youtube_metadata_limit_per_window,
-                window_sec=settings.youtube_metadata_window_sec,
-            ):
-                breaker.record_failure("rate_limit_exceeded")
-                raise RuntimeError("YouTube metadata rate limit exceeded")
+            mode = self._youtube_provider_mode()
+            api_available = bool(settings.youtube_data_enabled and settings.youtube_data_api_key)
 
-            # 3) Получаем info_dict через yt-dlp
-            # get_next_proxy сам учитывает настройки enable_proxies / список proxies
-            proxy = get_next_proxy()
-            ydl_opts = {
-                "skip_download": True,
-                "quiet": True,
-                "proxy": proxy,
-            }
-            apply_cookiefile(ydl_opts)
-            start_time = time.time()
+            def _api() -> VideoMetadataDto:
+                return self.data_client.get_video_metadata(source)
+
+            def _sdk_info() -> dict[str, Any]:
+                return self._fetch_metadata_via_ytdlp(source)
+
             try:
-                with yt_dlp.YoutubeDL(ydl_opts) as ydl:
-                    info = ydl.extract_info(source, download=False)
-                latency_ms = int((time.time() - start_time) * 1000)
-                if proxy:
-                    record_proxy_result(
-                        proxy, success=True, operation="metadata", latency_ms=latency_ms
-                    )
-            except DownloadError as e:
-                latency_ms = int((time.time() - start_time) * 1000)
-                msg = str(e)
-                error_reason = "unknown"
-                if "HTTP Error 429" in msg:
-                    fetcher_youtube_429_total.labels(operation="metadata").inc()
-                    error_reason = "429"
-                if "HTTP Error 403" in msg:
-                    fetcher_youtube_403_total.labels(
-                        operation="metadata", error_code="HTTP_403"
-                    ).inc()
-                    error_reason = "403"
-                if proxy:
-                    record_proxy_result(
-                        proxy,
-                        False,
-                        operation="metadata",
-                        latency_ms=latency_ms,
-                        error_message=msg[:500],  # Ограничиваем длину сообщения
-                    )
-                breaker.record_failure(error_reason)
+                if mode == ProviderMode.SDK_ONLY:
+                    info = _sdk_info()
+                    dto = None
+                elif mode == ProviderMode.API_ONLY:
+                    dto = _api()
+                    info = dto.raw_json
+                elif mode == ProviderMode.PARALLEL and api_available:
+                    dto = _api()
+                    try:
+                        sdk_info = _sdk_info()
+                        merged = from_youtube_api(dto).merge_from(from_ytdlp(sdk_info))
+                        info = merged.to_info_dict()
+                        info["source_provider"] = "merged"
+                    except Exception:
+                        info = dto.raw_json
+                elif api_available:
+                    try:
+                        dto = _api()
+                        info = dto.raw_json
+                    except (QuotaExceededError, Exception) as api_exc:
+                        from fetcher.platforms.dual_provider import is_fallback_eligible
+
+                        if is_fallback_eligible(api_exc):
+                            from fetcher.metrics import fetcher_provider_fallback_total
+
+                            fetcher_provider_fallback_total.labels(
+                                platform="youtube",
+                                from_provider="api",
+                                to_provider="sdk",
+                            ).inc()
+                            info = _sdk_info()
+                            dto = None
+                        else:
+                            raise
+                else:
+                    info = _sdk_info()
+                    dto = None
+            except Exception:
+                breaker.record_failure("metadata_fetch_error")
                 raise
 
-            platform_video_id = info.get("id")
+            platform_video_id = (dto.video_id if dto else None) or info.get("id")
             if not platform_video_id:
                 breaker.record_failure("no_video_id")
-                raise ValueError("yt-dlp did not return video id")
-            duration = info.get("duration")
+                raise ValueError("YouTube metadata did not return video id")
+            duration = (dto.duration_seconds if dto else None) or info.get("duration")
+            if dto is None and info.get("source_provider"):
+                info.setdefault("source_provider", "sdk")
 
         # Записываем успех в circuit breaker
         breaker.record_success()
@@ -633,66 +674,39 @@ class YouTubeAdapter(PlatformAdapter):
         if settings.youtube_mock_video_download:
             platform_video_id = source
             comments_iter = []
-        elif settings.youtube_data_enabled:
-            platform_video_id = source
-            comments_iter = self.data_client.iter_comments(
-                video_id=platform_video_id,
-                max_count=min(limit, settings.youtube_data_max_comments),
-            )
         else:
-            # 2) Получаем info_dict с комментариями (если поддерживается)
-            proxy = get_next_proxy() if settings.enable_proxies else None
-            ydl_opts = {
-                "skip_download": True,
-                "quiet": True,
-                "proxy": proxy,
-            }
-            apply_cookiefile(ydl_opts)
-            comments_start_time = time.time()
-            try:
+            platform_video_id = source
+            mode = self._youtube_provider_mode()
+            api_available = bool(settings.youtube_data_enabled and settings.youtube_data_api_key)
+
+            def _api_comments():
+                return list(
+                    self.data_client.iter_comments(
+                        video_id=platform_video_id,
+                        max_count=min(limit, settings.youtube_data_max_comments),
+                    )
+                )
+
+            def _sdk_comments():
+                proxy = get_next_proxy() if settings.enable_proxies else None
+                ydl_opts = {"skip_download": True, "quiet": True, "proxy": proxy}
+                apply_cookiefile(ydl_opts)
                 with yt_dlp.YoutubeDL(ydl_opts) as ydl:
                     info = ydl.extract_info(source, download=False)
-                comments_latency_ms = int((time.time() - comments_start_time) * 1000)
-                if proxy:
-                    record_proxy_result(
-                        proxy,
-                        success=True,
-                        operation="comments",
-                        latency_ms=comments_latency_ms,
-                    )
-            except DownloadError as e:
-                comments_latency_ms = int((time.time() - comments_start_time) * 1000)
-                msg = str(e)
-                error_reason = "unknown"
-                if "HTTP Error 429" in msg:
-                    fetcher_youtube_429_total.labels(operation="comments").inc()
-                    error_reason = "429"
-                if "HTTP Error 403" in msg:
-                    fetcher_youtube_403_total.labels(
-                        operation="comments", error_code="HTTP_403"
-                    ).inc()
-                    error_reason = "403"
-                if proxy:
-                    record_proxy_result(
-                        proxy,
-                        success=False,
-                        operation="comments",
-                        latency_ms=comments_latency_ms,
-                        error_message=msg[:500],
-                    )
-                breaker.record_failure(error_reason)
-                raise
+                if not info.get("id"):
+                    raise ValueError("yt-dlp did not return video id")
+                return (info.get("comments") or [])[:limit]
 
-            platform_video_id = info.get("id")
-            if not platform_video_id:
-                breaker.record_failure("no_video_id")
-                raise ValueError("yt-dlp did not return video id")
-
-            comments = info.get("comments") or []
-            if not comments:
+            comments_iter = fetch_comments_with_fallback(
+                platform="youtube",
+                mode=mode,
+                api_fn=_api_comments,
+                sdk_fn=_sdk_comments,
+                api_available=api_available,
+                sdk_available=True,
+            )
+            if not comments_iter:
                 return
-            comments = comments[:limit]
-            comments_iter = comments
 
         # Записываем успех в circuit breaker
         breaker.record_success()

@@ -22,7 +22,6 @@ def _ensure_registered() -> None:
     if _ADAPTERS:
         return
 
-    # Import locally to keep module import lightweight.
     from fetcher.platforms.youtube import YouTubeAdapter
 
     _ADAPTERS["youtube"] = YouTubeAdapter
@@ -32,7 +31,27 @@ def _ensure_registered() -> None:
 
         _ADAPTERS["tiktok"] = TikTokAdapter
     except Exception:
-        # TikTok adapter may be absent in older versions; keep registry usable.
+        pass
+
+    try:
+        from fetcher.platforms.instagram import InstagramAdapter
+
+        _ADAPTERS["instagram"] = InstagramAdapter
+    except Exception:
+        pass
+
+    try:
+        from fetcher.platforms.rutube import RutubeAdapter
+
+        _ADAPTERS["rutube"] = RutubeAdapter
+    except Exception:
+        pass
+
+    try:
+        from fetcher.platforms.twitch import TwitchAdapter
+
+        _ADAPTERS["twitch"] = TwitchAdapter
+    except Exception:
         pass
 
 
@@ -64,4 +83,3 @@ def get_adapter(platform: str) -> PlatformAdapter:
 
 
 __all__ = ["get_adapter", "PlatformDisabledError", "UnknownPlatformError"]
-

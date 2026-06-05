@@ -112,8 +112,22 @@ class CampaignConfig(BaseModel):
         None,
         description=(
             "If set, follow-up snapshot due times use minutes from snapshot_0 (fast smoke). "
-            "Overrides snapshot_schedule_hours and snapshot_schedule_days. Must start with 0."
+            "Overrides snapshot_schedule_hours and snapshot_schedule_days unless "
+            "snapshot_sleep_seconds is set."
         ),
+    )
+    snapshot_sleep_seconds: Optional[int] = Field(
+        None,
+        ge=1,
+        description=(
+            "Per-video fixed interval: snapshot index N is due at "
+            "snapshot_0.collected_at + N * snapshot_sleep_seconds."
+        ),
+    )
+    snapshot_follow_up_count: Optional[int] = Field(
+        None,
+        ge=1,
+        description="Number of follow-up snapshots after snapshot_0 (indices 1..N).",
     )
     default_filters: Dict[str, Any] = Field(default_factory=dict)
     platform_weights: Dict[str, float] = Field(default_factory=lambda: {"youtube": 1.0})
@@ -212,6 +226,14 @@ class CampaignConfig(BaseModel):
     cookie_files_dir: Optional[str] = None
     cookie_file_glob: str = "*.txt"
     youtube_keys_file: Optional[str] = None
+    tiktok_credentials_file: Optional[str] = None
+    instagram_credentials_file: Optional[str] = None
+    twitch_credentials_file: Optional[str] = None
+    rutube_credentials_file: Optional[str] = None
+    credentials_dir: Optional[str] = Field(
+        None,
+        description="Override FETCHER_CREDENTIALS_DIR for dataset collector runs.",
+    )
     proxies_file: Optional[str] = None
     proxy_default_scheme: str = "http"
     include_local_proxies_for_discovery: bool = False

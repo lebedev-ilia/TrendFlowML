@@ -1,0 +1,6 @@
+# Optional platform SDK dependencies (install alongside requirements.txt)
+-r requirements.txt
+TikTokApi>=6.0.0
+playwright>=1.40.0
+instaloader>=4.10
+twitchAPI>=4.0.0

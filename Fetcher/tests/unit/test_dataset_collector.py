@@ -1345,15 +1345,56 @@ def test_build_schedule_entry_minutes():
 
 
 @pytest.mark.unit
-def test_snapshot_loop_wait_seconds_minutes():
-    from fetcher.dataset_collector.config import default_campaign_config
-    from fetcher.dataset_collector.snapshots import snapshot_loop_wait_seconds
+def test_build_schedule_entry_per_video_seconds():
+    video = make_video("v1")
+    entry = build_schedule_entry(
+        video,
+        snapshot_sleep_seconds=240,
+        snapshot_follow_up_count=3,
+    )
+    base = video.snapshot_0.collected_at
+    assert entry.due_at["1"] == base + timedelta(seconds=240)
+    assert entry.due_at["2"] == base + timedelta(seconds=480)
+    assert entry.due_at["3"] == base + timedelta(seconds=720)
 
-    config = default_campaign_config()
-    config.snapshot_schedule_minutes = [0, 15, 30, 45]
-    assert snapshot_loop_wait_seconds(config, 1) == 15 * 60
-    assert snapshot_loop_wait_seconds(config, 2) == 15 * 60
-    assert snapshot_loop_wait_seconds(config, 1, override_seconds=30) == 30
+
+@pytest.mark.unit
+def test_seconds_until_next_snapshot_due(tmp_path):
+    from fetcher.dataset_collector.snapshots import seconds_until_next_snapshot_due
+
+    config = default_campaign_config(output_dir=str(tmp_path), categories=["sports", "music"])
+    config.snapshot_sleep_seconds = 240
+    config.snapshot_follow_up_count = 2
+    state = DatasetState(config)
+    state.initialize()
+    video = make_video("due1")
+    state.append_schedule(
+        build_schedule_entry(
+            video,
+            snapshot_sleep_seconds=240,
+            snapshot_follow_up_count=2,
+        )
+    )
+    future = video.snapshot_0.collected_at + timedelta(seconds=240)
+    wait = seconds_until_next_snapshot_due(state, [1, 2], now=video.snapshot_0.collected_at)
+    assert wait is not None
+    assert 239 <= wait <= 241
+
+
+@pytest.mark.unit
+def test_discover_campaign_global_limit(tmp_path):
+    videos = [make_video(f"v{i}") for i in range(20)]
+    config = default_campaign_config(output_dir=str(tmp_path), categories=["sports", "music"])
+    config.categories[0].keywords = ["kw"]
+    config.categories[0].collect_count = 50
+    config.categories[1].keywords = ["kw"]
+    config.categories[1].collect_count = 50
+    state = DatasetState(config)
+    state.initialize()
+    adapters = {"youtube": FakeAdapter(videos)}
+    collector = DatasetCollector(config, state, adapters)
+    total = collector.discover_campaign(["sports", "music"], limit=7)
+    assert total["accepted"] == 7
 
 
 @pytest.mark.unit

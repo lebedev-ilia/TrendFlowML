@@ -65,6 +65,12 @@ fetcher_youtube_403_total = Counter(
     labelnames=("operation", "error_code"),
 )
 
+fetcher_provider_fallback_total = Counter(
+    "fetcher_provider_fallback_total",
+    "Total number of API to SDK fallbacks per platform.",
+    labelnames=("platform", "from_provider", "to_provider"),
+)
+
 # Proxy / circuit breaker metrics (Phase 2+)
 proxy_failure_rate = Gauge(
     "proxy_failure_rate",
@@ -158,6 +164,7 @@ __all__ = [
     "fetcher_comments_latency_seconds",
     "fetcher_youtube_429_total",
     "fetcher_youtube_403_total",
+    "fetcher_provider_fallback_total",
     "proxy_failure_rate",
     "circuit_breaker_tripped_total",
     "fetcher_backpressure_detected_total",

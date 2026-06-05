@@ -50,7 +50,11 @@ class DatasetCollector:
         limit: int | None = None,
     ) -> dict[str, int]:
         total = {"accepted": 0, "rejected": 0}
+        remaining_global = limit
         for category_name in category_names:
+            if remaining_global is not None and remaining_global <= 0:
+                print(f"discover global limit reached ({limit} accepted total), stopping")
+                break
             category = next(item for item in self.config.categories if item.name == category_name)
             if limit is None and self.state.is_category_complete(category.name, category.collect_count):
                 print(
@@ -58,13 +62,16 @@ class DatasetCollector:
                     f"({self.state.category_accepted(category.name)}/{category.collect_count})"
                 )
                 continue
+            cat_limit = remaining_global if remaining_global is not None else None
             try:
-                result = self.discover_category(category.name, limit=limit)
+                result = self.discover_category(category.name, limit=cat_limit)
             except QuotaExceededError:
                 self.state.flush_all_pending(shard_size=self.config.shard_size)
                 raise
             total["accepted"] += result["accepted"]
             total["rejected"] += result["rejected"]
+            if remaining_global is not None:
+                remaining_global -= result["accepted"]
             print(f"{category.name}: accepted={result['accepted']} rejected={result['rejected']}")
         return total
 
@@ -244,6 +251,8 @@ class DatasetCollector:
                                         self.config.snapshot_schedule_days,
                                         schedule_hours=self.config.snapshot_schedule_hours,
                                         schedule_minutes=self.config.snapshot_schedule_minutes,
+                                        snapshot_sleep_seconds=self.config.snapshot_sleep_seconds,
+                                        snapshot_follow_up_count=self.config.snapshot_follow_up_count,
                                     )
                                 )
                                 self.state.enqueue_download(video)

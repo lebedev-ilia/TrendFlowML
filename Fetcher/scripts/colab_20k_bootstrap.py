@@ -122,6 +122,12 @@ def build_runtime_config(args: argparse.Namespace) -> Path:
         parallel_colab = args.worker_shard_count
     if parallel_colab is not None:
         _apply_parallel_colab_hf_tuning(config, max(int(parallel_colab), 1))
+    if getattr(args, "snapshot_sleep_seconds", None) is not None:
+        config["snapshot_sleep_seconds"] = args.snapshot_sleep_seconds
+        follow_up = getattr(args, "snapshot_follow_up_count", None)
+        config["snapshot_follow_up_count"] = follow_up if follow_up is not None else config.get(
+            "snapshot_follow_up_count", 3
+        )
     _sanitize_hf_token_env(config)
     runtime_config = output_dir / "runtime_dataset_campaign_20k.json"
     _write_json(runtime_config, config)
@@ -242,6 +248,7 @@ def main(argv: list[str] | None = None) -> int:
             "workers-enrich",
             "snapshot",
             "snapshot-loop",
+            "snapshot-poll",
             "status",
             "inventory-rebuild",
         ],
@@ -290,7 +297,18 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument(
         "--snapshot-sleep-seconds",
         type=int,
-        help="For snapshot-loop: override hour gaps with this many seconds between indices (smoke/debug).",
+        help="Per-video snapshot interval (written to runtime campaign JSON for discover + snapshot-poll).",
+    )
+    parser.add_argument(
+        "--snapshot-follow-up-count",
+        type=int,
+        help="Follow-up snapshots after snapshot_0 (default 3). Used with --snapshot-sleep-seconds.",
+    )
+    parser.add_argument(
+        "--snapshot-poll-interval-seconds",
+        type=int,
+        default=30,
+        help="For snapshot-poll: fallback sleep when nothing is due yet.",
     )
     parser.add_argument(
         "--worker-kinds",
@@ -315,33 +333,32 @@ def main(argv: list[str] | None = None) -> int:
         cmd += _platform_cli_flags(args)
         return run_command(cmd, output_dir=args.output_dir)
 
-    if args.role == "snapshot-loop":
-        from fetcher.dataset_collector.config import load_campaign_config
-        from fetcher.dataset_collector.snapshots import snapshot_follow_up_indices, snapshot_loop_wait_seconds
+    if args.role == "snapshot-poll":
+        cmd = [
+            *base,
+            "snapshot-poll",
+            str(runtime_config),
+            "--poll-interval-seconds",
+            str(args.snapshot_poll_interval_seconds),
+        ]
+        cmd += _platform_cli_flags(args)
+        return run_command(cmd, output_dir=args.output_dir)
 
-        config = load_campaign_config(runtime_config)
-        indices = snapshot_follow_up_indices(config)
-        if not indices:
-            raise SystemExit(
-                "snapshot-loop requires snapshot_schedule_minutes/hours with at least [0, N] in campaign JSON"
-            )
-        for idx in indices:
-            wait_sec = snapshot_loop_wait_seconds(
-                config,
-                idx,
-                override_seconds=args.snapshot_sleep_seconds,
-            )
-            if wait_sec > 0:
-                print(f"snapshot-loop: sleeping {wait_sec}s before snapshot-index {idx}", flush=True)
-                time.sleep(wait_sec)
-            cmd = [*base, "snapshot", str(runtime_config), "--snapshot-index", str(idx)]
-            if args.limit is not None:
-                cmd += ["--limit", str(args.limit)]
-            cmd += _platform_cli_flags(args)
-            code = run_command(cmd, output_dir=args.output_dir)
-            if code != 0:
-                return code
-        return 0
+    if args.role == "snapshot-loop":
+        print(
+            "WARN: snapshot-loop uses global sleeps between indices; "
+            "prefer --role snapshot-poll for per-video due_at scheduling.",
+            flush=True,
+        )
+        cmd = [
+            *base,
+            "snapshot-poll",
+            str(runtime_config),
+            "--poll-interval-seconds",
+            str(args.snapshot_poll_interval_seconds),
+        ]
+        cmd += _platform_cli_flags(args)
+        return run_command(cmd, output_dir=args.output_dir)
 
     if args.role in ("workers", "workers-download", "workers-enrich"):
         cmd = [*base, "run-workers", str(runtime_config), "--interval", str(args.interval)]

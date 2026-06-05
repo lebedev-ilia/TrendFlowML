@@ -41,7 +41,7 @@ from fetcher.dataset_collector.export import export_legacy_json, validate_export
 from fetcher.dataset_collector.hf_upload import upload_paths
 from fetcher.dataset_collector.legacy_import import import_seen_ids
 from fetcher.dataset_collector.proxy import ProxyRotator, configured_proxies
-from fetcher.dataset_collector.snapshots import SnapshotRunner
+from fetcher.dataset_collector.snapshots import SnapshotRunner, run_snapshot_poll_loop
 from fetcher.dataset_collector.state import DatasetState, jsonable
 from fetcher.dataset_collector.timing_log import reset_timing_stats
 from fetcher.config import settings
@@ -89,21 +89,13 @@ def build_adapters(
     if key_pool is not None:
         adapters["youtube"] = YouTubeDiscoveryAdapter(key_pool)
     if getattr(args, "enable_tiktok", False):
-        adapters["tiktok"] = TikTokDiscoveryAdapter(
-            proxy_rotator=ProxyRotator(config=config, include_local=False),
-            cookie_rotator=cookie_rotator,
-        )
-    twitch_client_id = os.getenv("FETCHER_TWITCH_CLIENT_ID")
-    twitch_token = os.getenv("FETCHER_TWITCH_ACCESS_TOKEN")
-    if getattr(args, "enable_twitch", False) and twitch_client_id and twitch_token:
-        adapters["twitch"] = TwitchDiscoveryAdapter(client_id=twitch_client_id, access_token=twitch_token)
+        adapters["tiktok"] = TikTokDiscoveryAdapter()
+    if getattr(args, "enable_twitch", False):
+        adapters["twitch"] = TwitchDiscoveryAdapter()
     if getattr(args, "enable_rutube", False):
         adapters["rutube"] = RutubeDiscoveryAdapter()
     if getattr(args, "enable_instagram", False):
-        adapters["instagram"] = InstagramDiscoveryAdapter(
-            proxy_rotator=ProxyRotator(config=config, include_local=False),
-            cookie_rotator=cookie_rotator,
-        )
+        adapters["instagram"] = InstagramDiscoveryAdapter()
     return adapters
 
 
@@ -194,6 +186,26 @@ def command_snapshot(args: argparse.Namespace) -> None:
     )
     result = runner.collect_due(snapshot_index=args.snapshot_index, limit=args.limit)
     print(json.dumps({"snapshots": len(result)}, ensure_ascii=False))
+
+
+def command_snapshot_poll(args: argparse.Namespace) -> None:
+    config = load_campaign_config(args.config)
+    args._campaign_config = config
+    state = DatasetState(config)
+    state.initialize()
+    key_pool = _youtube_key_pool(state, args)
+    runner = SnapshotRunner(
+        state,
+        build_adapters(state, args, key_pool=key_pool),
+        comments_limit=config.comments_per_snapshot,
+    )
+    totals = run_snapshot_poll_loop(
+        runner,
+        state,
+        config,
+        poll_interval_seconds=args.poll_interval_seconds,
+    )
+    print(json.dumps(totals, ensure_ascii=False))
 
 
 def _maybe_refresh_inventory_metrics(state: DatasetState, args: argparse.Namespace) -> None:
@@ -416,6 +428,19 @@ def build_parser() -> argparse.ArgumentParser:
     snapshot.add_argument("--snapshot-index", type=int, required=True)
     snapshot.add_argument("--limit", type=int)
     snapshot.set_defaults(func=command_snapshot)
+
+    snapshot_poll = sub.add_parser(
+        "snapshot-poll",
+        help="Collect follow-up snapshots per video when each due_at elapses (never early).",
+    )
+    add_common(snapshot_poll)
+    snapshot_poll.add_argument(
+        "--poll-interval-seconds",
+        type=int,
+        default=30,
+        help="Fallback sleep when due times are in the past but collection yielded nothing.",
+    )
+    snapshot_poll.set_defaults(func=command_snapshot_poll)
 
     download = sub.add_parser("download", help="Download mp4 files locally (queue 1).")
     download.add_argument("config")

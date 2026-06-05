@@ -291,6 +291,24 @@ flowchart TD
 
 ---
 
+---
+
+## Статус внедрения (2026-06-05)
+
+| Платформа | Статус | Код |
+|-----------|--------|-----|
+| YouTube | API-first + yt-dlp fallback | `fetcher/platforms/youtube/adapter.py` |
+| TikTok | Display API + TikTokApi SDK | `fetcher/platforms/tiktok/`, `fetcher/services/tiktok_*` |
+| Instagram | Graph API + Instaloader | `fetcher/platforms/instagram/`, `fetcher/services/instagram_*` |
+| RuTube | yt-dlp SDK only | `fetcher/platforms/rutube/`, `fetcher/services/rutube_ytdlp_client.py` |
+| Twitch | Helix API + twitchAPI SDK | `fetcher/platforms/twitch/`, `fetcher/services/twitch_*` |
+
+Документация: [DUAL_MODE_PROVIDERS.md](DUAL_MODE_PROVIDERS.md), [PLATFORM_CREDENTIALS.md](PLATFORM_CREDENTIALS.md).
+
+Веб-скрапинг и реверс-инжиниринг **не используются**. Credentials: `fetcher/credentials/`.
+
+---
+
 ### Используемые источники
 
 - Официальная документация TikTok API (Display API, Video Object).  

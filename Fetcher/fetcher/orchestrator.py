@@ -65,8 +65,10 @@ def normalize_source(url: str) -> tuple[str, str]:
         platform = "tiktok"
     elif "instagram.com" in url_lower:
         platform = "instagram"
-        # TODO: Реализовать нормализацию для Instagram
-        raise ValueError("Instagram platform is not yet implemented")
+    elif "rutube.ru" in url_lower:
+        platform = "rutube"
+    elif "twitch.tv" in url_lower:
+        platform = "twitch"
     else:
         raise ValueError(f"Unsupported platform for URL: {url}")
 
@@ -139,7 +141,18 @@ def normalize_source(url: str) -> tuple[str, str]:
         if m:
             return (platform, m.group("vid"))
 
-        # Short links (tiktok.com/t/<code>) usually require resolution via network.
+        # Short links: resolve via TikTokApi SDK when configured.
+        try:
+            from fetcher.platforms.platform_clients import tiktok_sdk_client
+
+            sdk = tiktok_sdk_client()
+            if sdk is not None:
+                video_id = sdk.resolve_video_id(url)
+                if video_id:
+                    return (platform, video_id)
+        except Exception as e:
+            logger.warning("TikTok SDK URL resolve failed: %s", e)
+
         if settings.tiktok_use_yt_dlp:
             logger.info(
                 "normalize_source: calling yt-dlp for TikTok URL (network request may be required)",
@@ -162,9 +175,27 @@ def normalize_source(url: str) -> tuple[str, str]:
                 raise ValueError(f"Failed to normalize TikTok URL: {e}") from e
 
         raise ValueError(
-            f"Failed to parse TikTok video id from URL without yt-dlp: {url} "
-            f"(expected /@user/video/<id>)"
+            f"Failed to parse TikTok video id from URL: {url} "
+            f"(expected /@user/video/<id> or configure FETCHER_TIKTOK_MS_TOKEN)"
         )
+
+    if platform == "instagram":
+        m = re.search(r"/(?:p|reel|reels)/([^/?#]+)", url)
+        if m:
+            return (platform, m.group(1))
+        raise ValueError(f"Failed to parse Instagram shortcode from URL: {url}")
+
+    if platform == "rutube":
+        m = re.search(r"/video/([a-f0-9]+)", url_lower)
+        if m:
+            return (platform, m.group(1))
+        raise ValueError(f"Failed to parse RuTube video id from URL: {url}")
+
+    if platform == "twitch":
+        m = re.search(r"/videos/(\d+)", url_lower)
+        if m:
+            return (platform, m.group(1))
+        raise ValueError(f"Failed to parse Twitch video id from URL: {url}")
 
     raise ValueError(f"Unsupported URL format: {url}")
 

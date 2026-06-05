@@ -14,7 +14,8 @@
     {"name": "Iumor", "keywords": [""], "target_count": 100, "collect_count": 100, "platform_weights": {"youtube": 0.75, "tiktok": 0.1, "rutube": 0.05, "twitch": 0.05, "instagram": 0.05}, "filters": {}},
     {"name": "Nauka", "keywords": [""], "target_count": 100, "collect_count": 100, "platform_weights": {"youtube": 0.75, "tiktok": 0.1, "rutube": 0.05, "twitch": 0.05, "instagram": 0.05}, "filters": {}}
   ],
-  "snapshot_schedule_minutes": [0, 15, 30, 45],
+  "snapshot_sleep_seconds": 240,
+  "snapshot_follow_up_count": 3,
   "snapshot_schedule_days": [0, 7, 14, 21],
   "default_filters": {
     "duration_min_seconds": 4,

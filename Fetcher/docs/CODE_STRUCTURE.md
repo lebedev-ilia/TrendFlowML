@@ -78,11 +78,20 @@
 - `fetcher/platforms/youtube/__init__.py`
   - экспортирует `YouTubeAdapter`.
 
+- `fetcher/platforms/provider_mode.py`, `fetcher/platforms/dual_provider.py`
+  - `ProviderMode` (api_first, api_only, sdk_only, parallel) и `fetch_with_fallback()`.
+
+- `fetcher/schemas/platform_video.py`
+  - `PlatformVideoDto` — каноническая модель метаданных для всех платформ.
+
+- `fetcher/platforms/adapter_utils.py`, `fetcher/platforms/download_utils.py`
+  - общая персистенция metadata/comments и yt-dlp download.
+
 - `fetcher/platforms/youtube/adapter.py`
   - класс `YouTubeAdapter(PlatformAdapter)`:
     - `fetch_metadata(source, run_id)`:
-      - при `settings.youtube_data_enabled=True` использует `YouTubeDataClient` (YouTube Data API v3) как источник метадаты, маппит в `Video`/`VideoMetadata`/`ChannelMetadata` и сохраняет `meta.json` в storage;
-      - при `settings.youtube_data_enabled=False` использует `yt-dlp` для получения `info_dict` (текущее поведение);
+      - `youtube_provider_mode=api_first`: YouTube Data API с auto-fallback на yt-dlp при quota/429;
+      - `sdk_only`: только yt-dlp;
     - `download_video(source, run_id)`:
       - при `settings.youtube_mock_video_download=True` использует мок‑режим: выбирает sample‑видео из директории по детерминированному индексу и загружает его как артефакт `video_file`;
       - в остальных случаях использует `yt-dlp` для скачивания видео ≤720p во временный файл, загружает файл в storage (`video-analytics-raw`) и регистрирует артефакт `video_file`.
@@ -91,12 +100,19 @@
       - при `settings.youtube_data_enabled=False` использует `yt-dlp` для извлечения комментариев, ограничивает количество комментариев (top‑N), сохраняет комментарии в таблицу `Comment` и регистрирует артефакт `comments_file`.
   - вспомогательные методы `_get_or_create_video` и `_ensure_artifact` показывают интеграцию с БД.
 
+- `fetcher/platforms/tiktok/`, `instagram/`, `rutube/`, `twitch/` — адаптеры с dual-mode.
+- `fetcher/platforms/registry.py` — `get_adapter(platform)` для всех 5 платформ.
+- `fetcher/platforms/platform_clients.py` — фабрики API/SDK клиентов из credentials.
+
+- `fetcher/credentials/` — шаблоны и README для API keys/tokens (без правок кода).
+- `fetcher/services/credentials.py` — `CredentialsStore`.
+
 - `fetcher/services/__init__.py`, `fetcher/services/youtube_data_client.py`
-  - слой сервисных клиентов (интеграции с внешними HTTP‑API);
-  - `YouTubeDataClient` — тонкая обёртка над YouTube Data API v3:
-    - методы `get_video_metadata(video_id)` и `iter_comments(video_id, max_count)` возвращают DTO (`VideoMetadataDto`, `CommentDto`);
-    - реализованы базовые retry с экспоненциальным backoff, учёт квоты (`QuotaTracker`) и client‑side RPS‑лимитер;
-    - используется `YouTubeAdapter` при включённом фичефлаге `youtube_data_enabled`.
+  - `YouTubeDataClient` — YouTube Data API v3.
+- `fetcher/services/tiktok_display_client.py`, `tiktok_sdk_client.py` — TikTok API + TikTokApi.
+- `fetcher/services/instagram_graph_client.py`, `instagram_sdk_client.py` — Graph API + Instaloader.
+- `fetcher/services/twitch_helix_client.py`, `twitch_sdk_client.py` — Helix + twitchAPI.
+- `fetcher/services/rutube_ytdlp_client.py` — RuTube через yt-dlp.
 
 ---
 
