@@ -227,6 +227,10 @@ class YouTubeDiscoveryAdapter:
             raise
         snapshot = self._snapshot_from_metadata(metadata, channel, snapshot_index=snapshot_index)
         snapshot.comments = comments
+        if snapshot_index > 0:
+            from fetcher.dataset_collector.schemas import compact_follow_up_snapshot
+
+            return compact_follow_up_snapshot(snapshot)
         return snapshot
 
     def collect_comments(self, video_id: str, *, comments_limit: int, attempts: int = 5) -> list[dict]:
@@ -286,5 +290,9 @@ class YouTubeDiscoveryAdapter:
             subscriberCount=channel.subscriber_count if channel else None,
             videoCount=channel.video_count if channel else None,
             viewCount_channel=channel.view_count if channel else None,
-            raw={"video": item.raw_json, "channel": channel.raw_json if channel else None},
+            raw=(
+                {"video": item.raw_json, "channel": channel.raw_json if channel else None}
+                if snapshot_index == 0
+                else {}
+            ),
         )

@@ -35,6 +35,7 @@ from fetcher.dataset_collector.schemas import (
     CollectedVideo,
     ScheduleEntry,
     Snapshot,
+    compact_follow_up_snapshot,
 )
 from fetcher.dataset_collector.snapshots import SnapshotRunner, build_schedule_entry
 from fetcher.dataset_collector.state import DatasetState, format_time_get, utcnow
@@ -1375,9 +1376,26 @@ def test_snapshot_poll_report_format(tmp_path):
         )
     )
     text = format_snapshot_poll_report(snapshot_poll_report(state, config))
-    assert "[snapshot-poll]" in text
-    assert "index 1" in text
-    assert "pending=1" in text
+    assert "[снапшоты]" in text
+    assert "#1:" in text
+    assert "ждут 1" in text
+
+
+@pytest.mark.unit
+def test_compact_follow_up_snapshot_drops_raw():
+    snap = Snapshot(
+        snapshot_index=1,
+        time_get="2026_06_05_14_14",
+        collected_at=utcnow(),
+        viewCount="10",
+        raw={"video": {"id": "x", "snippet": {"title": "t"}}},
+    )
+    compact = compact_follow_up_snapshot(snap)
+    assert compact.raw == {}
+    assert compact.viewCount == "10"
+    assert compact_follow_up_snapshot(
+        Snapshot(snapshot_index=0, time_get="t", collected_at=utcnow(), raw={"a": 1})
+    ).raw == {"a": 1}
 
 
 @pytest.mark.unit

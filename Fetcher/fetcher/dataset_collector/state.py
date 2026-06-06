@@ -394,6 +394,13 @@ class DatasetState:
         manifest.counters["downloads"] = manifest.counters.get("downloads", 0) + 1
         self.save_manifest(manifest)
 
+    def load_metadata_enrich_queued(self) -> set[str]:
+        return {
+            f"{row.get('platform') or 'youtube'}:{row.get('video_id')}"
+            for row in iter_jsonl(self.metadata_enrich_queue_path)
+            if row.get("video_id")
+        }
+
     def enqueue_metadata_enrichment(
         self,
         *,
@@ -403,6 +410,9 @@ class DatasetState:
         category: str,
         shard_relpath: str,
     ) -> None:
+        key = f"{platform}:{video_id}"
+        if key in self.load_metadata_enrich_done() or key in self.load_metadata_enrich_queued():
+            return
         append_jsonl(
             self.metadata_enrich_queue_path,
             {
@@ -569,6 +579,9 @@ class DatasetState:
         category: str,
         local_path: str,
     ) -> None:
+        key = f"{platform}:{video_id}"
+        if key in self.load_hf_enrich_upload_done() or key in self.load_hf_enrich_upload_queued():
+            return
         append_jsonl(
             self.hf_enrich_upload_queue_path,
             {

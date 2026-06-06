@@ -315,6 +315,7 @@ def scan_shards_for_enrichment(
 ) -> int:
     """Enqueue videos from existing metadata shards that still need yt-dlp fields."""
     done_keys = done_keys or state.load_metadata_enrich_done()
+    queued_keys = state.load_metadata_enrich_queued()
     queued = 0
     seen: set[str] = set()
     metadata_root = state.shards_dir / "metadata"
@@ -334,7 +335,7 @@ def scan_shards_for_enrichment(
             if not training_entry_needs_ytdlp_enrichment(entry):
                 continue
             key = f"youtube:{video_id}"
-            if key in done_keys or key in seen:
+            if key in done_keys or key in seen or key in queued_keys:
                 continue
             seen.add(key)
             state.enqueue_metadata_enrichment(

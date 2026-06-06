@@ -150,37 +150,36 @@ def snapshot_poll_report(
     }
 
 
+def _fmt_utc_short(dt: datetime | None) -> str:
+    if dt is None:
+        return "—"
+    return dt.strftime("%H:%M:%S UTC")
+
+
 def format_snapshot_poll_report(report: dict) -> str:
-    lines = [
-        "[snapshot-poll] ======== status ========",
-        f"[snapshot-poll]   now (UTC): {report['now'].isoformat()}",
-        f"[snapshot-poll]   schedule entries: {report['schedule_entries']}",
-    ]
     sleep = report.get("snapshot_sleep_seconds")
     follow = report.get("snapshot_follow_up_count")
-    if sleep and follow:
-        lines.append(
-            f"[snapshot-poll]   per-video: {follow} follow-ups every {sleep}s after snapshot_0"
-        )
+    interval = f", интервал {sleep} с" if sleep else ""
+    lines = [
+        f"[снапшоты] видео в расписании: {report['schedule_entries']}"
+        f"{interval}, снапшоты 1–{follow or '?'}"
+    ]
+    parts = []
     for index in report.get("indices", []):
         row = report["per_index"][index]
-        earliest = row.get("earliest_future")
-        earliest_s = earliest.isoformat() if earliest else "—"
-        lines.append(
-            f"[snapshot-poll]   index {index}: pending={row['pending']} due_now={row['due_now']} "
-            f"done={row['done']} next_due={earliest_s}"
-        )
+        parts.append(f"#{index}: готово {row['done']}, ждут {row['pending']}, пора {row['due_now']}")
+    if parts:
+        lines.append("[снапшоты] " + " | ".join(parts))
     wait = report.get("wait_seconds")
     next_due = report.get("next_due_at")
-    if wait is not None and wait <= 0:
-        lines.append("[snapshot-poll]   action: collect due_now (never before due_at)")
-    elif wait is not None and next_due:
+    if wait is not None and wait > 0 and next_due:
         lines.append(
-            f"[snapshot-poll]   next global due_at: {next_due.isoformat()} (wait {wait:.0f}s)"
+            f"[снапшоты] следующий сбор не раньше {_fmt_utc_short(next_due)} (ждём ~{wait:.0f} с)"
         )
+    elif wait is not None and wait <= 0:
+        lines.append("[снапшоты] есть видео с наступившим due — можно собирать")
     elif wait is None:
-        lines.append("[snapshot-poll]   nothing pending — poll complete")
-    lines.append("[snapshot-poll] ===========================")
+        lines.append("[снапшоты] всё собрано")
     return "\n".join(lines)
 
 
@@ -217,17 +216,8 @@ def seconds_until_next_snapshot_due(
     return max(0.0, (next_due - now).total_seconds())
 
 
-def _format_due_sample(entries: List[ScheduleEntry], *, snapshot_index: int, limit: int = 5) -> str:
-    if not entries:
-        return ""
-    samples = []
-    for entry in entries[:limit]:
-        due_at = entry.due_at.get(str(snapshot_index))
-        due_s = due_at.isoformat() if due_at else "?"
-        samples.append(f"{entry.dedup_key}@{due_s}")
-    extra = len(entries) - limit
-    tail = f", +{extra} more" if extra > 0 else ""
-    return ", ".join(samples) + tail
+def _done_count_for_index(report: dict, index: int) -> int:
+    return report["per_index"].get(index, {}).get("done", 0)
 
 
 def run_snapshot_poll_loop(
@@ -243,58 +233,36 @@ def run_snapshot_poll_loop(
     totals = {"snapshots": 0, "passes": 0}
     if not indices:
         if verbose:
-            print("[snapshot-poll] no follow-up indices in campaign config", flush=True)
+            print("[снапшоты] в конфиге нет follow-up снапшотов", flush=True)
         return totals
 
+    schedule_size = len(state.load_schedule())
     if verbose:
+        print("[снапшоты] старт", flush=True)
         log_snapshot_poll_report(snapshot_poll_report(state, config, now=runner._now()))
 
     while pending_snapshot_indices(state, indices):
         totals["passes"] += 1
-        if verbose:
-            print(f"[snapshot-poll] --- pass {totals['passes']} ---", flush=True)
-
         collected_this_pass = 0
         for index in indices:
             due = runner.due_entries(snapshot_index=index)
             if not due:
-                if verbose:
-                    report = snapshot_poll_report(state, config, now=runner._now())
-                    row = report["per_index"].get(index, {})
-                    if row.get("pending"):
-                        wait = row.get("earliest_future")
-                        wait_s = wait.isoformat() if wait else "?"
-                        print(
-                            f"[snapshot-poll]   index {index}: due_now=0 pending={row['pending']} "
-                            f"(earliest {wait_s})",
-                            flush=True,
-                        )
                 continue
-            if verbose:
-                print(
-                    f"[snapshot-poll]   index {index}: due_now={len(due)} collecting — "
-                    f"{_format_due_sample(due, snapshot_index=index)}",
-                    flush=True,
-                )
             result = runner.collect_due(snapshot_index=index)
-            collected_this_pass += len(result)
-            totals["snapshots"] += len(result)
-            if verbose:
-                keys = ", ".join(sorted(result.keys())[:8])
-                extra = len(result) - 8
-                if extra > 0:
-                    keys += f", +{extra} more"
+            n = len(result)
+            collected_this_pass += n
+            totals["snapshots"] += n
+            if verbose and n:
+                report = snapshot_poll_report(state, config, now=runner._now())
+                done = _done_count_for_index(report, index)
                 print(
-                    f"[snapshot-poll]   index {index}: collected {len(result)}"
-                    + (f" ({keys})" if keys else ""),
+                    f"[снапшоты] проход {totals['passes']}: снапшот #{index} +{n} "
+                    f"(готово {done}/{schedule_size})",
                     flush=True,
                 )
 
         if not pending_snapshot_indices(state, indices):
             break
-
-        if verbose:
-            log_snapshot_poll_report(snapshot_poll_report(state, config, now=runner._now()))
 
         wait_sec = seconds_until_next_snapshot_due(state, indices, now=runner._now())
         if wait_sec is None:
@@ -303,25 +271,17 @@ def run_snapshot_poll_loop(
             if verbose:
                 report = snapshot_poll_report(state, config, now=runner._now())
                 next_due = report.get("next_due_at")
-                next_s = next_due.isoformat() if next_due else "?"
                 print(
-                    f"[snapshot-poll] sleeping {wait_sec:.0f}s until next due_at ({next_s}) "
-                    f"— never collecting early",
+                    f"[снапшоты] пауза ~{wait_sec:.0f} с до {_fmt_utc_short(next_due)}",
                     flush=True,
                 )
             time.sleep(wait_sec)
         elif collected_this_pass == 0:
-            if verbose:
-                print(
-                    f"[snapshot-poll] due_now empty, fallback sleep {max(5, poll_interval_seconds)}s",
-                    flush=True,
-                )
             time.sleep(max(5, poll_interval_seconds))
 
     if verbose:
         print(
-            f"[snapshot-poll] ======== done ======== passes={totals['passes']} "
-            f"snapshots={totals['snapshots']}",
+            f"[снапшоты] готово: {totals['snapshots']} снапшотов, {totals['passes']} проходов",
             flush=True,
         )
     return totals

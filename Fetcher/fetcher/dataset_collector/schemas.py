@@ -399,6 +399,25 @@ class Snapshot(BaseModel):
     raw: Dict[str, Any] = Field(default_factory=dict)
 
 
+def compact_follow_up_snapshot(snapshot: "Snapshot") -> "Snapshot":
+    """Follow-up snapshots keep only time-varying metrics (static fields live in snapshot_0)."""
+    if snapshot.snapshot_index <= 0:
+        return snapshot
+    return Snapshot(
+        snapshot_index=snapshot.snapshot_index,
+        time_get=snapshot.time_get,
+        collected_at=snapshot.collected_at,
+        viewCount=snapshot.viewCount,
+        likeCount=snapshot.likeCount,
+        commentCount=snapshot.commentCount,
+        subscriberCount=snapshot.subscriberCount,
+        videoCount=snapshot.videoCount,
+        viewCount_channel=snapshot.viewCount_channel,
+        comments=snapshot.comments,
+        raw={},
+    )
+
+
 class CollectedVideo(BaseModel):
     platform: str
     video_id: str
