@@ -58,31 +58,46 @@ def _run_queue_pass(
     config = load_campaign_config(config_path)
     state = DatasetState(config)
     state.initialize()
+    from fetcher.dataset_collector.hf_progress import pull_hf_progress
+
+    role = "download" if kind == "download" else "enrich" if kind == "enrich-metadata" else "workers"
+    pull_hf_progress(state, config, role=role)
     cookie_rotator = CookieRotator.from_config(config)
 
     if kind == "download":
         queue_path = state.download_dir / "queue.jsonl"
-        return run_download_queue(
+        result = run_download_queue(
             state,
             config,
             queue_path,
             cookie_rotator=cookie_rotator,
         )
-    if kind == "enrich-metadata":
-        return run_metadata_enrich_queue(
+    elif kind == "enrich-metadata":
+        result = run_metadata_enrich_queue(
             state,
             config,
             category=category,
             cookie_rotator=cookie_rotator,
         )
-    if kind == "upload-hf-shards":
-        return run_hf_shard_upload_queue(state, config, category=category)
-    if kind == "upload-hf-videos":
-        return run_hf_video_upload_queue(state, config, category=category)
-    if kind == "upload-hf-enrich":
+    elif kind == "upload-hf-shards":
+        result = run_hf_shard_upload_queue(state, config, category=category)
+    elif kind == "upload-hf-videos":
+        result = run_hf_video_upload_queue(state, config, category=category)
+    elif kind == "upload-hf-enrich":
         scan_enrich_files_for_hf_upload(state, category=category)
-        return run_hf_enrich_upload_queue(state, config, category=category)
-    raise ValueError(f"unknown queue worker kind: {kind}")
+        result = run_hf_enrich_upload_queue(state, config, category=category)
+    else:
+        raise ValueError(f"unknown queue worker kind: {kind}")
+
+    if _pass_had_work(result):
+        from fetcher.dataset_collector.hf_progress import push_hf_progress
+
+        role = "download" if kind == "download" else "enrich" if kind == "enrich-metadata" else "workers"
+        try:
+            push_hf_progress(state, config, role=role)
+        except Exception:
+            pass
+    return result
 
 
 def _queue_worker_daemon(

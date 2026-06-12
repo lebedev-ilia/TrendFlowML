@@ -60,6 +60,8 @@
   "hf_enrich_path_prefix": "",
   "hf_token_env": "HF_TOKEN",
   "hf_upload_enabled": true,
+  "hf_progress_enabled": true,
+  "discover_week_days": 0,
   "hf_upload_every_shards": 1,
   "hf_parallel_colab_count": 1,
   "hf_repo_hourly_commit_limit": 128,

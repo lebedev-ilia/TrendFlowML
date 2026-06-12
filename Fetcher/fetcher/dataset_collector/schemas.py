@@ -325,6 +325,26 @@ class CampaignConfig(BaseModel):
             "instead of unlink (which sends files to Trash). None = auto when output_dir is on Drive."
         ),
     )
+    hf_progress_enabled: bool = Field(
+        True,
+        description="Sync campaign progress files to hf_repo_id for Colab session resume.",
+    )
+    hf_progress_repo_id: Optional[str] = Field(
+        None,
+        description="HF dataset repo for progress files (default: hf_repo_id).",
+    )
+    hf_progress_path_prefix: str = Field(
+        "state/progress",
+        description="Remote path prefix for progress bundle inside hf_progress_repo_id.",
+    )
+    discover_week_days: int = Field(
+        0,
+        ge=0,
+        description=(
+            "Snapshot_0 discover: run daily sessions for this many calendar days (0 = no limit). "
+            "Each session stops on API quota; progress restored from HF on restart."
+        ),
+    )
     hf_coord_enabled: bool = Field(
         False,
         description=(

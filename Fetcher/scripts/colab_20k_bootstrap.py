@@ -15,11 +15,13 @@ if str(_FETCHER_PKG_ROOT) not in sys.path:
 
 CAMPAIGN_PROFILE_TEMPLATES = {
     "20k": "dataset_campaign_20k.json",
+    "100k-monthly": "dataset_campaign_100k_monthly.json",
     "snapshot-smoke": "dataset_campaign_snapshot_smoke.json",
 }
 
 HF_REPO_BASE_BY_PROFILE = {
     "20k": "dataset_20k_colab",
+    "100k-monthly": "dataset_100k_monthly",
     "snapshot-smoke": "dataset_snapshot_smoke",
 }
 
@@ -72,6 +74,15 @@ def _sanitize_hf_token_env(config: dict) -> None:
             'reset to "HF_TOKEN". Store the secret in Colab Secret HF_TOKEN only.',
             flush=True,
         )
+
+
+def _progress_cli_flags(args: argparse.Namespace) -> list[str]:
+    flags: list[str] = []
+    if getattr(args, "skip_hf_progress_pull", False):
+        flags.append("--skip-hf-progress-pull")
+    if getattr(args, "skip_hf_progress_push", False):
+        flags.append("--skip-hf-progress-push")
+    return flags
 
 
 def _platform_cli_flags(args: argparse.Namespace) -> list[str]:
@@ -311,6 +322,16 @@ def main(argv: list[str] | None = None) -> int:
         help="For snapshot-poll: fallback sleep when nothing is due yet.",
     )
     parser.add_argument(
+        "--skip-hf-progress-pull",
+        action="store_true",
+        help="Do not download progress bundle from HF before CLI run.",
+    )
+    parser.add_argument(
+        "--skip-hf-progress-push",
+        action="store_true",
+        help="Do not upload progress bundle to HF after CLI run.",
+    )
+    parser.add_argument(
         "--worker-kinds",
         help="Comma-separated for role=workers: download, enrich-metadata, upload-hf-shards, upload-hf-videos, upload-hf-enrich.",
     )
@@ -331,6 +352,7 @@ def main(argv: list[str] | None = None) -> int:
         if args.metrics_port:
             cmd += ["--metrics-port", str(args.metrics_port)]
         cmd += _platform_cli_flags(args)
+        cmd += _progress_cli_flags(args)
         return run_command(cmd, output_dir=args.output_dir)
 
     if args.role == "snapshot-poll":
@@ -342,6 +364,7 @@ def main(argv: list[str] | None = None) -> int:
             str(args.snapshot_poll_interval_seconds),
         ]
         cmd += _platform_cli_flags(args)
+        cmd += _progress_cli_flags(args)
         return run_command(cmd, output_dir=args.output_dir)
 
     if args.role == "snapshot-loop":
@@ -358,6 +381,7 @@ def main(argv: list[str] | None = None) -> int:
             str(args.snapshot_poll_interval_seconds),
         ]
         cmd += _platform_cli_flags(args)
+        cmd += _progress_cli_flags(args)
         return run_command(cmd, output_dir=args.output_dir)
 
     if args.role in ("workers", "workers-download", "workers-enrich"):
@@ -378,6 +402,7 @@ def main(argv: list[str] | None = None) -> int:
             cmd += ["--lease-name", args.lease_name]
             if args.lease_owner:
                 cmd += ["--lease-owner", args.lease_owner]
+        cmd += _progress_cli_flags(args)
         return run_command(cmd, output_dir=args.output_dir)
 
     if args.role == "snapshot":
@@ -387,6 +412,7 @@ def main(argv: list[str] | None = None) -> int:
         if args.limit is not None:
             cmd += ["--limit", str(args.limit)]
         cmd += _platform_cli_flags(args)
+        cmd += _progress_cli_flags(args)
         return run_command(cmd, output_dir=args.output_dir)
 
     if args.role == "inventory-rebuild":

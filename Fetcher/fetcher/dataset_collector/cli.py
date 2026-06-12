@@ -38,13 +38,60 @@ from fetcher.dataset_collector.metadata_enrichment import (
     scan_shards_for_enrichment,
 )
 from fetcher.dataset_collector.export import export_legacy_json, validate_export
-from fetcher.dataset_collector.hf_upload import upload_paths
+from fetcher.dataset_collector.hf_progress import (
+    discover_week_allows_run,
+    discover_week_complete_message,
+    push_hf_progress,
+    register_discover_daily_session,
+    restore_hf_progress_on_startup,
+)
 from fetcher.dataset_collector.legacy_import import import_seen_ids
 from fetcher.dataset_collector.proxy import ProxyRotator, configured_proxies
 from fetcher.dataset_collector.snapshots import SnapshotRunner, run_snapshot_poll_loop
 from fetcher.dataset_collector.state import DatasetState, jsonable
 from fetcher.dataset_collector.timing_log import reset_timing_stats
+from fetcher.dataset_collector.hf_upload import upload_paths
 from fetcher.config import settings
+
+
+def _hf_progress_role_for_command(args: argparse.Namespace) -> str | None:
+    func = getattr(args, "func", None)
+    name = getattr(func, "__name__", "") or ""
+    if name == "command_discover":
+        return "discover"
+    if name == "command_download":
+        return "download"
+    if name in {"command_snapshot", "command_snapshot_poll"}:
+        return "snapshot"
+    if name in {
+        "command_upload_hf_shards",
+        "command_upload_hf_videos",
+        "command_upload_hf_enrich",
+        "command_run_workers",
+        "command_enrich_metadata",
+    }:
+        return "workers"
+    return "workers"
+
+
+def _pull_hf_progress(state: DatasetState, config, args: argparse.Namespace) -> None:
+    if getattr(args, "skip_hf_progress_pull", False):
+        return
+    restore_hf_progress_on_startup(state, config, role=_hf_progress_role_for_command(args))
+
+
+def _push_hf_progress(state: DatasetState, config, args: argparse.Namespace) -> None:
+    if getattr(args, "skip_hf_progress_push", False):
+        return
+    try:
+        result = push_hf_progress(state, config, role=_hf_progress_role_for_command(args))
+        if result.get("uploaded"):
+            print(
+                f"[hf-progress] выгружено {result['uploaded']} файлов → {result.get('repo')}",
+                flush=True,
+            )
+    except Exception as exc:
+        print(f"[hf-progress] WARN: upload failed: {exc}", flush=True)
 
 
 def load_youtube_keys(path: str | None) -> list[str]:
@@ -133,6 +180,11 @@ def command_discover(args: argparse.Namespace) -> None:
         print(f"Dataset balancer: enabled ({config.balancer_config_file}); fields={fields}")
     state = DatasetState(config)
     state.initialize()
+    _pull_hf_progress(state, config, args)
+    if config.discover_week_days and not discover_week_allows_run(state, config):
+        print(discover_week_complete_message(config), flush=True)
+        return
+    register_discover_daily_session(state, config)
     if args.metrics_port:
         update_run_distribution_gauges(state.root)
     if args.reset_checkpoint:
@@ -157,6 +209,7 @@ def command_discover(args: argparse.Namespace) -> None:
             scan_shards_for_hf_upload(state, category=args.category)
             run_hf_shard_upload_queue(state, config, category=args.category)
         checkpoint = state.load_checkpoint()
+        _push_hf_progress(state, config, args)
         print(
             json.dumps(
                 {
@@ -170,6 +223,7 @@ def command_discover(args: argparse.Namespace) -> None:
     if config.hf_upload_enabled:
         scan_shards_for_hf_upload(state, category=args.category)
         run_hf_shard_upload_queue(state, config, category=args.category)
+    _push_hf_progress(state, config, args)
     print(json.dumps(total, ensure_ascii=False))
 
 
@@ -178,6 +232,7 @@ def command_snapshot(args: argparse.Namespace) -> None:
     args._campaign_config = config
     state = DatasetState(config)
     state.initialize()
+    _pull_hf_progress(state, config, args)
     key_pool = _youtube_key_pool(state, args)
     runner = SnapshotRunner(
         state,
@@ -185,6 +240,7 @@ def command_snapshot(args: argparse.Namespace) -> None:
         comments_limit=config.comments_per_snapshot,
     )
     result = runner.collect_due(snapshot_index=args.snapshot_index, limit=args.limit)
+    _push_hf_progress(state, config, args)
     print(json.dumps({"snapshots": len(result)}, ensure_ascii=False))
 
 
@@ -193,6 +249,7 @@ def command_snapshot_poll(args: argparse.Namespace) -> None:
     args._campaign_config = config
     state = DatasetState(config)
     state.initialize()
+    _pull_hf_progress(state, config, args)
     key_pool = _youtube_key_pool(state, args)
     runner = SnapshotRunner(
         state,
@@ -206,6 +263,7 @@ def command_snapshot_poll(args: argparse.Namespace) -> None:
         poll_interval_seconds=args.poll_interval_seconds,
         verbose=not getattr(args, "quiet", False),
     )
+    _push_hf_progress(state, config, args)
     print(json.dumps(totals, ensure_ascii=False))
 
 
@@ -219,6 +277,7 @@ def command_download(args: argparse.Namespace) -> None:
     config = load_campaign_config(args.config)
     state = DatasetState(config)
     state.initialize()
+    _pull_hf_progress(state, config, args)
     if args.metrics_port:
         start_metrics_server(args.metrics_port)
     queue_path = state.download_dir / "queue.jsonl"
@@ -230,6 +289,7 @@ def command_download(args: argparse.Namespace) -> None:
         cookie_rotator=CookieRotator.from_config(config),
     )
     _maybe_refresh_inventory_metrics(state, args)
+    _push_hf_progress(state, config, args)
     print(json.dumps(result, ensure_ascii=False))
 
 
@@ -303,6 +363,7 @@ def command_enrich_metadata(args: argparse.Namespace) -> None:
     config = load_campaign_config(args.config)
     state = DatasetState(config)
     state.initialize()
+    _pull_hf_progress(state, config, args)
     if args.compact_shards:
         from fetcher.dataset_collector.metadata_enrichment import compact_metadata_shards
 
@@ -325,6 +386,7 @@ def command_enrich_metadata(args: argparse.Namespace) -> None:
         cookie_rotator=CookieRotator.from_config(config),
     )
     _maybe_refresh_inventory_metrics(state, args)
+    _push_hf_progress(state, config, args)
     print(json.dumps(result, ensure_ascii=False))
 
 
@@ -415,6 +477,16 @@ def build_parser() -> argparse.ArgumentParser:
         command.add_argument("--enable-twitch", action="store_true")
         command.add_argument("--enable-rutube", action="store_true")
         command.add_argument("--enable-instagram", action="store_true")
+        command.add_argument(
+            "--skip-hf-progress-pull",
+            action="store_true",
+            help="Skip downloading progress bundle from HF at startup.",
+        )
+        command.add_argument(
+            "--skip-hf-progress-push",
+            action="store_true",
+            help="Skip uploading progress bundle to HF at end.",
+        )
 
     discover = sub.add_parser("discover")
     add_common(discover)
