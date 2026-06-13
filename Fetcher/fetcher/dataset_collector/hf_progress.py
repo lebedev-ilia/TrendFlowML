@@ -8,7 +8,11 @@ from pathlib import Path
 from typing import Callable, Iterable, Iterator
 
 from fetcher.dataset_collector.checkpoint import DiscoveryCheckpoint
-from fetcher.dataset_collector.hf_upload import HuggingFaceUploadError, resolve_hf_token
+from fetcher.dataset_collector.hf_upload import (
+    HuggingFaceUploadError,
+    resolve_hf_token,
+    resolve_progress_repo_id,
+)
 from fetcher.dataset_collector.schemas import CampaignConfig, CampaignManifest
 from fetcher.dataset_collector.state import DatasetState, atomic_write_json, iter_jsonl, jsonable, utcnow
 
@@ -25,13 +29,6 @@ def progress_enabled(config: CampaignConfig) -> bool:
     if not config.hf_upload_enabled:
         return False
     return bool(getattr(config, "hf_progress_enabled", True))
-
-
-def resolve_progress_repo_id(config: CampaignConfig) -> str:
-    repo = getattr(config, "hf_progress_repo_id", None) or config.hf_repo_id
-    if not repo:
-        raise HuggingFaceUploadError("hf_repo_id is required for HF progress sync")
-    return repo
 
 
 def progress_remote_prefix(config: CampaignConfig) -> str:

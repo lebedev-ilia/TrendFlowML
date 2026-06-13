@@ -355,6 +355,30 @@ class CampaignConfig(BaseModel):
             "Each session stops on API quota; progress restored from HF on restart."
         ),
     )
+    discover_fair_rotation: bool = Field(
+        False,
+        description=(
+            "Round-robin discover across categories (one keyword batch per category per round) "
+            "instead of filling each category sequentially."
+        ),
+    )
+    discover_target_total: Optional[int] = Field(
+        None,
+        ge=1,
+        description="Soft total discover target; used to compute per-category fair cap when rotation is on.",
+    )
+    discover_fair_category_cap: Optional[int] = Field(
+        None,
+        ge=1,
+        description=(
+            "Max accepted videos per category during fair rotation "
+            "(default: ceil(discover_target_total / num_categories) or collect_count)."
+        ),
+    )
+    hf_coord_repo_id: Optional[str] = Field(
+        None,
+        description="HF dataset repo for multi-Colab coordination (default: hf_shards_repo_id).",
+    )
     hf_coord_enabled: bool = Field(
         False,
         description=(

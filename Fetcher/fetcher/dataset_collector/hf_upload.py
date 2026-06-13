@@ -70,6 +70,22 @@ def resolve_enrich_repo_id(config: CampaignConfig, *, repo_id: str | None = None
     return target
 
 
+def resolve_coord_repo_id(config: CampaignConfig) -> str:
+    """HF repo for multi-Colab coordination blobs (must exist on Hub)."""
+    explicit = getattr(config, "hf_coord_repo_id", None)
+    if explicit:
+        return explicit
+    return resolve_shards_repo_id(config)
+
+
+def resolve_progress_repo_id(config: CampaignConfig) -> str:
+    """HF repo for session progress bundle (defaults to shards repo, not legacy hf_repo_id)."""
+    explicit = getattr(config, "hf_progress_repo_id", None)
+    if explicit:
+        return explicit
+    return resolve_shards_repo_id(config)
+
+
 def is_allowed_metadata_shard_relpath(shard_relpath: str) -> bool:
     """Only metadata shard JSON belongs in the shards HF dataset repo."""
     rel = shard_relpath.lstrip("/").replace("\\", "/")

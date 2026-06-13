@@ -303,7 +303,22 @@ def enrich_shard_video(
             "result": "ok",
         },
     )
-    worker_log("enrich", f"OK {video_id} enriched locally -> {enrich_path.relative_to(state.root)}")
+    formats = payload.get("formats") or []
+    caption_langs = sorted(
+        {
+            lang
+            for block in (payload.get("subtitles") or {}, payload.get("automatic_captions") or {})
+            for lang in block.keys()
+        }
+    )
+    duration = info.get("duration")
+    title = str(info.get("title") or "")[:60]
+    worker_log(
+        "enrich",
+        f"OK {video_id} category={category} duration={duration}s formats={len(formats)} "
+        f"captions={','.join(caption_langs) or 'none'} title={title!r} "
+        f"-> {enrich_path.relative_to(state.root)}",
+    )
     return "ok"
 
 

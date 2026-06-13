@@ -111,6 +111,9 @@ def build_runtime_config(args: argparse.Namespace) -> Path:
         config["hf_shards_repo_id"] = f"{prefix}/{base}_shards"
         config["hf_videos_repo_id"] = f"{prefix}/{base}_videos"
         config["hf_enrich_repo_id"] = f"{prefix}/{base}_enrich"
+        # Coordination + progress must use an existing HF dataset repo (shards), not the legacy combined id.
+        config["hf_coord_repo_id"] = config["hf_shards_repo_id"]
+        config["hf_progress_repo_id"] = config["hf_shards_repo_id"]
     if args.youtube_keys_file:
         config["youtube_keys_file"] = args.youtube_keys_file
     if args.cookie_files_dir:
@@ -139,6 +142,12 @@ def build_runtime_config(args: argparse.Namespace) -> Path:
         config["snapshot_follow_up_count"] = follow_up if follow_up is not None else config.get(
             "snapshot_follow_up_count", 3
         )
+    overrides_path = getattr(args, "config_overrides_json", None)
+    if overrides_path:
+        overrides = _read_json(Path(overrides_path))
+        if not isinstance(overrides, dict):
+            raise SystemExit(f"--config-overrides-json must be a JSON object, got {type(overrides).__name__}")
+        config.update(overrides)
     _sanitize_hf_token_env(config)
     runtime_config = output_dir / "runtime_dataset_campaign_20k.json"
     _write_json(runtime_config, config)
@@ -330,6 +339,10 @@ def main(argv: list[str] | None = None) -> int:
         "--skip-hf-progress-push",
         action="store_true",
         help="Do not upload progress bundle to HF after CLI run.",
+    )
+    parser.add_argument(
+        "--config-overrides-json",
+        help="Path to JSON object merged into runtime campaign config (notebook tunables without editing template).",
     )
     parser.add_argument(
         "--worker-kinds",

@@ -12,6 +12,8 @@ _SUBTITLE_HTTP_NOISE = re.compile(
 
 _YOUTUBE_FORMAT_NOISE = re.compile(
     r"(nsig extraction failed|Signature extraction failed|"
+    r"n challenge solving failed|challenge solving failed|"
+    r"Only images are available for download|"
     r"Falling back to generic n function search|"
     r"Some .* client https formats have been skipped|"
     r"YouTube is forcing SABR streaming|"

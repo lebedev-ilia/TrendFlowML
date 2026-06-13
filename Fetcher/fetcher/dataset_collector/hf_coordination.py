@@ -14,6 +14,7 @@ from fetcher.dataset_collector.hf_commit_budget import (
 )
 from fetcher.dataset_collector.hf_upload import (
     get_hf_api,
+    resolve_coord_repo_id,
     resolve_shards_repo_id,
     upload_local_file,
     wait_for_commit_slot,
@@ -77,8 +78,8 @@ class WorkerCoordination:
         self.state = state
         self.config = config
         self.worker_id = resolve_worker_id(config)
-        # Use combined/legacy repo for coordination blobs so shards repo stays metadata-only.
-        self.repo_id = config.hf_repo_id or resolve_shards_repo_id(config)
+        # Coordination blobs live on an existing HF dataset repo (shards by default).
+        self.repo_id = resolve_coord_repo_id(config)
         prefix = (config.hf_coord_path_prefix or "state/coordination").strip("/")
         self.remote_prefix = prefix
         self.local_root = state.state_dir / "coordination"

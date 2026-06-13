@@ -49,6 +49,8 @@ class DatasetCollector:
         *,
         limit: int | None = None,
     ) -> dict[str, int]:
+        if self.config.discover_fair_rotation:
+            return self._discover_campaign_fair(category_names, limit=limit)
         total = {"accepted": 0, "rejected": 0}
         remaining_global = limit
         for category_name in category_names:
@@ -75,7 +77,86 @@ class DatasetCollector:
             print(f"{category.name}: accepted={result['accepted']} rejected={result['rejected']}")
         return total
 
-    def discover_category(self, category_name: str, *, limit: int | None = None) -> dict[str, int]:
+    def _fair_category_cap(self, categories: List[CategoryConfig]) -> int:
+        explicit = self.config.discover_fair_category_cap
+        if explicit is not None:
+            return int(explicit)
+        total_target = self.config.discover_target_total
+        if total_target is None:
+            total_target = sum(cat.target_count for cat in categories)
+        if not total_target:
+            total_target = sum(cat.collect_count for cat in categories)
+        return max(1, (int(total_target) + len(categories) - 1) // len(categories))
+
+    def _discover_campaign_fair(
+        self,
+        category_names: List[str],
+        *,
+        limit: int | None = None,
+    ) -> dict[str, int]:
+        categories = [
+            cat
+            for name in category_names
+            for cat in self.config.categories
+            if cat.name == name
+        ]
+        fair_cap = self._fair_category_cap(categories)
+        min_kw = max(self.config.min_videos_per_keyword, 1)
+        total = {"accepted": 0, "rejected": 0}
+
+        def category_complete(category: CategoryConfig) -> bool:
+            return self.state.category_accepted(category.name) >= fair_cap
+
+        print(
+            f"discover fair rotation: {len(categories)} categories, "
+            f"cap={fair_cap}/category, batch={min_kw}/keyword/round"
+        )
+
+        while True:
+            active = [cat for cat in categories if not category_complete(cat)]
+            if not active:
+                break
+            if limit is not None and total["accepted"] >= limit:
+                print(f"discover global limit reached ({limit} accepted total), stopping")
+                break
+
+            round_accepted = 0
+            for category in active:
+                if limit is not None and total["accepted"] >= limit:
+                    break
+                remaining = fair_cap - self.state.category_accepted(category.name)
+                if remaining <= 0:
+                    continue
+                try:
+                    result = self.discover_category(
+                        category.name,
+                        limit=min(min_kw, remaining),
+                        max_keywords=1,
+                    )
+                except QuotaExceededError:
+                    self.state.flush_all_pending(shard_size=self.config.shard_size)
+                    raise
+                total["accepted"] += result["accepted"]
+                total["rejected"] += result["rejected"]
+                round_accepted += result["accepted"]
+                print(
+                    f"{category.name}: +{result['accepted']} "
+                    f"({self.state.category_accepted(category.name)}/{fair_cap})"
+                )
+
+            if round_accepted == 0:
+                print("discover fair rotation: no progress this round, stopping")
+                break
+
+        return total
+
+    def discover_category(
+        self,
+        category_name: str,
+        *,
+        limit: int | None = None,
+        max_keywords: int | None = None,
+    ) -> dict[str, int]:
         category = next(item for item in self.config.categories if item.name == category_name)
         already = self.state.category_accepted(category.name)
         remaining_target = max(0, category.collect_count - already)
@@ -96,6 +177,7 @@ class DatasetCollector:
         bucket_targets = allocate_counts(buckets, target) if buckets else {None: target}
         bucket_list = buckets or [None]
         start_bucket_idx = self._bucket_index(bucket_list, checkpoint.bucket_name if checkpoint else None)
+        keywords_processed = 0
 
         try:
             for bucket in bucket_list[start_bucket_idx:]:
@@ -325,10 +407,18 @@ class DatasetCollector:
                                 category.keywords[next_keyword_idx],
                             )
 
+                        keywords_processed += 1
+                        if max_keywords is not None and keywords_processed >= max_keywords:
+                            break
+
                         if bucket_accepted >= bucket_target:
                             break
+                    if max_keywords is not None and keywords_processed >= max_keywords:
+                        break
                     if bucket_accepted >= bucket_target:
                         break
+                if max_keywords is not None and keywords_processed >= max_keywords:
+                    break
                 if self.state.live_category_accepted(category.name) - already >= target:
                     break
         finally:
