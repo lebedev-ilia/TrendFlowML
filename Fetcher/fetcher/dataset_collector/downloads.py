@@ -618,7 +618,7 @@ def download_video_local(
                     output_dir=config.output_dir,
                     permanent_on_drive=config.drive_permanent_delete,
                 )
-                apply_download_pause(config, "cookie_bot")
+                apply_download_pause(config, "bot")
                 continue
             except KeyboardInterrupt:
                 raise
@@ -904,67 +904,85 @@ def run_download_queue(
             f"(pass: +{results['downloaded']} ok, {results['failed']} fail)",
         )
 
-        try:
-            path = download_video_local(
-                state,
-                config,
-                platform=platform,
-                video_id=video_id,
-                url=url,
-                category=category,
-                proxy_rotator=proxy_rotator,
-                cookie_rotator=cookie_rotator,
-            )
-        except KeyboardInterrupt:
-            worker_log("download", "shutdown requested — exiting pass")
-            break
-        except VideoUnavailableDownloadError as exc:
-            results["failed"] += 1
-            worker_log("download", f"unavailable {video_id}: {_short_error(exc)}")
-            if record_queue_failure(
-                state,
-                service="download",
-                item=item,
-                error=f"unavailable: {exc}",
-            ):
-                dead_letter_keys.add(retry_key)
-            apply_download_pause(config, "unavailable")
-            continue
-        except BotDetectionDownloadError as exc:
-            results["failed"] += 1
-            if record_queue_failure(
-                state,
-                service="download",
-                item=item,
-                error=f"bot_detection: {exc}",
-            ):
-                dead_letter_keys.add(retry_key)
-            apply_download_pause(config, "bot")
-            continue
-        if path is None:
-            results["failed"] += 1
-            if record_queue_failure(
-                state,
-                service="download",
-                item=item,
-                error="download returned no local file",
-            ):
-                dead_letter_keys.add(retry_key)
-            apply_download_pause(config, "fail")
-            continue
+        item_done = False
+        while not should_stop() and not item_done:
+            download_started = time.perf_counter()
+            try:
+                path = download_video_local(
+                    state,
+                    config,
+                    platform=platform,
+                    video_id=video_id,
+                    url=url,
+                    category=category,
+                    proxy_rotator=proxy_rotator,
+                    cookie_rotator=cookie_rotator,
+                )
+            except KeyboardInterrupt:
+                worker_log("download", "shutdown requested — exiting pass")
+                item_done = True
+                break
+            except VideoUnavailableDownloadError as exc:
+                results["failed"] += 1
+                worker_log("download", f"unavailable {video_id}: {_short_error(exc)}")
+                if record_queue_failure(
+                    state,
+                    service="download",
+                    item=item,
+                    error=f"unavailable: {exc}",
+                ):
+                    dead_letter_keys.add(retry_key)
+                apply_download_pause(config, "unavailable")
+                item_done = True
+            except BotDetectionDownloadError as exc:
+                worker_log(
+                    "download",
+                    f"bot_detection {video_id}: {_short_error(exc)} — "
+                    f"sleep 2min, retry same video (not skipping)",
+                )
+                apply_download_pause(config, "bot")
+                continue
+            else:
+                if path is None:
+                    results["failed"] += 1
+                    if record_queue_failure(
+                        state,
+                        service="download",
+                        item=item,
+                        error="download returned no local file",
+                    ):
+                        dead_letter_keys.add(retry_key)
+                    apply_download_pause(config, "fail")
+                    item_done = True
+                else:
+                    rel = str(path.relative_to(state.root))
+                    state.enqueue_hf_video_upload(
+                        platform=platform,
+                        video_id=video_id,
+                        category=category,
+                        local_path=rel,
+                    )
+                    coord.mark_done("download", key, video_id=video_id, category=category)
+                    hf_queued_keys.add(key)
+                    results["downloaded"] += 1
+                    worker_log(
+                        "download",
+                        f"  -> enqueued HF video upload for {video_id}; done after HF commit",
+                    )
+                    elapsed = time.perf_counter() - download_started
+                    fast_threshold = float(getattr(config, "download_fast_threshold_seconds", 8.0))
+                    if elapsed < fast_threshold:
+                        worker_log(
+                            "download",
+                            f"fast download {video_id} ({elapsed:.1f}s < {fast_threshold}s)",
+                        )
+                        apply_download_pause(config, "fast")
+                    else:
+                        apply_download_pause(config, "success")
+                    item_done = True
 
-        rel = str(path.relative_to(state.root))
-        state.enqueue_hf_video_upload(
-            platform=platform,
-            video_id=video_id,
-            category=category,
-            local_path=rel,
-        )
-        coord.mark_done("download", key, video_id=video_id, category=category)
-        hf_queued_keys.add(key)
-        results["downloaded"] += 1
-        worker_log("download", f"  -> enqueued HF video upload for {video_id}; done after HF commit")
-        apply_download_pause(config, "success")
+        if should_stop():
+            break
 
     if skip_reasons:
         log_kv_block("download", [(f"skipped_{k}", v) for k, v in sorted(skip_reasons.items())])

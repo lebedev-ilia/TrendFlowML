@@ -7,7 +7,7 @@ from fetcher.dataset_collector.schemas import CampaignConfig
 from fetcher.dataset_collector.worker_logging import worker_log
 from fetcher.dataset_collector.worker_shutdown import should_stop
 
-DownloadPacingOutcome = Literal["success", "fail", "bot", "unavailable", "cookie_bot"]
+DownloadPacingOutcome = Literal["success", "fail", "bot", "unavailable", "cookie_bot", "fast"]
 
 _consecutive_bot_streak: int = 0
 
@@ -32,19 +32,19 @@ def compute_download_pause_seconds(
         _consecutive_bot_streak = 0
         return float(config.download_pause_after_success_seconds)
 
+    if outcome == "fast":
+        _consecutive_bot_streak = 0
+        return float(config.download_pause_after_fast_seconds)
+
     if outcome == "unavailable":
         return float(config.download_pause_after_unavailable_seconds)
 
     if outcome == "cookie_bot":
-        return float(config.download_pause_after_cookie_bot_seconds)
+        return float(config.download_pause_after_bot_seconds)
 
     if outcome == "bot":
         _consecutive_bot_streak += 1
-        base = float(config.download_pause_after_bot_seconds)
-        mult = float(config.download_pause_bot_backoff_multiplier)
-        cap = float(config.download_pause_after_bot_max_seconds)
-        delay = base * (mult ** max(_consecutive_bot_streak - 1, 0))
-        return min(delay, cap)
+        return float(config.download_pause_after_bot_seconds)
 
     # generic fail (yt-dlp, merge, exhausted clients without bot exception)
     return float(config.download_pause_after_fail_seconds)

@@ -902,7 +902,7 @@ def test_pytubefix_sticky_client_stays_after_web_success(tmp_path, monkeypatch):
 
 
 @pytest.mark.unit
-def test_download_pacing_bot_backoff_escalates():
+def test_download_pacing_bot_fixed_two_minutes():
     from fetcher.dataset_collector.download_pacing import (
         compute_download_pause_seconds,
         reset_download_pacing,
@@ -915,16 +915,16 @@ def test_download_pacing_bot_backoff_escalates():
             "name": "t",
             "output_dir": "out",
             "categories": [{"name": "Sport", "keywords": ["x"], "target_count": 1, "collect_count": 1}],
-            "download_pause_after_bot_seconds": 60,
-            "download_pause_after_bot_max_seconds": 200,
-            "download_pause_bot_backoff_multiplier": 2.0,
+            "download_pause_after_bot_seconds": 120,
         }
     )
-    assert compute_download_pause_seconds(cfg, "bot") == 60
     assert compute_download_pause_seconds(cfg, "bot") == 120
-    assert compute_download_pause_seconds(cfg, "bot") == 200
+    assert compute_download_pause_seconds(cfg, "bot") == 120
+    assert compute_download_pause_seconds(cfg, "cookie_bot") == 120
     compute_download_pause_seconds(cfg, "success")
-    assert compute_download_pause_seconds(cfg, "bot") == 60
+    assert compute_download_pause_seconds(cfg, "success") == 10
+    assert compute_download_pause_seconds(cfg, "fail") == 15
+    assert compute_download_pause_seconds(cfg, "fast") == 15
 
 
 @pytest.mark.unit

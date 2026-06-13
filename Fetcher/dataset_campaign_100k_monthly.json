@@ -335,21 +335,16 @@
   "queue_retry_backoff_seconds": 900,
   "download_backend": "pytubefix",
   "download_cookie_rotate_successes": 20,
-  "download_pytubefix_clients": [
-    "ANDROID_VR",
-    "WEB"
-  ],
-  "download_pause_after_success_seconds": 3,
+  "download_pytubefix_clients": ["ANDROID_VR", "WEB"],
+  "download_pause_after_success_seconds": 10,
   "download_pause_after_fail_seconds": 15,
-  "download_pause_after_unavailable_seconds": 1,
-  "download_pause_after_cookie_bot_seconds": 2,
-  "download_pause_after_bot_seconds": 60,
-  "download_pause_after_bot_max_seconds": 300,
-  "download_pause_bot_backoff_multiplier": 1.5,
-  "download_ytdlp_player_clients": [
-    "android",
-    "web"
-  ],
-  "download_ytdlp_format": "bv*[height<=1080][ext=mp4]+ba[ext=m4a]/bv*[height<=1080]+ba/b[height<=1080]/b",
-  "hf_coord_enabled": true
+  "download_pause_after_unavailable_seconds": 15,
+  "download_pause_after_cookie_bot_seconds": 120,
+  "download_pause_after_bot_seconds": 120,
+  "download_pause_after_bot_max_seconds": 120,
+  "download_pause_bot_backoff_multiplier": 1.0,
+  "download_fast_threshold_seconds": 8,
+  "download_pause_after_fast_seconds": 15,
+  "download_ytdlp_player_clients": ["android", "web"],
+  "download_ytdlp_format": "bv*[height<=1080][ext=mp4]+ba[ext=m4a]/bv*[height<=1080]+ba/b[height<=1080]/b"
 }

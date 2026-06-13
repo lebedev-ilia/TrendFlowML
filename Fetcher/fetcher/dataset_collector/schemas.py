@@ -284,39 +284,49 @@ class CampaignConfig(BaseModel):
         description="pytubefix clients tried in order; WEB can generate PO tokens via Node.js.",
     )
     download_pause_after_success_seconds: float = Field(
-        3.0,
+        10.0,
         ge=0.0,
         description="Sleep after a successful download before the next queue item.",
     )
     download_pause_after_fail_seconds: float = Field(
-        12.0,
+        15.0,
         ge=0.0,
         description="Sleep after a failed download (non-bot, non-unavailable).",
     )
     download_pause_after_unavailable_seconds: float = Field(
-        1.0,
+        15.0,
         ge=0.0,
         description="Sleep after VideoUnavailable (no retry benefit).",
     )
     download_pause_after_cookie_bot_seconds: float = Field(
-        2.0,
+        120.0,
         ge=0.0,
-        description="Sleep after each bot_detection hit while trying another cookie/client.",
+        description="Legacy alias; bot waits use download_pause_after_bot_seconds (2 min default).",
     )
     download_pause_after_bot_seconds: float = Field(
-        45.0,
+        120.0,
         ge=0.0,
-        description="Base sleep after bot_detection ends a video attempt; grows with streak.",
+        description="Fixed sleep on bot_detection (retry same video until cleared).",
     )
     download_pause_after_bot_max_seconds: float = Field(
-        300.0,
+        120.0,
         ge=0.0,
-        description="Cap for bot backoff sleep (5 min default).",
+        description="Deprecated cap; bot pause is fixed at download_pause_after_bot_seconds.",
     )
     download_pause_bot_backoff_multiplier: float = Field(
-        1.5,
+        1.0,
         ge=1.0,
-        description="Multiply bot pause by this for each consecutive bot fail on queue items.",
+        description="Deprecated; bot pause no longer escalates between queue items.",
+    )
+    download_fast_threshold_seconds: float = Field(
+        8.0,
+        ge=0.0,
+        description="If download finishes faster than this, apply download_pause_after_fast_seconds.",
+    )
+    download_pause_after_fast_seconds: float = Field(
+        15.0,
+        ge=0.0,
+        description="Sleep after suspiciously fast download or generic fail/unavailable pacing.",
     )
     drive_permanent_delete: Optional[bool] = Field(
         None,
