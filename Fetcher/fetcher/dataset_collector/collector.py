@@ -172,7 +172,10 @@ class DatasetCollector:
         session_accepted = 0
         session_rejected = 0
         platform_bucket_accepted: Dict[Tuple[str, str | None], int] = {}
-        video_filter = VideoFilter(merged_filters(self.config, category))
+        video_filter = VideoFilter(
+            merged_filters(self.config, category),
+            state_path=self.state.channel_counts_path,
+        )
         buckets = [bucket_from_config(raw) for raw in self.config.time_interval_buckets]
         bucket_targets = allocate_counts(buckets, target) if buckets else {None: target}
         bucket_list = buckets or [None]
@@ -423,6 +426,8 @@ class DatasetCollector:
                     break
         finally:
             written = self.state.flush_all_pending(shard_size=self.config.shard_size)
+            video_filter.flush_state()
+            self.balancer.flush_snapshot()
         if self.state.live_category_accepted(category.name) >= category.collect_count:
             self.state.clear_checkpoint()
 
@@ -511,7 +516,7 @@ class DatasetCollector:
 
     def _handle_reject(self, video: CollectedVideo, reason: str) -> int:
         self.state.buffer_rejected(self._reject(video, reason))
-        if len(self.state._pending_rejected) >= self.config.shard_size:
+        if self.state.pending_rejected_count >= self.config.shard_size:
             self.state.flush_pending(video.category, shard_size=self.config.shard_size, force=True)
         dataset_collector_videos_rejected_total.labels(category=video.category, reason=reason).inc()
         record_reject_reason(video.category, reason)
@@ -584,6 +589,11 @@ class DatasetCollector:
             if is_comments_disabled_error(exc):
                 video.snapshot_0.comments = []
                 return
+            print(
+                f"[collector] WARNING: comments fetch failed for {video.video_id}: "
+                f"{type(exc).__name__}: {exc}",
+                flush=True,
+            )
             video.snapshot_0.raw["comments_error"] = str(exc)[:500]
             video.snapshot_0.comments = []
 

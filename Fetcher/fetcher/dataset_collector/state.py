@@ -109,6 +109,10 @@ class DatasetState:
         self.performance_events_path = self.state_dir / "performance_events.jsonl"
         self.queue_failures_path = self.state_dir / "queue_failures.jsonl"
         self.queue_dead_letter_path = self.state_dir / "queue_dead_letter.jsonl"
+        self.hf_snapshot_upload_queue_path = self.state_dir / "hf_snapshot_upload_queue.jsonl"
+        self.hf_snapshot_upload_done_path = self.state_dir / "hf_snapshot_upload_done.jsonl"
+        self.channel_counts_path = self.state_dir / "channel_counts.json"
+        self.balancer_snapshot_path = self.state_dir / "balancer_snapshot.json"
         self.lock_path = self.state_dir / ".collector.lock"
         self._seen: Set[str] | None = None
         self._pending_accepted: Dict[str, List[CollectedVideo]] = {}
@@ -175,6 +179,10 @@ class DatasetState:
         if category is None:
             return sum(len(items) for items in self._pending_accepted.values())
         return len(self._pending_accepted.get(category, []))
+
+    @property
+    def pending_rejected_count(self) -> int:
+        return len(self._pending_rejected)
 
     def live_category_accepted(self, category: str) -> int:
         return self.category_accepted(category) + self.pending_accepted_count(category)
@@ -318,12 +326,33 @@ class DatasetState:
         if not records:
             raise ValueError("cannot write empty snapshot shard")
         shard_path = self._next_snapshot_path(snapshot_index)
+        shard_relpath = str(shard_path.relative_to(self.root))
         atomic_write_json(shard_path, {key: jsonable(value.dict()) for key, value in records.items()})
         manifest = self.load_manifest()
-        manifest.snapshot_shards.append(str(shard_path.relative_to(self.root)))
+        manifest.snapshot_shards.append(shard_relpath)
         manifest.counters["snapshots"] = manifest.counters.get("snapshots", 0) + len(records)
         self.save_manifest(manifest)
+        self.enqueue_hf_snapshot_upload(shard_relpath=shard_relpath)
         return shard_path
+
+    def enqueue_hf_snapshot_upload(self, *, shard_relpath: str) -> None:
+        append_jsonl(
+            self.hf_snapshot_upload_queue_path,
+            {"shard": shard_relpath, "queued_at": utcnow().isoformat()},
+        )
+
+    def load_hf_snapshot_upload_done(self) -> set[str]:
+        return {
+            str(row.get("shard"))
+            for row in iter_jsonl(self.hf_snapshot_upload_done_path)
+            if row.get("shard")
+        }
+
+    def mark_hf_snapshot_upload_done(self, shard_relpath: str) -> None:
+        append_jsonl(
+            self.hf_snapshot_upload_done_path,
+            {"shard": shard_relpath, "completed_at": utcnow().isoformat()},
+        )
 
     def write_rejected(self, records: Iterable[RejectedRecord]) -> Path | None:
         records_list = [jsonable(record.dict()) for record in records]
@@ -718,7 +747,8 @@ class DatasetState:
             ),
         )
         if len(self._pending_rejected) >= self.config.shard_size:
-            self.flush_pending(force=True)
+            self.write_rejected(self._pending_rejected)
+            self._pending_rejected = []
         append_jsonl(
             self.post_enrich_rejected_path,
             {

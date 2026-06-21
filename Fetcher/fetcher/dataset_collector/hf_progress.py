@@ -68,6 +68,16 @@ def _progress_specs() -> list[ProgressFileSpec]:
             "checkpoint_newer",
         ),
         ProgressFileSpec(
+            "balancer_snapshot.json",
+            lambda s: s.balancer_snapshot_path,
+            "replace_if_remote_newer",
+        ),
+        ProgressFileSpec(
+            "channel_counts.json",
+            lambda s: s.channel_counts_path,
+            "replace_if_remote_newer",
+        ),
+        ProgressFileSpec(
             "download_done.jsonl",
             lambda s: s.download_done_path,
             "jsonl_union_key",
@@ -111,6 +121,12 @@ def _progress_specs() -> list[ProgressFileSpec]:
             "jsonl_union_key",
             "key",
         ),
+        ProgressFileSpec(
+            "hf_snapshot_upload_done.jsonl",
+            lambda s: s.hf_snapshot_upload_done_path,
+            "jsonl_union_key",
+            "shard",
+        ),
     ]
 
 
@@ -121,6 +137,8 @@ ROLE_PROGRESS_FILES: dict[str, set[str]] = {
         "seen_ids.jsonl",
         "keyword_progress.jsonl",
         "discovery_checkpoint.json",
+        "balancer_snapshot.json",
+        "channel_counts.json",
     },
     "download": {
         "progress_meta.json",
@@ -143,6 +161,13 @@ ROLE_PROGRESS_FILES: dict[str, set[str]] = {
         "video_schedule.jsonl",
         "snapshot_completion.jsonl",
     },
+    "snapshot": {
+        "progress_meta.json",
+        "manifest.json",
+        "video_schedule.jsonl",
+        "snapshot_completion.jsonl",
+        "hf_snapshot_upload_done.jsonl",
+    },
     "workers": {
         "progress_meta.json",
         "manifest.json",
@@ -154,6 +179,7 @@ ROLE_PROGRESS_FILES: dict[str, set[str]] = {
         "video_schedule.jsonl",
         "hf_video_upload_done.jsonl",
         "hf_enrich_upload_done.jsonl",
+        "hf_snapshot_upload_done.jsonl",
     },
 }
 
@@ -382,7 +408,14 @@ def pull_hf_progress(state: DatasetState, config: CampaignConfig, *, role: str |
         if not _download_remote_file(config, remote, cache_path):
             continue
         local = spec.local_path(state)
-        _merge_file(spec, local, cache_path)
+        try:
+            _merge_file(spec, local, cache_path)
+        except Exception as exc:
+            print(
+                f"[hf-progress] WARNING: merge failed for {spec.name}: {type(exc).__name__}: {exc} — skip",
+                flush=True,
+            )
+            continue
         pulled.append(spec.name)
     _invalidate_state_caches(state)
     return {"pulled": len(pulled), "files": pulled, "repo": repo}

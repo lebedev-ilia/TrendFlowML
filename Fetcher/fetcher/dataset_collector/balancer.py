@@ -150,6 +150,8 @@ def extract_discovery_values(
 
 
 class DatasetBalancer:
+    _SAVE_EVERY = 50  # persist snapshot every N accepted videos
+
     def __init__(
         self,
         config: BalancerConfig | None,
@@ -163,7 +165,12 @@ class DatasetBalancer:
         seed = config.random_seed if config else None
         self.random = random.Random(seed)
         self.counts: dict[str, Counter[str]] = {}
+        self._accepts_since_save: int = 0
         self._load_existing_counts()
+
+    @property
+    def _snapshot_path(self) -> Path:
+        return self.state_root / "state" / "balancer_snapshot.json"
 
     @property
     def enabled(self) -> bool:
@@ -232,6 +239,26 @@ class DatasetBalancer:
             return
         for field_name, value in extract_discovery_values(video, self.config.fields).items():
             self.counts.setdefault(field_name, Counter())[value] += 1
+        self._accepts_since_save += 1
+        if self._accepts_since_save >= self._SAVE_EVERY:
+            self._save_snapshot()
+            self._accepts_since_save = 0
+
+    def flush_snapshot(self) -> None:
+        """Persist balancer state on clean shutdown."""
+        if self._accepts_since_save > 0:
+            self._save_snapshot()
+
+    def _save_snapshot(self) -> None:
+        self._snapshot_path.parent.mkdir(parents=True, exist_ok=True)
+        data = {field: dict(counter) for field, counter in self.counts.items()}
+        tmp = self._snapshot_path.with_suffix(".json.tmp")
+        try:
+            tmp.write_text(json.dumps(data, ensure_ascii=False), encoding="utf-8")
+            import os
+            os.replace(tmp, self._snapshot_path)
+        except OSError:
+            tmp.unlink(missing_ok=True)
 
     def bucket_fill_ratio(self, field_name: str, value: str) -> float:
         if not self.config or field_name not in self.config.fields:
@@ -333,6 +360,22 @@ class DatasetBalancer:
         return {name: max(0.001, value / total) for name, value in weights.items() if value > 0}
 
     def _load_existing_counts(self) -> None:
+        if not self.config or not self.config.fields:
+            return
+        # Fast path: load from persisted snapshot (updated every _SAVE_EVERY accepts).
+        if self._snapshot_path.exists():
+            try:
+                data = json.loads(self._snapshot_path.read_text(encoding="utf-8"))
+                for field_name, counts in data.items():
+                    self.counts[field_name] = Counter({str(k): int(v) for k, v in counts.items()})
+                return
+            except (OSError, json.JSONDecodeError, TypeError, ValueError):
+                pass
+        # Slow fallback: scan all shards (first run or corrupted snapshot).
+        self._scan_shards_for_counts()
+        self._save_snapshot()
+
+    def _scan_shards_for_counts(self) -> None:
         if not self.config or not self.config.fields:
             return
         metadata_dir = self.state_root / "shards" / "metadata"

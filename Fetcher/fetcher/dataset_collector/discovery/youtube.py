@@ -69,11 +69,17 @@ class YouTubeKeyPool:
             return
         state = self.states[api_key]
         state.last_error = str(error)[:500]
-        if isinstance(error, QuotaExceededError) or "quota" in str(error).lower():
+        err_str = str(error)
+        if isinstance(error, QuotaExceededError) or "quota" in err_str.lower():
             tomorrow = datetime.now(timezone.utc).replace(hour=23, minute=59, second=59)
             state.disabled_until = tomorrow.isoformat()
-        elif "429" in str(error) or "403" in str(error):
+        elif "429" in err_str or "403" in err_str:
             state.disabled_until = (utcnow() + timedelta(minutes=15)).isoformat()
+        else:
+            # Generic error (network issue, invalid key, etc.) — short backoff to
+            # prevent tight loops. If persistent, all keys eventually get disabled
+            # and _select_key raises QuotaExceededError, exiting the discover loop.
+            state.disabled_until = (utcnow() + timedelta(minutes=2)).isoformat()
         self._save()
 
     def _select_key(self) -> YouTubeKeyState:

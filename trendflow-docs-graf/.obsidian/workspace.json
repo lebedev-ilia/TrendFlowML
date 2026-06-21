@@ -1,0 +1,218 @@
+{
+  "main": {
+    "id": "9ee74527e8ecc558",
+    "type": "split",
+    "children": [
+      {
+        "id": "eaf29ff82537d2eb",
+        "type": "tabs",
+        "children": [
+          {
+            "id": "58daffd1d1b5cd74",
+            "type": "leaf",
+            "state": {
+              "type": "graph",
+              "state": {},
+              "icon": "lucide-git-fork",
+              "title": "Граф"
+            }
+          }
+        ]
+      }
+    ],
+    "direction": "vertical"
+  },
+  "left": {
+    "id": "05bf275230995e8c",
+    "type": "split",
+    "children": [
+      {
+        "id": "b397db5e867a78bf",
+        "type": "tabs",
+        "children": [
+          {
+            "id": "d43bbd7c34b48ed7",
+            "type": "leaf",
+            "state": {
+              "type": "file-explorer",
+              "state": {
+                "sortOrder": "alphabetical",
+                "autoReveal": false
+              },
+              "icon": "lucide-folder-closed",
+              "title": "Файловый менеджер"
+            }
+          },
+          {
+            "id": "f4813a8b679d7809",
+            "type": "leaf",
+            "state": {
+              "type": "search",
+              "state": {
+                "query": "",
+                "matchingCase": false,
+                "explainSearch": false,
+                "collapseAll": false,
+                "extraContext": false,
+                "sortOrder": "alphabetical"
+              },
+              "icon": "lucide-search",
+              "title": "Поиск"
+            }
+          },
+          {
+            "id": "aecb541385af1d8e",
+            "type": "leaf",
+            "state": {
+              "type": "bookmarks",
+              "state": {},
+              "icon": "lucide-bookmark",
+              "title": "Закладки"
+            }
+          }
+        ]
+      }
+    ],
+    "direction": "horizontal",
+    "width": 300
+  },
+  "right": {
+    "id": "2c7766f6d8570a80",
+    "type": "split",
+    "children": [
+      {
+        "id": "0aae1d5ecc63af15",
+        "type": "tabs",
+        "children": [
+          {
+            "id": "5be5cab8f06d1a8d",
+            "type": "leaf",
+            "state": {
+              "type": "backlink",
+              "state": {
+                "collapseAll": false,
+                "extraContext": false,
+                "sortOrder": "alphabetical",
+                "showSearch": false,
+                "searchQuery": "",
+                "backlinkCollapsed": false,
+                "unlinkedCollapsed": true
+              },
+              "icon": "links-coming-in",
+              "title": "Обратные ссылки"
+            }
+          },
+          {
+            "id": "cc11b6e5d869c96d",
+            "type": "leaf",
+            "state": {
+              "type": "outgoing-link",
+              "state": {
+                "linksCollapsed": false,
+                "unlinkedCollapsed": true
+              },
+              "icon": "links-going-out",
+              "title": "Исходящие ссылки"
+            }
+          },
+          {
+            "id": "e72866202961def1",
+            "type": "leaf",
+            "state": {
+              "type": "tag",
+              "state": {
+                "sortOrder": "frequency",
+                "useHierarchy": true,
+                "showSearch": false,
+                "searchQuery": ""
+              },
+              "icon": "lucide-tags",
+              "title": "Теги"
+            }
+          },
+          {
+            "id": "519d7125f27d27f3",
+            "type": "leaf",
+            "state": {
+              "type": "all-properties",
+              "state": {
+                "sortOrder": "frequency",
+                "showSearch": false,
+                "searchQuery": ""
+              },
+              "icon": "lucide-archive",
+              "title": "Все свойства"
+            }
+          },
+          {
+            "id": "056005186f25a139",
+            "type": "leaf",
+            "state": {
+              "type": "outline",
+              "state": {
+                "followCursor": false,
+                "showSearch": false,
+                "searchQuery": ""
+              },
+              "icon": "lucide-list",
+              "title": "Структура"
+            }
+          }
+        ]
+      }
+    ],
+    "direction": "horizontal",
+    "width": 300,
+    "collapsed": true
+  },
+  "left-ribbon": {
+    "hiddenItems": {
+      "switcher:Меню быстрого перехода": false,
+      "graph:Граф": false,
+      "canvas:Создать новый холст": false,
+      "daily-notes:Сегодняшняя заметка": false,
+      "templates:Вставить шаблон": false,
+      "command-palette:Открыть палитру команд": false,
+      "bases:Создать новую базу": false
+    }
+  },
+  "active": "58daffd1d1b5cd74",
+  "lastOpenFiles": [
+    "DataProcessor/AudioProcessor/docs/audit_v3/README.md",
+    "scripts/wire_doc_graph.py",
+    "scripts",
+    "DataProcessor/docs/audit_v4/components/visual_processor/modules/uniqueness_audit_v4.md",
+    "poradoc.md",
+    "storage/result_store/STRUCTURE.md",
+    "storage/result_store/RUNBOOK_WEEKLY_QA_FROM_SCRATCH.md",
+    "storage/result_store",
+    "storage",
+    "docs/HF_ARTIFACTS_SYNC.md",
+    "docs/MAIN_INDEX.md",
+    "docs/CONTAINER_GRANULARITY.md",
+    "docs/MAIN_README.md",
+    "docs/DEPLOYMENT_GUIDE.md",
+    "docs/E2E_MANUAL_SETUP_AND_FIXES.md",
+    "docs/DEPLOYMENT_QUICKSTART.md",
+    "docs/K8S_FIRST_APPROACH.md",
+    "docs/PHASE3_ARTIFACTS_CONTRACT.md",
+    "docs/E2E_YOUTUBE_INGESTION_CHECKLIST.md",
+    "docs/PRODUCT_ROADMAP_TO_PRODUCTION.md",
+    "docs/GITHUB_WORKFLOW_TWO_DEVICES.md",
+    "docs/BACKEND_FETCHER_INTEGRATION_ANALYSIS.md",
+    "docs",
+    "Models/docs/plan_dev/V1_DEV_PLAN.md",
+    "Models/docs/plan_dev/README.md",
+    "Models/docs/plan_dev/BASELINE_DEV_PLAN.md",
+    "Models/docs/plan_dev",
+    "Models/docs/MAIN_INDEX.md",
+    "Models/docs/README.md",
+    "Models/docs/QA/CONTRACTS_QA.md",
+    "Models/docs/QA",
+    "Models/docs/contracts/V2_CONTEXT_MODEL.md",
+    "Models/docs/contracts/MODEL_CONTRACTS_V1.md",
+    "Models/docs/source_migrations",
+    "Models/docs/roadmaps",
+    "Models/docs/contracts"
+  ]
+}

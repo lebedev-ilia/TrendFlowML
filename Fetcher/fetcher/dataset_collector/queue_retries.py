@@ -47,14 +47,31 @@ def record_queue_failure(
     service: str,
     item: dict[str, Any],
     error: str,
+    dead_letter_cache: set[str] | None = None,
+    attempt_cache: dict[str, int] | None = None,
 ) -> bool:
-    """Record a retryable queue failure. Returns True once the item is dead-lettered."""
+    """Record a retryable queue failure. Returns True once the item is dead-lettered.
 
+    Pass dead_letter_cache / attempt_cache from the caller's session-level cache
+    (populated with load_dead_letter_keys / load_attempt_counts at pass start) to
+    avoid O(N) full-file reads on every invocation.
+    """
     key = queue_item_key(service, item)
-    if key in load_dead_letter_keys(state, service=service):
-        return True
-    attempts = load_attempt_counts(state, service=service)
-    attempt = attempts.get(key, 0) + 1
+
+    if dead_letter_cache is not None:
+        if key in dead_letter_cache:
+            return True
+    else:
+        if key in load_dead_letter_keys(state, service=service):
+            return True
+
+    if attempt_cache is not None:
+        attempt = attempt_cache.get(key, 0) + 1
+        attempt_cache[key] = attempt
+    else:
+        attempts = load_attempt_counts(state, service=service)
+        attempt = attempts.get(key, 0) + 1
+
     now = utcnow()
     next_retry_at = now + timedelta(seconds=state.config.queue_retry_backoff_seconds * attempt)
     payload = {
@@ -78,5 +95,7 @@ def record_queue_failure(
                 "max_attempts": state.config.queue_max_attempts,
             },
         )
+        if dead_letter_cache is not None:
+            dead_letter_cache.add(key)
         return True
     return False

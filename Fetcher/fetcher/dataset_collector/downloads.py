@@ -3,6 +3,7 @@ from __future__ import annotations
 import json
 import os
 import subprocess
+import threading
 import time
 from pathlib import Path
 from typing import Callable, Iterable
@@ -117,10 +118,11 @@ def scan_metadata_shards_for_downloads(
             key = f"{platform}:{category_name}:{video_id}"
             if key in done or key in queued or key in existing_queue:
                 continue
+            url = entry.get("url") or f"https://www.youtube.com/watch?v={video_id}"
             state.enqueue_download_item(
                 platform=platform,
                 video_id=video_id,
-                url=f"https://www.youtube.com/watch?v={video_id}",
+                url=url,
                 category=category_name,
             )
             existing_queue.add(key)
@@ -243,16 +245,25 @@ def _merge_av_with_ffmpeg(video_path: Path, audio_path: Path, output_path: Path)
         str(output_path),
     ]
     proc = subprocess.Popen(cmd, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
-    while proc.poll() is None:
+    # communicate() in a daemon thread avoids the pipe-buffer deadlock that occurs when
+    # ffmpeg writes > ~64 KB to stderr while the main thread only calls poll().
+    result: dict = {}
+
+    def _communicate() -> None:
+        result["stdout"], result["stderr"] = proc.communicate()
+
+    thread = threading.Thread(target=_communicate, daemon=True)
+    thread.start()
+    while thread.is_alive():
         _check_shutdown()
-        time.sleep(0.25)
-    stdout, stderr = proc.communicate()
+        thread.join(timeout=0.5)
+
     if proc.returncode != 0:
         raise subprocess.CalledProcessError(
             proc.returncode,
             cmd,
-            output=stdout,
-            stderr=stderr,
+            output=result.get("stdout"),
+            stderr=result.get("stderr"),
         )
 
 
@@ -806,6 +817,7 @@ def run_download_queue(
     hf_queued_keys = state.load_hf_video_upload_queued()
     post_enrich_rejected = state.load_post_enrich_rejected_video_ids()
     dead_letter_keys = load_dead_letter_keys(state, service="download")
+    attempt_counts_cache: dict[str, int] = load_attempt_counts(state, service="download")
     queue_lines = count_jsonl_lines(queue_path)
     videos_dir = state.download_dir / "videos"
     local_mp4 = count_glob_files(videos_dir, "**/*.mp4") if videos_dir.exists() else 0
@@ -930,6 +942,8 @@ def run_download_queue(
                     service="download",
                     item=item,
                     error=f"unavailable: {exc}",
+                    dead_letter_cache=dead_letter_keys,
+                    attempt_cache=attempt_counts_cache,
                 ):
                     dead_letter_keys.add(retry_key)
                 apply_download_pause(config, "unavailable")
@@ -950,6 +964,8 @@ def run_download_queue(
                         service="download",
                         item=item,
                         error="download returned no local file",
+                        dead_letter_cache=dead_letter_keys,
+                        attempt_cache=attempt_counts_cache,
                     ):
                         dead_letter_keys.add(retry_key)
                     apply_download_pause(config, "fail")

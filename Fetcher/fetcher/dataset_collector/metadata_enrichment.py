@@ -155,27 +155,6 @@ def _resolve_category_filters(config: CampaignConfig, category: str) -> dict:
     return dict(config.default_filters or {})
 
 
-def _reject_enriched_video(
-    state: DatasetState,
-    *,
-    data: dict,
-    shard_path: Path,
-    video_id: str,
-    category: str,
-    entry: dict,
-    reason: str,
-) -> None:
-    data.pop(video_id, None)
-    atomic_write_json(shard_path, data)
-    state.record_post_enrich_rejection(
-        platform="youtube",
-        video_id=video_id,
-        category=category,
-        query=str(entry.get("query") or ""),
-        reason=reason,
-        record=entry,
-    )
-    worker_log("enrich", f"REJECT {video_id}: {reason} (removed from shard)")
 
 
 def compact_metadata_shards(
@@ -222,17 +201,37 @@ def enrich_shard_video(
     category: str,
     cookie_rotator: CookieRotator | None,
     proxy_rotator: ProxyRotator | None,
+    shard_cache: dict[str, dict] | None = None,
 ) -> str:
-    """Return 'ok', 'rejected', or 'failed'."""
-    shard_path = state.root / shard_relpath
-    if not shard_path.exists():
-        worker_log("enrich", f"shard missing: {shard_relpath} (discover may not have flushed yet)")
-        return "failed"
+    """Return 'ok', 'rejected', or 'failed'.
 
-    data = json.loads(shard_path.read_text(encoding="utf-8"))
-    if not isinstance(data, dict):
-        worker_log("enrich", f"unsupported shard format: {shard_relpath}")
-        return "failed"
+    shard_cache: optional per-pass dict keyed by shard_relpath → shard data.
+    Avoids re-reading the same shard file for every video it contains.
+    """
+    shard_path = state.root / shard_relpath
+    if shard_cache is not None:
+        if shard_relpath not in shard_cache:
+            if not shard_path.exists():
+                worker_log("enrich", f"shard missing: {shard_relpath} (discover may not have flushed yet)")
+                return "failed"
+            try:
+                raw = json.loads(shard_path.read_text(encoding="utf-8"))
+            except (OSError, json.JSONDecodeError):
+                worker_log("enrich", f"shard read error: {shard_relpath}")
+                return "failed"
+            if not isinstance(raw, dict):
+                worker_log("enrich", f"unsupported shard format: {shard_relpath}")
+                return "failed"
+            shard_cache[shard_relpath] = raw
+        data = shard_cache[shard_relpath]
+    else:
+        if not shard_path.exists():
+            worker_log("enrich", f"shard missing: {shard_relpath} (discover may not have flushed yet)")
+            return "failed"
+        data = json.loads(shard_path.read_text(encoding="utf-8"))
+        if not isinstance(data, dict):
+            worker_log("enrich", f"unsupported shard format: {shard_relpath}")
+            return "failed"
 
     entry = data.get(video_id)
     if entry is None:
@@ -397,6 +396,8 @@ def run_metadata_enrich_queue(
     hf_enrich_done = state.load_hf_enrich_upload_done()
     hf_enrich_queued = state.load_hf_enrich_upload_queued()
     dead_letter_keys = load_dead_letter_keys(state, service="enrich")
+    attempt_counts_cache: dict[str, int] = load_attempt_counts(state, service="enrich")
+    shard_cache: dict[str, dict] = {}
     queue_path = state.metadata_enrich_queue_path
     queue_lines = count_jsonl_lines(queue_path)
 
@@ -490,6 +491,7 @@ def run_metadata_enrich_queue(
             category=item.get("category") or category or "unknown",
             cookie_rotator=cookie_rotator,
             proxy_rotator=proxy_rotator,
+            shard_cache=shard_cache,
         )
         if ok == "ok":
             coord.mark_done("enrich", key, video_id=video_id)
@@ -506,6 +508,8 @@ def run_metadata_enrich_queue(
                 service="enrich",
                 item=item,
                 error="yt-dlp enrich failed",
+                dead_letter_cache=dead_letter_keys,
+                attempt_cache=attempt_counts_cache,
             ):
                 dead_letter_keys.add(retry_key)
 

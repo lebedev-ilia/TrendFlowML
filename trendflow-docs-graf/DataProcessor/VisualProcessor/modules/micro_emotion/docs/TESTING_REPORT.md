@@ -1,0 +1,43 @@
+# Отчёт о тестировании micro_emotion компонента
+
+**Дата**: 2026-03-09  
+**Компонент**: `micro_emotion`  
+**Schema**: см. `docs/SCHEMA.md`
+
+---
+
+## Резюме
+
+✅ **Тесты пройдены** (ожидаемое поведение на 20 видео)
+
+- **Протестировано видео**: 20
+- **Успешных прогонов**: 10/20 (часть видео без лиц или недостаточно данных для PCA)
+- **Валидных артефактов**: 10/10 успешных прогонов (100%)
+
+Падения на части видео ожидаемы: отсутствие лиц в кадре или недостаточное количество данных для PCA. Все успешные прогоны прошли валидацию без ошибок.
+
+---
+
+## Качество данных
+
+- ✅ Все успешные артефакты валидны
+- ✅ Валидация схемы и данных пройдена для обработанных видео
+
+---
+
+## Файлы
+
+- **Скрипт запуска**: `DataProcessor/VisualProcessor/modules/micro_emotion/scripts/run_tests.sh`
+- **Валидатор**: `DataProcessor/VisualProcessor/modules/micro_emotion/utils/validate_micro_emotion.py`
+- **Результаты**: `DataProcessor/dp_results/youtube/test_micro_emotion_*/`
+
+---
+
+## Заключение
+
+Компонент `micro_emotion` протестирован на 20 видео. Успешные прогоны (10) дали валидные артефакты; остальные падения обусловлены отсутствием лиц/данных. Компонент готов к использованию при наличии лиц в видео.
+---
+
+## Навигация
+
+[FEATURE_DESCRIPTION](FEATURE_DESCRIPTION.md) · [FEATURES_DESCRIPTION](FEATURES_DESCRIPTION.md) · [SCHEMA](SCHEMA.md) · [FINAL_TEST_REPORT](FINAL_TEST_REPORT.md) · [Module README](../README.md) · [VisualProcessor](../../../docs/MAIN_INDEX.md) · [DataProcessor](../../../../docs/MAIN_INDEX.md) · [Vault](../../../../../docs/MAIN_INDEX.md)

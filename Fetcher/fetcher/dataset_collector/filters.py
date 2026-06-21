@@ -1,7 +1,10 @@
 from __future__ import annotations
 
+import json
+import statistics
 from dataclasses import dataclass
-from typing import Any, Dict, Iterable, Tuple
+from pathlib import Path
+from typing import Any, Dict, Iterable, Optional, Tuple
 
 
 @dataclass(frozen=True)
@@ -20,9 +23,25 @@ def _to_int(value: Any) -> int | None:
 
 
 class VideoFilter:
-    def __init__(self, rules: Dict[str, Any] | None = None) -> None:
+    # Keep at most this many view_count samples for outlier detection.
+    _SAMPLE_CAP = 500
+
+    def __init__(
+        self,
+        rules: Dict[str, Any] | None = None,
+        state_path: Optional[Path] = None,
+    ) -> None:
         self.rules = rules or {}
+        self.state_path = state_path
         self._channel_counts: Dict[str, int] = {}
+        self._view_count_samples: list[int] = []
+        self._accepts_since_save: int = 0
+        if state_path:
+            self._load_state()
+
+    # ------------------------------------------------------------------
+    # Public API
+    # ------------------------------------------------------------------
 
     def decide(self, record: Dict[str, Any]) -> FilterDecision:
         metadata = record.get("metadata") or record
@@ -43,6 +62,12 @@ class VideoFilter:
         view_max = _to_int(self.rules.get("view_count_max"))
         if view_max is not None and view_count is not None and view_count > view_max:
             return FilterDecision(False, "view_count_above_max")
+
+        # Outlier policy: reject statistical outliers within the running sample.
+        outlier_policy = self.rules.get("outlier_policy")
+        if outlier_policy == "reject" and view_count is not None:
+            if self._is_view_count_outlier(view_count):
+                return FilterDecision(False, "view_count_outlier")
 
         comment_count = _to_int(
             metadata.get("commentCount")
@@ -82,6 +107,78 @@ class VideoFilter:
         if channel_id:
             key = str(channel_id)
             self._channel_counts[key] = self._channel_counts.get(key, 0) + 1
+
+        view_count = _to_int(
+            metadata.get("viewCount")
+            or metadata.get("view_count")
+            or (metadata.get("statistics") or {}).get("viewCount")
+        )
+        if view_count is not None:
+            self._view_count_samples.append(view_count)
+            if len(self._view_count_samples) > self._SAMPLE_CAP:
+                self._view_count_samples.pop(0)
+
+        self._accepts_since_save += 1
+        if self.state_path and self._accepts_since_save >= 100:
+            self._save_state()
+            self._accepts_since_save = 0
+
+    def flush_state(self) -> None:
+        """Call on clean shutdown to persist any buffered state."""
+        if self.state_path and self._accepts_since_save > 0:
+            self._save_state()
+            self._accepts_since_save = 0
+
+    # ------------------------------------------------------------------
+    # Internals
+    # ------------------------------------------------------------------
+
+    def _is_view_count_outlier(self, view_count: int) -> bool:
+        """True if view_count is a statistical outlier in the running sample (z-score > threshold)."""
+        if len(self._view_count_samples) < 20:
+            return False
+        mean = statistics.mean(self._view_count_samples)
+        try:
+            std = statistics.stdev(self._view_count_samples)
+        except statistics.StatisticsError:
+            return False
+        if std <= 0:
+            return False
+        z = (view_count - mean) / std
+        threshold = float(self.rules.get("outlier_z_score_threshold", 3.0))
+        return z > threshold
+
+    def _load_state(self) -> None:
+        if not self.state_path or not self.state_path.exists():
+            return
+        try:
+            data = json.loads(self.state_path.read_text(encoding="utf-8"))
+            self._channel_counts = {str(k): int(v) for k, v in (data.get("channel_counts") or {}).items()}
+            raw_samples = data.get("view_count_samples") or []
+            self._view_count_samples = [int(v) for v in raw_samples][-self._SAMPLE_CAP :]
+        except (OSError, json.JSONDecodeError, TypeError, ValueError):
+            pass
+
+    def _save_state(self) -> None:
+        if not self.state_path:
+            return
+        self.state_path.parent.mkdir(parents=True, exist_ok=True)
+        tmp = self.state_path.with_suffix(".json.tmp")
+        try:
+            tmp.write_text(
+                json.dumps(
+                    {
+                        "channel_counts": self._channel_counts,
+                        "view_count_samples": self._view_count_samples,
+                    },
+                    ensure_ascii=False,
+                ),
+                encoding="utf-8",
+            )
+            import os
+            os.replace(tmp, self.state_path)
+        except OSError:
+            tmp.unlink(missing_ok=True)
 
 
 def split_records(

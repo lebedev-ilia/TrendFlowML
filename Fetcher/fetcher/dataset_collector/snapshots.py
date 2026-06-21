@@ -3,11 +3,81 @@ from __future__ import annotations
 import os
 import time
 from datetime import datetime, timedelta, timezone
-from typing import Dict, Iterable, List, Optional
+from pathlib import Path
+from typing import Dict, Iterable, List, Optional, Tuple
 
 from fetcher.dataset_collector.discovery.base import DiscoveryAdapter
 from fetcher.dataset_collector.schemas import ScheduleEntry, Snapshot
 from fetcher.dataset_collector.state import DatasetState, utcnow
+
+SNAPSHOT_WRITE_BATCH = 50  # flush a local shard every N collected snapshots
+
+
+def _chunked_sleep(total_seconds: float, *, chunk: float = 3600.0) -> None:
+    """Sleep total_seconds in chunks so long waits survive Colab inactivity checks."""
+    remaining = total_seconds
+    while remaining > 0:
+        time.sleep(min(remaining, chunk))
+        remaining -= chunk
+
+
+def _upload_snapshot_shards_to_hf(
+    state: DatasetState,
+    config,
+    shard_paths: List[Path],
+    *,
+    attempts: int = 3,
+) -> bool:
+    """Upload snapshot shards to HF. Returns True when shards are confirmed on HF."""
+    if not getattr(config, "hf_upload_enabled", False):
+        return False
+    if not shard_paths:
+        return True
+    try:
+        from fetcher.dataset_collector.hf_upload import (
+            HuggingFaceUploadError,
+            resolve_shards_repo_id,
+            upload_local_files_commit,
+        )
+
+        repo_id = resolve_shards_repo_id(config)
+        prefix = (getattr(config, "hf_shards_path_prefix", "") or "").strip("/")
+        files = []
+        for path in shard_paths:
+            if not path.is_file():
+                continue
+            rel = str(path.relative_to(state.root))
+            remote = f"{prefix}/{rel}" if prefix else rel
+            files.append((path, remote))
+        if not files:
+            return True
+
+        last_exc: Exception | None = None
+        for attempt in range(1, attempts + 1):
+            try:
+                upload_local_files_commit(
+                    config,
+                    files,
+                    repo_id=repo_id,
+                    commit_message=f"snapshot shards {utcnow().isoformat()[:19]}",
+                    state_dir=state.state_dir,
+                )
+                for path, _ in files:
+                    rel = str(path.relative_to(state.root))
+                    state.mark_hf_snapshot_upload_done(rel)
+                return True
+            except HuggingFaceUploadError as exc:
+                last_exc = exc
+                if attempt < attempts:
+                    time.sleep(30 * attempt)
+        print(
+            f"[снапшоты] WARNING: HF upload failed after {attempts} attempts: {last_exc}",
+            flush=True,
+        )
+        return False
+    except Exception as exc:
+        print(f"[снапшоты] WARNING: HF upload error: {exc}", flush=True)
+        return False
 
 
 def _schedule_offsets(
@@ -227,8 +297,17 @@ def run_snapshot_poll_loop(
     *,
     poll_interval_seconds: int = 30,
     verbose: bool = True,
+    upload_to_hf: bool = True,
 ) -> dict[str, int]:
-    """Collect follow-up snapshots per video when each video's due_at elapses (never early)."""
+    """Collect follow-up snapshots per video when each video's due_at elapses (never early).
+
+    Flow per pass:
+      1. Collect snapshots, flush local shards every SNAPSHOT_WRITE_BATCH videos.
+      2. Upload shards to HF (3 attempts).
+      3. Mark videos complete ONLY after confirmed HF upload.
+         If HF is disabled or upload fails after all retries, marks complete anyway
+         with a loud warning so progress is not blocked indefinitely.
+    """
     indices = snapshot_follow_up_indices(config)
     totals = {"snapshots": 0, "passes": 0}
     if not indices:
@@ -237,6 +316,7 @@ def run_snapshot_poll_loop(
         return totals
 
     schedule_size = len(state.load_schedule())
+    hf_enabled = getattr(config, "hf_upload_enabled", False)
     if verbose:
         print("[снапшоты] старт", flush=True)
         log_snapshot_poll_report(snapshot_poll_report(state, config, now=runner._now()))
@@ -248,10 +328,24 @@ def run_snapshot_poll_loop(
             due = runner.due_entries(snapshot_index=index)
             if not due:
                 continue
-            result = runner.collect_due(snapshot_index=index)
-            n = len(result)
+
+            result_snapshots, shard_paths = runner._collect_due_with_shards(snapshot_index=index)
+            n = len(result_snapshots)
             collected_this_pass += n
             totals["snapshots"] += n
+
+            if shard_paths:
+                if upload_to_hf and hf_enabled:
+                    uploaded = _upload_snapshot_shards_to_hf(state, config, shard_paths)
+                    if not uploaded:
+                        print(
+                            f"[снапшоты] WARNING: HF upload failed for {n} снапшотов индекс #{index} — "
+                            "данные на диске, помечаем как done чтобы не блокировать прогресс",
+                            flush=True,
+                        )
+                for dedup_key in result_snapshots:
+                    state.mark_snapshot_completed(dedup_key, index)
+
             if verbose and n:
                 report = snapshot_poll_report(state, config, now=runner._now())
                 done = _done_count_for_index(report, index)
@@ -272,10 +366,11 @@ def run_snapshot_poll_loop(
                 report = snapshot_poll_report(state, config, now=runner._now())
                 next_due = report.get("next_due_at")
                 print(
-                    f"[снапшоты] пауза ~{wait_sec:.0f} с до {_fmt_utc_short(next_due)}",
+                    f"[снапшоты] пауза ~{wait_sec:.0f} с до {_fmt_utc_short(next_due)} "
+                    f"(чанки по 1ч, всего ~{wait_sec / 3600:.1f}ч)",
                     flush=True,
                 )
-            time.sleep(wait_sec)
+            _chunked_sleep(wait_sec, chunk=3600.0)
         elif collected_this_pass == 0:
             time.sleep(max(5, poll_interval_seconds))
 
@@ -320,22 +415,58 @@ class SnapshotRunner:
                 result.append(entry)
         return result
 
-    def collect_due(self, *, snapshot_index: int, limit: int | None = None) -> dict[str, Snapshot]:
+    def _collect_due_with_shards(
+        self,
+        *,
+        snapshot_index: int,
+        limit: int | None = None,
+    ) -> Tuple[Dict[str, Snapshot], List[Path]]:
+        """Collect due snapshots, flush local shards every SNAPSHOT_WRITE_BATCH videos.
+
+        Returns (all_snapshots, written_shard_paths). Does NOT write completion markers —
+        caller marks complete only after confirmed HF upload.
+        """
         entries = self.due_entries(snapshot_index=snapshot_index)
         if limit is not None:
             entries = entries[:limit]
-        snapshots: dict[str, Snapshot] = {}
+
+        all_snapshots: Dict[str, Snapshot] = {}
+        shard_paths: List[Path] = []
+        batch: Dict[str, Snapshot] = {}
+
+        def _flush_batch() -> None:
+            if batch:
+                shard_paths.append(self.state.write_snapshot_shard(snapshot_index, dict(batch)))
+                batch.clear()
+
         for entry in entries:
             adapter = self.adapters.get(entry.platform)
             if adapter is None or not adapter.capabilities.snapshots:
                 continue
-            snapshot = adapter.collect_snapshot(
-                entry.video_id,
-                snapshot_index=snapshot_index,
-                comments_limit=self.comments_limit,
-            )
-            snapshots[entry.dedup_key] = snapshot
-            self.state.mark_snapshot_completed(entry.dedup_key, snapshot_index)
-        if snapshots:
-            self.state.write_snapshot_shard(snapshot_index, snapshots)
+            try:
+                snapshot = adapter.collect_snapshot(
+                    entry.video_id,
+                    snapshot_index=snapshot_index,
+                    comments_limit=self.comments_limit,
+                )
+            except Exception:
+                _flush_batch()
+                raise
+
+            batch[entry.dedup_key] = snapshot
+            all_snapshots[entry.dedup_key] = snapshot
+
+            if len(batch) >= SNAPSHOT_WRITE_BATCH:
+                _flush_batch()
+
+        _flush_batch()
+        return all_snapshots, shard_paths
+
+    def collect_due(self, *, snapshot_index: int, limit: int | None = None) -> dict[str, Snapshot]:
+        """Backwards-compatible: collect, write shards, mark complete (no HF wait)."""
+        snapshots, _shard_paths = self._collect_due_with_shards(
+            snapshot_index=snapshot_index, limit=limit
+        )
+        for dedup_key in snapshots:
+            self.state.mark_snapshot_completed(dedup_key, snapshot_index)
         return snapshots
