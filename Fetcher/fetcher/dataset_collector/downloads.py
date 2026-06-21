@@ -21,6 +21,7 @@ from fetcher.dataset_collector.state import DatasetState
 from fetcher.dataset_collector.local_delete import delete_local_file
 from fetcher.dataset_collector.worker_shutdown import should_stop
 from fetcher.dataset_collector.queue_retries import (
+    load_attempt_counts,
     load_dead_letter_keys,
     queue_item_key,
     record_queue_failure,
