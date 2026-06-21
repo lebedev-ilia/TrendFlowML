@@ -161,7 +161,7 @@ class DatasetCollector:
         already = self.state.category_accepted(category.name)
         remaining_target = max(0, category.collect_count - already)
         if remaining_target <= 0:
-            self.state.clear_checkpoint()
+            self.state.clear_category_checkpoint(category_name)
             return {"accepted": 0, "rejected": 0}
 
         target = remaining_target if limit is None else min(limit, remaining_target)
@@ -429,15 +429,12 @@ class DatasetCollector:
             video_filter.flush_state()
             self.balancer.flush_snapshot()
         if self.state.live_category_accepted(category.name) >= category.collect_count:
-            self.state.clear_checkpoint()
+            self.state.clear_category_checkpoint(category.name)
 
         return {"accepted": session_accepted, "rejected": session_rejected}
 
     def _resolve_checkpoint(self, category: CategoryConfig) -> DiscoveryCheckpoint | None:
-        checkpoint = self.state.load_checkpoint()
-        if checkpoint is None or checkpoint.category != category.name:
-            return None
-        return checkpoint
+        return self.state.load_category_checkpoint(category.name)
 
     def _youtube_search_params(self, category: CategoryConfig, *, keyword_index: int) -> dict[str, str]:
         languages = category.youtube_relevance_languages or self.config.youtube_relevance_languages
@@ -473,7 +470,7 @@ class DatasetCollector:
         keyword_index: int,
         keyword: str,
     ) -> None:
-        self.state.save_checkpoint(
+        self.state.save_category_checkpoint(
             DiscoveryCheckpoint(
                 category=category.name,
                 bucket_name=bucket_name,

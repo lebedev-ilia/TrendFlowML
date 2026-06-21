@@ -194,19 +194,59 @@ class DatasetState:
     def is_category_complete(self, category: str, collect_count: int) -> bool:
         return self.live_category_accepted(category) >= collect_count
 
+    def _category_checkpoint_path(self, category: str) -> Path:
+        """Per-category checkpoint file so each category tracks its own keyword cursor."""
+        safe = category.replace("/", "_").replace("\\", "_")
+        return self.state_dir / f"discovery_checkpoint_{safe}.json"
+
     def load_checkpoint(self) -> DiscoveryCheckpoint | None:
+        """Legacy: load the single global checkpoint (used for HF-progress resume)."""
         if not self.checkpoint_path.exists():
             return None
         data = json.loads(self.checkpoint_path.read_text(encoding="utf-8"))
+        return DiscoveryCheckpoint.parse_obj(data)
+
+    def load_category_checkpoint(self, category: str) -> DiscoveryCheckpoint | None:
+        """Load per-category keyword cursor (survives across fair-rotation rounds)."""
+        path = self._category_checkpoint_path(category)
+        if not path.exists():
+            # Fall back to legacy global checkpoint for the same category (migration).
+            global_ck = self.load_checkpoint()
+            if global_ck is not None and global_ck.category == category:
+                return global_ck
+            return None
+        data = json.loads(path.read_text(encoding="utf-8"))
         return DiscoveryCheckpoint.parse_obj(data)
 
     def save_checkpoint(self, checkpoint: DiscoveryCheckpoint) -> None:
         checkpoint.updated_at = utcnow()
         atomic_write_json(self.checkpoint_path, jsonable(checkpoint.dict()))
 
+    def save_category_checkpoint(self, checkpoint: DiscoveryCheckpoint) -> None:
+        """Save per-category keyword cursor."""
+        checkpoint.updated_at = utcnow()
+        path = self._category_checkpoint_path(checkpoint.category)
+        atomic_write_json(path, jsonable(checkpoint.dict()))
+        # Also keep the global checkpoint for HF-progress / crash recovery.
+        atomic_write_json(self.checkpoint_path, jsonable(checkpoint.dict()))
+
     def clear_checkpoint(self) -> None:
         if self.checkpoint_path.exists():
             self.checkpoint_path.unlink()
+
+    def clear_category_checkpoint(self, category: str) -> None:
+        """Clear per-category keyword cursor when the category is fully collected."""
+        path = self._category_checkpoint_path(category)
+        if path.exists():
+            path.unlink()
+        # Also clear global if it was for this category.
+        if self.checkpoint_path.exists():
+            try:
+                data = json.loads(self.checkpoint_path.read_text(encoding="utf-8"))
+                if data.get("category") == category:
+                    self.checkpoint_path.unlink()
+            except Exception:
+                pass
 
     def append_keyword_progress(self, entry: KeywordProgressEntry) -> None:
         append_jsonl(self.keyword_progress_path, entry.dict())
