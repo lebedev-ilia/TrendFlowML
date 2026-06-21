@@ -31,7 +31,10 @@ class KeywordProgressEntry(BaseModel):
 
     @property
     def is_done(self) -> bool:
-        return self.accepted >= self.min_required
+        # Done if we hit the target, OR if the keyword is saturated
+        # (yielded results but all were duplicates — no new unique videos).
+        saturated = self.scanned > 0 and self.accepted == 0
+        return self.accepted >= self.min_required or saturated
 
 
 def progress_scope_key(
