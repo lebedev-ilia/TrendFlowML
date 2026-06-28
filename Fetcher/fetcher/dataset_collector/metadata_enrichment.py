@@ -16,6 +16,7 @@ from fetcher.dataset_collector.config import merged_filters
 from fetcher.dataset_collector.filters import VideoFilter
 from fetcher.dataset_collector.proxy import ProxyRotator, configured_proxies
 from fetcher.dataset_collector.queue_retries import (
+    load_attempt_counts,
     load_dead_letter_keys,
     queue_item_key,
     record_queue_failure,
