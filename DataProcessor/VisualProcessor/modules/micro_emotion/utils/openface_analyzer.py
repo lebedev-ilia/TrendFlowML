@@ -78,12 +78,13 @@ def _docker_cmd(
         "run",
         "--rm",
         "--shm-size=1g",
+        "--entrypoint",
+        "bash",
         "-v",
         f"{in_dir}:/input:ro",
         "-v",
         f"{out_dir}:/output",
         image,
-        "bash",
         "-lc",
         # Resolve FeatureExtraction path in a few common locations; then run on /input.
         (
@@ -92,11 +93,13 @@ def _docker_cmd(
             "if command -v FeatureExtraction >/dev/null 2>&1; then BIN='FeatureExtraction'; "
             "elif [ -x /home/openface/build/bin/FeatureExtraction ]; then BIN='/home/openface/build/bin/FeatureExtraction'; "
             "elif [ -x /openface/build/bin/FeatureExtraction ]; then BIN='/openface/build/bin/FeatureExtraction'; "
+            "elif [ -x /home/openface-build/build/bin/FeatureExtraction ]; then BIN='/home/openface-build/build/bin/FeatureExtraction'; "
             "else echo 'FeatureExtraction binary not found in container' >&2; exit 2; fi; "
             "cd /output; "
             # We run on directory; OpenFace will create CSVs in /output.
             "$BIN -fdir /input -out_dir /output "
             + " ".join(extra_args)
+            + " || true"
         ),
     ]
     if use_gpu:
@@ -157,19 +160,26 @@ class OpenFaceAnalyzer:
                 extra_args=flags,
             )
             proc = subprocess.run(cmd, capture_output=True, text=True)
-            if proc.returncode != 0:
+            csv_path = _pick_best_csv(out_dir)
+            if proc.returncode != 0 and (not csv_path or not os.path.exists(csv_path)):
                 raise RuntimeError(
                     "OpenFaceAnalyzer | docker/OpenFace failed: "
                     f"code={proc.returncode} stdout={proc.stdout[-2000:]} stderr={proc.stderr[-4000:]}"
                 )
 
-            csv_path = _pick_best_csv(out_dir)
             if not csv_path or not os.path.exists(csv_path):
                 raise RuntimeError("OpenFaceAnalyzer | no CSV produced by OpenFace")
 
             df = pd.read_csv(csv_path)
             if df is None or len(df) == 0:
                 raise RuntimeError("OpenFaceAnalyzer | produced empty CSV/DataFrame")
+
+            # OpenFace FeatureExtraction writes CSV headers with a leading space after each comma
+            # (", AU01_r", ", pose_Rx", ", success", ", x_0" ...). pandas keeps these leading spaces
+            # unless skipinitialspace=True, so downstream lookups by bare names ("AU01_r", "pose_Rx",
+            # "success") silently miss and every OpenFace-derived feature collapses to zero/NaN.
+            # Normalize column names once here so the whole pipeline reads real values.
+            df.columns = [str(c).strip() for c in df.columns]
 
             # Map OpenFace local frames -> union-domain indices.
             # OpenFace typically uses 0..M-1 in `frame` column for image sequences.

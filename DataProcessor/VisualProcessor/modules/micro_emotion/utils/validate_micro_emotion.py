@@ -251,8 +251,14 @@ class MicroEmotionValidator:
                 message=f"face_present_any must be 1D array of length N, got {None if face_present is None else face_present.shape}",
             )
 
-        # frame_features (N, F) float32
-        if frame_features is None or frame_features.ndim != 2 or frame_features.shape[0] != N:
+        # frame_features (N, F) float32.
+        # Валидный частный случай: пустой набор wide-фич (F=0), напр. на status=empty
+        # (нет лиц → wide-фичи не строятся). При этом load_npz схлопывает zero-size массив
+        # (N,0) в [], т.е. читается как 1D shape (0,). Это НЕ ошибка формы — принимаем.
+        ff_empty = frame_features is None or frame_features.size == 0
+        if ff_empty and status == "empty":
+            pass
+        elif frame_features is None or frame_features.ndim != 2 or frame_features.shape[0] != N:
             self._issue(
                 issue_type="invalid_shape",
                 severity="error",

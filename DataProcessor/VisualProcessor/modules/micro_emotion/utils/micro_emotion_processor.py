@@ -820,86 +820,87 @@ class MicroEmotionProcessor:
         vectors = []
         total_duration = n_frames / self.fps
         
-        # Вычисляем per-frame признаки
+        # Вычисляем per-frame признаки.
+        # ВАЖНО: элементы вектора собираются СТРОГО в порядке COMPACT22_FEATURE_NAMES.
+        # Раньше порядок append() (pose_Rz/pose_Tz шли на позициях 10-11, gaze/mouth сдвинуты)
+        # НЕ совпадал с COMPACT22_FEATURE_NAMES → compact22 отдавался с перепутанными метками
+        # (Encoder читал не те столбцы). Теперь собираем по имени и раскладываем по контракту.
         for idx in range(n_frames):
-            vec = []
             row = df.iloc[idx]
-            
-            # time_norm (1)
-            vec.append(idx / max(n_frames - 1, 1))
-            
-            # face_presence_flag (1)
+
+            # time_norm
+            time_norm = idx / max(n_frames - 1, 1)
+            # face_presence_flag
             face_presence = 1.0 if row.get('success', 0) > 0.5 else 0.0
-            vec.append(face_presence)
-            
-            # Key AU intensity deltas (3-4)
+            # Key AU intensity deltas
+            au_delta = {}
             for au in ['AU12', 'AU06', 'AU04', 'AU25']:
-                intensity_col = f"{au}_r"
                 baseline = au_baseline.get(au, 0.0) if au_baseline else 0.0
-                intensity = float(row.get(intensity_col, 0.0))
-                intensity_delta = intensity - baseline
-                vec.append(intensity_delta / 5.0)  # Normalize to [0, 1] assuming max intensity ~5
-            
-            # AU25 presence rate in short window (1)
-            au25_col = 'AU25_c'
-            if au25_col in df.columns:
+                intensity = float(row.get(f"{au}_r", 0.0))
+                au_delta[au] = (intensity - baseline) / 5.0  # ~[0,1], max intensity ~5
+            # AU25 presence rate in short window
+            if 'AU25_c' in df.columns:
                 window_start = max(0, idx - int(0.5 * self.fps))
                 window_end = min(n_frames, idx + int(0.5 * self.fps))
-                au25_window = df[au25_col].iloc[window_start:window_end]
+                au25_window = df['AU25_c'].iloc[window_start:window_end]
                 au25_presence_rate = float(au25_window.mean()) if len(au25_window) > 0 else 0.0
             else:
                 au25_presence_rate = 0.0
-            vec.append(au25_presence_rate)
-            
-            # Blink flag (AU45 presence) (1)
-            au45_col = 'AU45_c'
-            blink_flag = float(row.get(au45_col, 0.0) > 0.5)
-            vec.append(blink_flag)
-            
-            # Pose normalized (4)
-            pose_ry = float(row.get('pose_Ry', 0.0))
-            pose_rx = float(row.get('pose_Rx', 0.0))
-            pose_rz = float(row.get('pose_Rz', 0.0))
-            pose_tz = float(row.get('pose_Tz', 0.0))
-            vec.append(pose_ry / 90.0)  # [-1, 1] approx
-            vec.append(pose_rx / 90.0)
-            vec.append(pose_rz / 90.0)
-            vec.append(pose_tz / 100.0)  # mm-ish -> rough normalization
-            
-            # Gaze (2-3)
-            gaze_x = float(row.get('gaze_angle_x', 0.0))
-            gaze_y = float(row.get('gaze_angle_y', 0.0))
-            gaze_centered = 1.0 if (abs(gaze_x) < self.gaze_centered_threshold and abs(gaze_y) < self.gaze_centered_threshold) else 0.0
-            vec.append(gaze_centered)
-            vec.append(gaze_x / 30.0)  # Normalize
-            vec.append(gaze_y / 30.0)
-            
-            # Mouth opening normalized (1)
-            # Используем упрощенную версию
+            # Blink flag (AU45 presence)
+            blink_flag = float(row.get('AU45_c', 0.0) > 0.5)
+            # Pose normalized
+            pose_ry = float(row.get('pose_Ry', 0.0)) / 90.0
+            pose_rx = float(row.get('pose_Rx', 0.0)) / 90.0
+            pose_rz = float(row.get('pose_Rz', 0.0)) / 90.0
+            pose_tz = float(row.get('pose_Tz', 0.0)) / 100.0
+            # Gaze
+            gaze_x_raw = float(row.get('gaze_angle_x', 0.0))
+            gaze_y_raw = float(row.get('gaze_angle_y', 0.0))
+            gaze_centered = 1.0 if (abs(gaze_x_raw) < self.gaze_centered_threshold and abs(gaze_y_raw) < self.gaze_centered_threshold) else 0.0
+            gaze_x = gaze_x_raw / 30.0
+            gaze_y = gaze_y_raw / 30.0
+            # Mouth opening normalized
             mouth_opening = 0.0
             if 'y_51' in row.index and 'y_57' in row.index:
                 mouth_opening = abs(float(row['y_51']) - float(row['y_57']))
-            vec.append(mouth_opening / 50.0)  # Normalize (placeholder)
-            
-            # Face asymmetry score (1)
-            # Используем значение из compute_landmark_features или 0
-            vec.append(0.0)  # Placeholder - будет заполнено позже
-            
-            # Microexpr recent count (1)
-            # Будет заполнено позже на основе microexpr_timestamps
-            vec.append(0.0)  # Placeholder
-            
+            mouth_opening = mouth_opening / 50.0
+            # Face asymmetry / microexpr_recent — placeholder (per-frame не вычисляются; отдельный PR)
+            face_asymmetry = 0.0
+            microexpr_recent = 0.0
             # AU PCA (3)
             if au_pca_features is not None and idx < len(au_pca_features):
-                vec.extend(au_pca_features[idx, :3].tolist())
+                au_pca = [float(x) for x in au_pca_features[idx, :3].tolist()]
             else:
-                vec.extend([0.0, 0.0, 0.0])
-            
-            # AU quality flag (1)
-            # Используем confidence если доступен
-            au_quality = 1.0  # Placeholder
-            vec.append(au_quality)
-            
+                au_pca = [0.0, 0.0, 0.0]
+            # AU quality flag — placeholder (отдельный PR)
+            au_quality = 1.0
+
+            # Раскладка СТРОГО по COMPACT22_FEATURE_NAMES.
+            vec = [
+                time_norm,               # 0  time_norm
+                face_presence,           # 1  face_presence_flag
+                au_delta['AU12'],        # 2  AU12_delta_norm
+                au_delta['AU06'],        # 3  AU06_delta_norm
+                au_delta['AU04'],        # 4  AU04_delta_norm
+                au_delta['AU25'],        # 5  AU25_delta_norm
+                au25_presence_rate,      # 6  AU25_presence_rate_1s
+                blink_flag,              # 7  blink_flag
+                pose_ry,                 # 8  pose_Ry_norm
+                pose_rx,                 # 9  pose_Rx_norm
+                gaze_centered,           # 10 gaze_centered_flag
+                gaze_x,                  # 11 gaze_x_norm
+                gaze_y,                  # 12 gaze_y_norm
+                mouth_opening,           # 13 mouth_opening_norm
+                face_asymmetry,          # 14 face_asymmetry_score
+                microexpr_recent,        # 15 microexpr_recent_count
+                au_pca[0],               # 16 au_pca_0
+                au_pca[1],               # 17 au_pca_1
+                au_pca[2],               # 18 au_pca_2
+                au_quality,              # 19 au_quality_flag
+                pose_rz,                 # 20 pose_Rz_norm
+                pose_tz,                 # 21 pose_Tz_norm
+            ]
+
             # Enforce strict compact22 contract.
             if len(vec) != 22:
                 raise RuntimeError(f"MicroEmotionProcessor | compact22 vector length mismatch: got={len(vec)} expected=22")
@@ -1476,22 +1477,30 @@ class MicroEmotionModule(BaseModule):
         Returns:
             DataFrame OpenFace или None, если не найден
         """
+        # OpenFace CSV headers carry leading spaces (", AU01_r", ", pose_Rx", ", success", ", x_0").
+        # pandas keeps them unless skipinitialspace=True, so bare-name lookups miss and every
+        # OpenFace-derived feature collapses to zero/NaN. Normalize column names on every load path.
+        def _norm_cols(df: Optional[pd.DataFrame]) -> Optional[pd.DataFrame]:
+            if isinstance(df, pd.DataFrame):
+                df.columns = [str(c).strip() for c in df.columns]
+            return df
+
         # 1. Прямая передача DataFrame
         if 'openface_dataframe' in config and config['openface_dataframe'] is not None:
             df = config['openface_dataframe']
             if isinstance(df, pd.DataFrame):
                 self.logger.info("Используется переданный DataFrame OpenFace")
-                return df
-        
+                return _norm_cols(df)
+
         # 2. Путь к CSV в config
         csv_path = config.get('openface_csv_path')
         if csv_path and os.path.exists(csv_path):
             self.logger.info(f"Загружаем CSV OpenFace из {csv_path}")
             try:
-                return pd.read_csv(csv_path)
+                return _norm_cols(pd.read_csv(csv_path))
             except Exception as e:
                 self.logger.warning(f"Ошибка загрузки CSV {csv_path}: {e}")
-        
+
         # 3. Автоматический поиск CSV в rs_path
         if self.rs_path:
             micro_emotion_dir = os.path.join(self.rs_path, "micro_emotion")
@@ -1502,7 +1511,7 @@ class MicroEmotionModule(BaseModule):
                     csv_path = max(csv_files, key=lambda p: p.stat().st_mtime)
                     self.logger.info(f"Найден CSV OpenFace: {csv_path}")
                     try:
-                        return pd.read_csv(str(csv_path))
+                        return _norm_cols(pd.read_csv(str(csv_path)))
                     except Exception as e:
                         self.logger.warning(f"Ошибка загрузки CSV {csv_path}: {e}")
         
