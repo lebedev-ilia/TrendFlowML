@@ -935,8 +935,15 @@ class ColorLightProcessor(BaseModule):
             return 0.0
         sorted_values = np.sort(values)
         n = len(values)
+        total = float(np.sum(sorted_values))
+        # Все значения равны 0 (полностью ахроматичное/чисто-красное видео, hue_mean==0
+        # на всех кадрах) → знаменатель 0 → 0/0 = NaN. Джини равных величин = 0 (идеальное
+        # равенство), поэтому возвращаем 0.0, а не NaN. Раньше здесь получался NaN и из-за
+        # getf-бага (см. extract_video_features), теперь путь защищён от обеих причин.
+        if total == 0.0:
+            return 0.0
         index = np.arange(1, n + 1)
-        return float((2 * np.sum(index * sorted_values)) / (n * np.sum(sorted_values)) - (n + 1) / n)
+        return float((2 * np.sum(index * sorted_values)) / (n * total) - (n + 1) / n)
     
     def extract_video_features(self, all_scene_features: Dict[str, Dict], all_frame_features: Dict[str, Dict]) -> Dict[str, Any]:
         """Агрегирует video-level фичи."""
@@ -979,9 +986,19 @@ class ColorLightProcessor(BaseModule):
         if len(frame_list) == 0:
             return features
 
-        # Универсальный safe getter
+        # Универсальный safe getter.
+        # ВАЖНО: элементы frame_list — это обёртки вида {"frame_idx":.., "features":{..}},
+        # поэтому фичи лежат в frame["features"][key], а не в frame[key].
+        # Раньше здесь читалось frame.get(key) → всегда default(0) для hue_mean/brightness_mean,
+        # из-за чего color_distribution_entropy≈0, color_distribution_gini=NaN и все глобальные
+        # временные фичи (brightness/color change speed, strobe, periodicity, shift) зануливались.
         def getf(frame, key, default=0.0):
-            return frame.get(key, default)
+            if isinstance(frame, dict):
+                feats = frame.get("features")
+                if isinstance(feats, dict):
+                    return feats.get(key, default)
+                return frame.get(key, default)
+            return default
 
         # -------------------------------
         # 4. Color/Hue distribution
