@@ -720,7 +720,7 @@ class FramesCompositionModule(BaseModule):
         def _bbox_stats_for_frame(i: int, H: int, W: int) -> Tuple[float, float, float]:
             m = valid[i]
             if not np.any(m):
-                return 0.0, 0.0, 0.0
+                return 0.0, 0.0, 1.0
             bs = boxes[i][m]
             ars = np.array([_bbox_area_ratio(b, H=H, W=W) for b in bs], dtype=np.float32)
             max_ar = float(np.max(ars)) if ars.size else 0.0
@@ -874,8 +874,8 @@ class FramesCompositionModule(BaseModule):
                 od = float(obj_count[pos] / 8.0)
                 od = _clip01(od)
                 ds = float(core_depth.depth_std[pos])
-                ds = _clip01(ds) if np.isfinite(ds) else 0.0
-                bokeh_proxy = float(_clip01((core_depth.depth_p95[pos] - core_depth.depth_p05[pos]) if np.isfinite(core_depth.depth_p95[pos]) and np.isfinite(core_depth.depth_p05[pos]) else 0.0))
+                ds = _clip01(ds / max(core_depth.depth_mean[pos], 1e-6)) if np.isfinite(ds) else 0.0
+                bokeh_proxy = float(_clip01((core_depth.depth_p95[pos] - core_depth.depth_p05[pos]) / 1024.0 if np.isfinite(core_depth.depth_p95[pos]) and np.isfinite(core_depth.depth_p05[pos]) else 0.0))
                 center_off = float(out.get("saliency_center_offset", 0.0)) if np.isfinite(out.get("saliency_center_offset", 0.0)) else 0.0
                 sym = float(out.get("symmetry_score", 0.0)) if np.isfinite(out.get("symmetry_score", 0.0)) else 0.0
                 ta = float(thirds_alignment[pos]) if np.isfinite(thirds_alignment[pos]) else 0.0
