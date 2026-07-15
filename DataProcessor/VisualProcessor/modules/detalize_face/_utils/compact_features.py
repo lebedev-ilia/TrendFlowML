@@ -76,10 +76,10 @@ def extract_compact_features(face_feature: Dict[str, Any]) -> np.ndarray:
     features.extend([eye_opening_left_norm, eye_opening_right_norm])
     
     # 5. mouth_opening_ratio (1 dim)
+    # Используем mouth_aspect_ratio (height/width, ~0.0–0.5 в норме), ранее был баг:
+    # mouth_area / (mouth_width * 10) = π*h/40 > 1 на реальных лицах → всегда clip=1.0
     lip_reading = face_feature.get("lip_reading", {})
-    mouth_area = lip_reading.get("mouth_area", 0.0)
-    mouth_width = lip_reading.get("mouth_width", 1.0)
-    mouth_opening_ratio = np.clip(mouth_area / max(mouth_width * 10.0, 1e-6), 0.0, 1.0)
+    mouth_opening_ratio = float(np.clip(lip_reading.get("mouth_aspect_ratio", 0.0), 0.0, 1.0))
     features.append(mouth_opening_ratio)
     
     # 6. face_size_rel (1 dim)

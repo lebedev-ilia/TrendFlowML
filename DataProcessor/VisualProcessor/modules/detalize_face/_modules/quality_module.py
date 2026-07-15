@@ -61,27 +61,21 @@ class QualityModule(FaceModule):
             0.0, 1.0
         ))
 
-        # --- Улучшенный occlusion_score ---
-        # Оцениваем по fraction of landmarks with low confidence + visible mouth/eyes fraction
-        occlusion_proxy = 0.0
-        if coords is not None:
-            # Используем detection_confidence как proxy для confidence landmarks
-            low_conf_fraction = 1.0 - detection_confidence
-            
-            # Проверяем видимость ключевых частей лица (рот, глаза)
-            # Упрощенная версия: если landmarks доступны, считаем что части видны
-            visible_parts_fraction = detection_confidence  # Можно улучшить, анализируя конкретные landmarks
-            
-            occlusion_proxy = float(np.clip(
-                low_conf_fraction * 0.6 + (1.0 - visible_parts_fraction) * 0.4,
-                0.0, 1.0
-            ))
-        else:
-            # Fallback: используем face_visibility_ratio
-            frame_area = frame_shape[0] * frame_shape[1]
-            face_area = max((bbox[2] - bbox[0]), 1) * max((bbox[3] - bbox[1]), 1)
-            ratio = face_area / max(frame_area, 1)
-            occlusion_proxy = float(np.clip(1.0 - ratio, 0.0, 1.0))
+        # --- occlusion_proxy: геометрический расчёт по bbox и frame_shape ---
+        # Старая версия (БАГИ): использовала detection_confidence=0.9 (хардкодированное значение)
+        # → occlusion_proxy всегда = 0.1 (константа). Заменено на геометрический proxy.
+        # Геометрический proxy: доля bbox, выходящая за пределы кадра (обрезанная часть лица)
+        frame_h, frame_w = frame_shape[0], frame_shape[1]
+        x_min, y_min, x_max, y_max = bbox[0], bbox[1], bbox[2], bbox[3]
+        # Обрезанная ширина и высота
+        clipped_x_min = max(x_min, 0)
+        clipped_y_min = max(y_min, 0)
+        clipped_x_max = min(x_max, frame_w)
+        clipped_y_max = min(y_max, frame_h)
+        face_area = max((x_max - x_min) * (y_max - y_min), 1e-6)
+        visible_area = max((clipped_x_max - clipped_x_min), 0) * max((clipped_y_max - clipped_y_min), 0)
+        # occlusion = доля обрезанной площади (0=полностью видно, 1=полностью вне кадра)
+        occlusion_proxy = float(np.clip(1.0 - visible_area / face_area, 0.0, 1.0))
 
         # --- Combined "quality proxy" score (стандартизованная шкала [0..1]) ---
         quality_proxy_score = float(np.clip(
