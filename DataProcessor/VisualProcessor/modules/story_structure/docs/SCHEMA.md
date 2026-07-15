@@ -40,6 +40,11 @@
 - `feature_names (F,) object`
 - `feature_values (F,) float32` — fixed order (see code: `_FEATURE_NAMES_V1`)
 
+**Важные замечания по табличным фичам:**
+- `climax_frame_index` — **union-domain frame id** (тот же домен, что `frame_indices`; значение может быть до ~max_union_idx). Это **не** позиция 0..N-1 в seq-массиве. Downstream должен маппировать через `np.where(frame_indices == climax_frame_index)[0]` для получения seq-позиции.
+- `hook_to_avg_energy_ratio` — Sharpe-style ratio: `mean(hook_energy_z) / (std(energy_z) + eps)`. Знаменатель — std z-score кривой (≠ mean, который ≈0 для z-score). Значения ∈ ~[-50, 50] на реальных видео.
+- `topic_shift_*` — NaN/пустые при `topic_shift_curve_present=False` (нет OCR/text deps): это ожидаемо, не баг.
+
 ### Analytics / debug
 
 - peaks arrays (`story_energy_peaks_*`, `topic_shift_peaks_idx`)

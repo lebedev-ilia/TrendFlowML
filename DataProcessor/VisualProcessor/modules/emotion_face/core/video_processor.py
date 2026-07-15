@@ -1333,7 +1333,9 @@ class EmotionFaceModule(BaseModule):
 
         # Batched inference
         if crops:
-            results = predict_emonet_batch(crops, model, batch_size=None, use_amp=True, temperature=1.0, face_confidence=None)
+            # use_amp управляется env EMOTION_FACE_USE_AMP (default True; =0 для golden fp32).
+            _use_amp = os.environ.get("EMOTION_FACE_USE_AMP", "1").strip() not in ("0", "false", "no")
+            results = predict_emonet_batch(crops, model, batch_size=None, use_amp=_use_amp, temperature=1.0, face_confidence=None)
             for r, (i, slot) in zip(results, crop_map):
                 valence_faces[i, slot] = float(r.get("valence", np.nan))
                 arousal_faces[i, slot] = float(r.get("arousal", np.nan))
@@ -1360,7 +1362,13 @@ class EmotionFaceModule(BaseModule):
         emotion_confidence = np.nanmean(conf_faces, axis=1).astype(np.float32)
         emotion_probs = np.nanmean(probs_faces, axis=1).astype(np.float32)  # (N,8)
         intensity = np.sqrt(np.square(valence) + np.square(arousal)).astype(np.float32)
-        dominant_id = np.nanargmax(emotion_probs, axis=1).astype(np.int8) if emotion_probs.size else np.zeros((N,), dtype=np.int8)
+        # Защита от all-NaN строк (вырожденный crop → все probs NaN → nanargmax ValueError).
+        # Фикс 2026-07-16: dominant=-1 для непроцессируемых строк.
+        dominant_id = np.full(N, -1, dtype=np.int8)
+        if emotion_probs.size:
+            valid_rows = ~np.all(np.isnan(emotion_probs), axis=1)
+            if valid_rows.any():
+                dominant_id[valid_rows] = np.nanargmax(emotion_probs[valid_rows], axis=1).astype(np.int8)
 
         sequence_features = {
             "frame_indices": fi,
@@ -1862,10 +1870,11 @@ class EmotionFaceModule(BaseModule):
                 results["axis_source"] = axis_source_obj
 
                 # Keyframes (baseline: enabled; derived from valence/arousal)
+                # Фикс 2026-07-16: seq → seq_proc, times_s → times_s_proc (определены выше в ok-пути).
                 try:
-                    v = np.asarray(seq.get("valence"), dtype=np.float32).reshape(-1)
-                    a = np.asarray(seq.get("arousal"), dtype=np.float32).reshape(-1)
-                    ts = np.asarray(times_s, dtype=np.float32).reshape(-1)
+                    v = np.asarray(seq_proc.get("valence"), dtype=np.float32).reshape(-1)
+                    a = np.asarray(seq_proc.get("arousal"), dtype=np.float32).reshape(-1)
+                    ts = np.asarray(times_s_proc, dtype=np.float32).reshape(-1)
                     # Используем safe_array_check для проверки пустых массивов
                     if safe_array_check(v) and safe_array_check(a) and safe_array_check(ts) and v.size >= 3 and a.size == v.size and ts.size == v.size:
                         # Convert min-distance in seconds to a frame distance using median dt (no fps).

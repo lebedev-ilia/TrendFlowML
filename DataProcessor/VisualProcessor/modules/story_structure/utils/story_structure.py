@@ -535,11 +535,14 @@ class StoryStructureBaselineModule(BaseModule):
         else:
             time_from_hook_to_climax = float("nan")
 
-        # hook energy ratio (raw combined, not z)
+        # hook energy ratio: mean(hook_z) / (std(combined_z) + eps) — Sharpe-style.
+        # Audit 2026-07-16: знаменатель был mean(combined_s)≈0 (z-score по построению) → ±862k.
+        # Исправление: знаменатель = std(combined_s) + eps (нормировка на волатильность — корректна
+        # для z-score контекста и даёт конечные значения ~±50).
         if combined_s.size and np.any(hook_mask):
             hook_energy = float(np.mean(combined_s[hook_mask]))
-            avg_energy = float(np.mean(combined_s))
-            hook_to_avg_energy_ratio = float(hook_energy / (avg_energy + 1e-6))
+            energy_std = float(np.std(combined_s)) if combined_s.size > 1 else 0.0
+            hook_to_avg_energy_ratio = float(hook_energy / (energy_std + 1e-6))
         else:
             hook_to_avg_energy_ratio = float("nan")
 
