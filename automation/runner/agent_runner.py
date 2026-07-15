@@ -74,7 +74,7 @@ def _options(component: str, mode: str) -> ClaudeAgentOptions:
         ],
         permission_mode="bypassPermissions",
         max_turns=config.MAX_TURNS_PER_COMPONENT,
-        hooks={"PreToolUse": [HookMatcher(matcher="Bash", hooks=[hooks.guard_bash])]},
+        hooks={"PreToolUse": [HookMatcher(matcher="Bash", hooks=[hooks.guard_bash_worker])]},
     )
 
 

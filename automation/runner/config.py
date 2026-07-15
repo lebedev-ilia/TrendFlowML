@@ -36,6 +36,7 @@ AGENT1_CHAT_LOG = STATE_DIR / "agent1_chat.log"  # исходящие/входя
 AGENT2_BUSY_FLAG = STATE_DIR / "agent2_busy.json"        # агент 2 сейчас отвечает агенту 1 (не владельцу)
 ASSISTANT_STOP_REQUEST = STATE_DIR / "assistant_stop_request.json"   # агент 2 просит аккуратный стоп агента 1
 ASSISTANT_START_REQUEST = STATE_DIR / "assistant_start_request.json"  # агент 2 просит рестарт агента 1
+LIVE_NOTE_FILE = STATE_DIR / "live_note.json"    # сообщение агенту 1 БЕЗ остановки (см. hooks.py)
 HOOK_DECISIONS_LOG = STATE_DIR / "hook_decisions.log"     # вердикты супервайзера по опасным bash-командам
 
 # --- VK ---

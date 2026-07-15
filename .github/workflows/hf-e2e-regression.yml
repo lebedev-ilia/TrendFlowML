@@ -1,0 +1,92 @@
+# HF videos11 E2E regression: fixture gate (ubuntu) + optional artifact verify (self-hosted).
+# Fixture: backend/tests/fixtures/hf_videos11_results.json
+# Full verify needs storage/result_store on the runner (local GPU E2E host).
+
+name: HF E2E Regression
+
+on:
+  push:
+    branches: [main, master]
+    paths:
+      - 'backend/scripts/e2e_verify_hf_results.py'
+      - 'backend/scripts/e2e_run_hf_videos11.py'
+      - 'backend/scripts/e2e_validate_output_quality.py'
+      - 'backend/scripts/e2e_validate_full_green.py'
+      - 'backend/tests/fixtures/hf_videos11_results.json'
+      - 'backend/tests/unit/test_hf_videos11_results_fixture.py'
+      - 'example/hf_videos11/manifest.json'
+      - '.github/workflows/hf-e2e-regression.yml'
+  pull_request:
+    branches: [main, master]
+    paths:
+      - 'backend/scripts/e2e_verify_hf_results.py'
+      - 'backend/scripts/e2e_run_hf_videos11.py'
+      - 'backend/scripts/e2e_validate_output_quality.py'
+      - 'backend/scripts/e2e_validate_full_green.py'
+      - 'backend/tests/fixtures/hf_videos11_results.json'
+      - 'backend/tests/unit/test_hf_videos11_results_fixture.py'
+      - 'example/hf_videos11/manifest.json'
+      - '.github/workflows/hf-e2e-regression.yml'
+  workflow_dispatch:
+    inputs:
+      verify_artifacts:
+        description: Run full §0.1+§0.2 verify on self-hosted (needs result_store)
+        type: boolean
+        default: true
+  schedule:
+    - cron: '0 4 * * 0' # weekly Sunday 04:00 UTC
+
+jobs:
+  fixture-gate:
+    name: HF results fixture
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: backend
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+
+      - name: Install test dependencies
+        run: |
+          python -m pip install --upgrade pip
+          pip install -r requirements.txt
+
+      - name: HF videos11 fixture contract
+        run: pytest tests/unit/test_hf_videos11_results_fixture.py -v
+
+  artifact-verify:
+    name: HF §0.1+§0.2 verify (self-hosted)
+    needs: fixture-gate
+    if: github.event_name == 'workflow_dispatch' && inputs.verify_artifacts
+    runs-on: [self-hosted, gpu]
+    timeout-minutes: 120
+    defaults:
+      run:
+        working-directory: backend
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Verify HF runs (core_identity)
+        env:
+          HF_RESULTS_JSON: tests/fixtures/hf_videos11_results.json
+        run: |
+          set -Eeuo pipefail
+          source scripts/e2e_env.sh
+          source .venv/bin/activate
+          export DP_MODELS_ROOT="${E2E_REPO_ROOT}/DataProcessor/dp_models/bundled_models"
+          if [[ ! -x "${E2E_REPO_ROOT}/DataProcessor/.data_venv/bin/python" ]]; then
+            echo "WARN: DataProcessor .data_venv missing — §0.2 skipped"
+            python scripts/e2e_verify_hf_results.py \
+              --results "$HF_RESULTS_JSON" \
+              --with-core-identity \
+              --skip-missing-runs
+            exit 0
+          fi
+          python scripts/e2e_verify_hf_results.py \
+            --results "$HF_RESULTS_JSON" \
+            --with-core-identity

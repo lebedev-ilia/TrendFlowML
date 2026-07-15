@@ -12,6 +12,7 @@ import asyncio
 import time
 from dataclasses import dataclass, field
 
+import config
 import messenger
 import settings
 
@@ -78,6 +79,8 @@ HELP = (
     "/ssc [текст] — старт с чтением контекста прошлой сессии\n"
     "/sas <N> [%] [-m 'сообщение'] — ночной режим: N авто-сессий, стоп на % лимита\n"
     "/sas-stop — выключить ночной режим\n"
+    "/note <текст> — передать заметку Первому агенту БЕЗ остановки сессии (доставится на следующем "
+    "Bash-вызове, обычно секунды)\n"
     "/verify <компонент> — независимая верификация\n"
     "/model [opus|sonnet|haiku|fable|...] — сменить модель (со следующей сессии)\n"
     "/settings [ключ значение] — показать/изменить настройки (лимиты и т.д.)\n"
@@ -171,6 +174,19 @@ async def _handle_command(text: str):
     elif low == "/sas-stop":
         STATE.auto_left = 0
         messenger.send("🌙 Ночной режим выключен (текущая сессия доработает).")
+    elif low.startswith("/note"):
+        note_text = text.split(None, 1)[1].strip() if len(text.split(None, 1)) > 1 else ""
+        if not note_text:
+            messenger.send("Формат: /note <текст>. Доставится Первому агенту БЕЗ остановки сессии "
+                           "(через хук на следующем Bash-вызове, обычно секунды) — если сессия сейчас "
+                           "не активна, ляжет и подождёт следующей.")
+        else:
+            import json as _json
+            config.LIVE_NOTE_FILE.write_text(_json.dumps(
+                {"text": note_text, "from": "владельца"}, ensure_ascii=False, indent=2), encoding="utf-8")
+            messenger.send("📨 Заметка принята, доставлю Первому агенту без остановки сессии "
+                           "(на следующем Bash-вызове)." if STATE.session_active else
+                           "📨 Заметка сохранена — сессия сейчас не активна, доставится при следующем старте.")
     elif low.startswith("/verify"):
         comp = text.split(None, 1)[1].strip() if len(text.split(None, 1)) > 1 else ""
         if not comp:

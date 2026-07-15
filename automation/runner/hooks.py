@@ -1,13 +1,23 @@
-"""PreToolUse-хук для Bash (общий для Первого и Второго агента): два барьера.
+"""PreToolUse-хук для Bash. Две функции:
 
+guard_bash — общая защита (используют ОБА агента):
 1) Изменение подов в обход pod_control — запрещено (deny).
 2) Потенциально разрушительные/дорогие команды — требуют вердикта Второго агента (supervisor.answer())
    (агент работает с bypassPermissions, поэтому это единственная защита от rm -rf, скачивания
    гигабайтов на volume, git push и т.п. — вспомни инцидент с 85 ГБ HF-снапшота). Вердикты логируются
    в state/hook_decisions.log.
+
+guard_bash_worker — то же + доставка живой заметки (state/live_note.json) Первому агенту БЕЗ
+остановки сессии: хук срабатывает на КАЖДЫЙ Bash-вызов (а Первый агент вызывает Bash постоянно),
+поэтому это надёжный способ подсунуть сообщение через systemMessage — SDK не даёт чисто вклиниться
+в активный query()/receive_response() без interrupt() (который обрывает текущий шаг), а через хук
+можно добавить контекст, НЕ прерывая и не блокируя текущий вызов. Доставка — с задержкой до
+следующего Bash-вызова (обычно секунды). Используется ТОЛЬКО в agent_runner.py (не в assistant.py) —
+иначе Второй агент рискует случайно съесть свою же заметку раньше Первого (общий файл, гонка).
 """
 from __future__ import annotations
 import datetime as dt
+import json
 import re
 
 import config
@@ -20,6 +30,35 @@ def _log_decision(command: str, reason: str, verdict: str) -> None:
             f.write(f"{dt.datetime.now().isoformat()} | {reason} | {verdict} | {command[:200]}\n")
     except Exception:
         pass
+
+
+def _pending_note() -> str | None:
+    """Забрать (и удалить) ожидающую заметку Первому агенту, если есть. Формат файла:
+    {"text": "...", "from": "Второй агент"} — пишет hub.py (/note) или assistant.py."""
+    if not config.LIVE_NOTE_FILE.exists():
+        return None
+    try:
+        data = json.loads(config.LIVE_NOTE_FILE.read_text(encoding="utf-8"))
+    except Exception:
+        data = {}
+    try:
+        config.LIVE_NOTE_FILE.unlink()
+    except Exception:
+        pass
+    text = (data.get("text") or "").strip()
+    if not text:
+        return None
+    who = data.get("from") or "владельца"
+    return (f"📨 Сообщение от {who} (сессию НЕ прерывай, работу над текущим шагом не бросай — "
+            f"просто учти и, если применимо, скорректируй план): {text}")
+
+
+def _with_note(result: dict, note: str | None) -> dict:
+    if not note:
+        return result
+    result = dict(result)
+    result["systemMessage"] = note
+    return result
 
 # --- (1) мутации RunPod мимо pod_control ---
 _PODS = re.compile(r"rest\.runpod\.io/v1/pods", re.I)
@@ -44,6 +83,8 @@ _HEAVY = re.compile(r"\bssh\b|run_[a-z_]*\.py|\bpytest\b|\bffmpeg\b|snapshot_dow
 
 
 async def guard_bash(input_data, tool_use_id, context):
+    """Общая защита от опасных/подовых команд. Используют ОБА агента (Первый через
+    guard_bash_worker ниже, Второй — напрямую в assistant.py/supervisor.py)."""
     if input_data.get("tool_name") != "Bash":
         return {}
     command = (input_data.get("tool_input") or {}).get("command", "")
@@ -78,6 +119,16 @@ async def guard_bash(input_data, tool_use_id, context):
                 return {}  # allow
             return _deny(f"Супервайзер не разрешил ({reason}): {verdict[:300]}")
     return {}
+
+
+async def guard_bash_worker(input_data, tool_use_id, context):
+    """То же самое + доставка живой заметки (state/live_note.json) владельца/Второго агента.
+    ТОЛЬКО для Первого агента (agent_runner.py)! Если подключить и Второму агенту — он рискует
+    съесть свою же заметку раньше Первого при собственных Bash-вызовах (тот же файл, гонка)."""
+    result = await guard_bash(input_data, tool_use_id, context)
+    if input_data.get("tool_name") != "Bash":
+        return result
+    return _with_note(result, _pending_note())
 
 
 def _deny(reason: str):
