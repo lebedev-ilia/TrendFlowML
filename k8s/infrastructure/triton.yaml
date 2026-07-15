@@ -1,0 +1,67 @@
+# Triton Inference Server for ONNX models (CLIP, MiDaS, RAFT, Places365, YOLO...).
+# The Triton model repository (DataProcessor/triton/models) is provided via the
+# shared models-pvc (downloaded by the model-download Job alongside the weights).
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: triton
+  namespace: trendflow
+  labels: { app: triton }
+spec:
+  replicas: 1
+  selector:
+    matchLabels: { app: triton }
+  template:
+    metadata:
+      labels: { app: triton }
+    spec:
+      priorityClassName: trendflow-gpu-high
+      nodeSelector:
+        accelerator: nvidia-gpu
+      tolerations:
+      - { key: "nvidia.com/gpu", operator: "Exists", effect: "NoSchedule" }
+      containers:
+      - name: triton
+        image: nvcr.io/nvidia/tritonserver:24.05-py3
+        args:
+          - tritonserver
+          - --model-repository=/models/DataProcessor/triton/models
+          - --model-control-mode=poll
+          - --repository-poll-secs=30
+        ports:
+        - { containerPort: 8000, name: http }
+        - { containerPort: 8001, name: grpc }
+        - { containerPort: 8002, name: metrics }
+        resources:
+          requests: { cpu: "2", memory: "8Gi", nvidia.com/gpu: 1 }
+          limits:   { cpu: "4", memory: "16Gi", nvidia.com/gpu: 1 }
+        readinessProbe:
+          httpGet: { path: /v2/health/ready, port: 8000 }
+          initialDelaySeconds: 30
+          periodSeconds: 10
+        livenessProbe:
+          httpGet: { path: /v2/health/live, port: 8000 }
+          initialDelaySeconds: 60
+          periodSeconds: 30
+        volumeMounts:
+        - { name: models, mountPath: /models, readOnly: true }
+      volumes:
+      - name: models
+        persistentVolumeClaim: { claimName: models-pvc }
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: triton
+  namespace: trendflow
+  labels: { app: triton }
+  annotations:
+    prometheus.io/scrape: "true"
+    prometheus.io/port: "8002"
+spec:
+  selector: { app: triton }
+  ports:
+  - { name: http, port: 8000, targetPort: 8000 }
+  - { name: grpc, port: 8001, targetPort: 8001 }
+  - { name: metrics, port: 8002, targetPort: 8002 }

@@ -1,0 +1,41 @@
+# HPA for DataProcessor.
+#
+# API scales on CPU. Worker pods hold a GPU each, so CPU/memory util is a poor
+# scaling signal — prefer scaling the worker on the Redis queue depth via a
+# custom/external metric (dataprocessor_queue_length from Prometheus Adapter or
+# KEDA). A conservative CPU-based HPA is provided as a starting point; switch to
+# the queue-based trigger once Prometheus Adapter / KEDA is installed.
+---
+apiVersion: autoscaling/v2
+kind: HorizontalPodAutoscaler
+metadata:
+  name: dataprocessor-api-hpa
+  namespace: trendflow
+spec:
+  scaleTargetRef: { apiVersion: apps/v1, kind: Deployment, name: dataprocessor-api }
+  minReplicas: 2
+  maxReplicas: 8
+  metrics:
+  - type: Resource
+    resource: { name: cpu, target: { type: Utilization, averageUtilization: 70 } }
+---
+apiVersion: autoscaling/v2
+kind: HorizontalPodAutoscaler
+metadata:
+  name: dataprocessor-worker-hpa
+  namespace: trendflow
+spec:
+  scaleTargetRef: { apiVersion: apps/v1, kind: Deployment, name: dataprocessor-worker }
+  minReplicas: 1
+  maxReplicas: 16          # bounded by available GPUs in the cluster
+  metrics:
+  # Preferred (requires Prometheus Adapter exposing this as an external metric):
+  # - type: External
+  #   external:
+  #     metric: { name: dataprocessor_queue_length }
+  #     target: { type: AverageValue, averageValue: "5" }
+  - type: Resource
+    resource: { name: cpu, target: { type: Utilization, averageUtilization: 75 } }
+  behavior:
+    scaleDown: { stabilizationWindowSeconds: 600 }
+    scaleUp:   { stabilizationWindowSeconds: 30 }

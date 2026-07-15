@@ -1,0 +1,21 @@
+#!/usr/bin/env bash
+# E2E/dev shim: delegate to imageio-ffmpeg bundled binary when system ffmpeg is absent.
+set -euo pipefail
+PY="${TRENDFLOW_DATA_VENV_PYTHON:-}"
+if [[ -z "$PY" || ! -x "$PY" ]]; then
+  REPO_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
+  PY="$REPO_ROOT/DataProcessor/.data_venv/bin/python"
+fi
+if [[ ! -x "$PY" ]]; then
+  PY=python3
+fi
+exec "$PY" - "$@" <<'PY'
+import os, sys
+try:
+    import imageio_ffmpeg
+    exe = imageio_ffmpeg.get_ffmpeg_exe()
+except Exception as exc:
+    sys.stderr.write(f"ffmpeg shim: imageio_ffmpeg unavailable ({exc})\n")
+    sys.exit(127)
+os.execv(exe, ["ffmpeg", *sys.argv[1:]])
+PY

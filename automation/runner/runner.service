@@ -1,0 +1,18 @@
+[Unit]
+Description=TrendFlow autonomous component-validation runner
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=ilya
+WorkingDirectory=/home/ilya/Рабочий стол/TrendFlowML/automation/runner
+# Путь содержит пробел/кириллицу — запускаем через bash -lc с кавычками, чтобы systemd не спотыкался.
+ExecStart=/bin/bash -lc 'cd "/home/ilya/Рабочий стол/TrendFlowML/automation/runner" && exec .venv/bin/python agent_runner.py'
+Restart=on-failure
+RestartSec=30
+StartLimitIntervalSec=600
+StartLimitBurst=5
+
+[Install]
+WantedBy=multi-user.target

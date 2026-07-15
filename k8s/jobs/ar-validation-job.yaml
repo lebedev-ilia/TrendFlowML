@@ -1,0 +1,85 @@
+# GPU-Job: валидация компонента action_recognition (Segmenter → core_object_detections[+tracker]
+# → action_recognition v3) на реальных клипах. Гоняет `DataProcessor/scripts/run_ar_local.py`
+# на GPU по каждому входному видео из /io/input, кладёт артефакты в /io/output/<video_id>/.
+#
+# Предпосылки:
+#   - models-pvc заполнен (job model-download из infrastructure/models.yaml);
+#   - ar-validation-io PVC заполнен входными .mp4 (см. run_ar_validation.sh / README);
+#   - GPU-ноды с label accelerator=nvidia-gpu (как dataprocessor-worker).
+# Параметры — через env FIXTURES (список файлов), SECONDS (0=полный клип), FPS, DEVICE.
+apiVersion: batch/v1
+kind: Job
+metadata:
+  name: ar-validation
+  namespace: trendflow
+  labels: { app: action-recognition, component: validation }
+spec:
+  backoffLimit: 1
+  ttlSecondsAfterFinished: 86400
+  template:
+    metadata:
+      labels: { app: action-recognition, component: validation }
+    spec:
+      restartPolicy: Never
+      priorityClassName: trendflow-gpu-high
+      nodeSelector:
+        accelerator: nvidia-gpu
+      tolerations:
+      - { key: "nvidia.com/gpu", operator: "Exists", effect: "NoSchedule" }
+      initContainers:
+      - name: wait-for-models
+        image: trendflow-dataprocessor:latest
+        imagePullPolicy: IfNotPresent
+        command: ["/bin/sh","-c"]
+        args:
+          - |
+            for i in $(seq 1 120); do
+              [ -d "$DP_MODELS_ROOT/visual" ] && exit 0; sleep 10;
+            done; echo "models not found (run model-download Job)"; exit 1
+        env:
+        - { name: DP_MODELS_ROOT, value: /models/DataProcessor/dp_models }
+        volumeMounts:
+        - { name: models, mountPath: /models, readOnly: true }
+      containers:
+      - name: ar-validation
+        image: trendflow-dataprocessor:latest
+        imagePullPolicy: Always
+        workingDir: /app
+        command: ["/bin/bash","-c"]
+        args:
+          - |
+            set -euo pipefail
+            echo "GPU:"; nvidia-smi -L || true
+            mkdir -p /io/output
+            : "${FIXTURES:=ar_real_4m35_people.mp4 ar_real_8m00_people.mp4 ar_real_2m47_control_nopeople.mp4}"
+            : "${SECONDS_LIMIT:=0}"; : "${FPS:=25}"; : "${DEVICE:=cuda}"
+            for f in $FIXTURES; do
+              vid="${f%.mp4}"
+              echo "=== $vid ==="
+              python DataProcessor/scripts/run_ar_local.py \
+                --video "/io/input/$f" --video-id "$vid" \
+                --seconds "$SECONDS_LIMIT" --fps "$FPS" --device "$DEVICE" \
+                --workdir "/io/output/$vid" || echo "FAILED $vid (продолжаем)"
+              # освобождаем кадры, оставляем npz/summary/log/validators
+              rm -rf "/io/output/$vid/seg" "/io/output/$vid/clip.mp4" 2>/dev/null || true
+            done
+            echo "DONE. Артефакты в /io/output/"
+        env:
+        - { name: DP_MODELS_ROOT, value: /models/DataProcessor/dp_models }
+        - { name: PYTHONUNBUFFERED, value: "1" }
+        # Переопределяемо при apply: FIXTURES/SECONDS_LIMIT/FPS/DEVICE
+        - { name: FIXTURES, value: "ar_real_4m35_people.mp4 ar_real_8m00_people.mp4 ar_real_2m47_control_nopeople.mp4" }
+        - { name: SECONDS_LIMIT, value: "0" }
+        - { name: FPS, value: "25" }
+        - { name: DEVICE, value: "cuda" }
+        resources:
+          requests: { cpu: "4", memory: "16Gi", nvidia.com/gpu: 1 }
+          limits:   { cpu: "8", memory: "32Gi", nvidia.com/gpu: 1 }
+        volumeMounts:
+        - { name: models, mountPath: /models, readOnly: true }
+        - { name: io, mountPath: /io }
+      volumes:
+      - name: models
+        persistentVolumeClaim: { claimName: models-pvc }
+      - name: io
+        persistentVolumeClaim: { claimName: ar-validation-io }

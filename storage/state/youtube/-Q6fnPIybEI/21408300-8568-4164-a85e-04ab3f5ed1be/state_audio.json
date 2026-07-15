@@ -1,0 +1,23 @@
+{
+  "schema_version": "state_processor_v1",
+  "processor": {
+    "name": "audio",
+    "status": "error",
+    "started_at": "2026-07-01T05:17:20Z",
+    "finished_at": "2026-07-01T05:17:27Z",
+    "duration_ms": 7697,
+    "error": "exit=1: ^ · File \"/home/ilya/Рабочий стол/TrendFlowML/DataProcessor/AudioProcessor/src/core/extractor_runner.py\", line 915, in run_extractors · raise RuntimeError(f\"AudioProcessor | extractor '{key}' initialization failed: {init_error}\") from init_error · RuntimeError: AudioProcessor | extractor 'asr' initialization failed: ASR | failed to resolve/load whisper inprocess model via ModelManager: weights_missing: Required model file is missing | details={'model_name': 'whisper_small_inprocess', 'path': 'audio/whisper/small.pt', 'resolved': '/home/ilya/Рабочий стол/TrendFlowML/DataProcessor/dp_models/bundled_models/audio/whisper/small.pt'}",
+    "error_code": "non_zero_exit"
+  },
+  "run": {
+    "platform_id": "youtube",
+    "video_id": "-Q6fnPIybEI",
+    "run_id": "21408300-8568-4164-a85e-04ab3f5ed1be",
+    "config_hash": "2cbdb5822efbebe1",
+    "sampling_policy_version": "v1",
+    "dataprocessor_version": "unknown",
+    "created_at": "2026-07-01T05:17:19Z"
+  },
+  "components": {},
+  "updated_at": "2026-07-01T05:17:27Z"
+}

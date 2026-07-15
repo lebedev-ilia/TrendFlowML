@@ -1,0 +1,23 @@
+{
+  "schema_version": "state_processor_v1",
+  "processor": {
+    "name": "audio",
+    "status": "error",
+    "started_at": "2026-07-01T04:03:08Z",
+    "finished_at": "2026-07-01T04:03:13Z",
+    "duration_ms": 4623,
+    "error": "exit=2: AudioProcessor | [ 90%] Validating artifact (0.01s, total: 2.07s) · AudioProcessor | [ 95%] Updating manifest (0.00s, total: 2.08s) · AudioProcessor | [ 98%] Updating manifest (0.00s, total: 2.08s) · AudioProcessor | [ 85%] Validating artifact (0.00s, total: 2.08s) · AudioProcessor | [ 90%] Validating artifact (0.02s, total: 2.10s) · AudioProcessor | [ 95%] Updating manifest (0.00s, total: 2.11s) · AudioProcessor | [ 98%] Updating manifest (0.00s, total: 2.11s) · AudioProcessor | [ 85%] Saving NPZ artifacts (2.11s, total: 2.11s) · AudioProcessor | [100%] Complete (2.11s, total: 2.11s) · AudioProcessor | [100%] Complete · AudioProcessor | overall_ok=False, returning exit code 2 · AudioProcessor | ERROR: overall_ok=False, returning exit code 2 · AudioProcessor | Extractors with errors: spectral_extractor (key=spectral), loudness_extractor (key=loudness), chroma_extractor (key=chroma), quality_extractor (key=quality), rhythmic_extractor (key=rhythmic), emotion_diarization_extractor (key=emotion_diarization), clap_extractor (key=clap), mel_extractor (key=mel), mfcc_extractor (key=mfcc), asr_extractor (key=asr), speaker_diarization_extractor (key=speaker_diarization), pitch_extractor (key=pitch), onset_extractor (key=onset), source_separation_extractor (key=source_separation), hpss_extractor (key=hpss), tempo_extractor (key=tempo), band_energy_extractor (key=band_energy), spectra…",
+    "error_code": "non_zero_exit"
+  },
+  "run": {
+    "platform_id": "youtube",
+    "video_id": "-Q6fnPIybEI",
+    "run_id": "ca16f81f-ddda-45cf-aa46-cbf83f02b081",
+    "config_hash": "e976f0f056164c42",
+    "sampling_policy_version": "v1",
+    "dataprocessor_version": "unknown",
+    "created_at": "2026-07-01T04:03:08Z"
+  },
+  "components": {},
+  "updated_at": "2026-07-01T04:03:13Z"
+}

@@ -1,0 +1,171 @@
+{
+  "version": "detector_taxonomy_v1_final",
+  "num_classes": 41,
+  "model": "yolo11x_41_best.pt",
+  "labels": [
+    {
+      "id": 0,
+      "name": "person"
+    },
+    {
+      "id": 1,
+      "name": "crowd"
+    },
+    {
+      "id": 2,
+      "name": "car"
+    },
+    {
+      "id": 3,
+      "name": "motorcycle"
+    },
+    {
+      "id": 4,
+      "name": "bicycle"
+    },
+    {
+      "id": 5,
+      "name": "bus"
+    },
+    {
+      "id": 6,
+      "name": "truck"
+    },
+    {
+      "id": 7,
+      "name": "pet"
+    },
+    {
+      "id": 8,
+      "name": "sports_ball"
+    },
+    {
+      "id": 9,
+      "name": "phone"
+    },
+    {
+      "id": 10,
+      "name": "laptop"
+    },
+    {
+      "id": 11,
+      "name": "tablet"
+    },
+    {
+      "id": 12,
+      "name": "smartwatch"
+    },
+    {
+      "id": 13,
+      "name": "watch"
+    },
+    {
+      "id": 14,
+      "name": "headphones"
+    },
+    {
+      "id": 15,
+      "name": "camera"
+    },
+    {
+      "id": 16,
+      "name": "microphone"
+    },
+    {
+      "id": 17,
+      "name": "game_controller"
+    },
+    {
+      "id": 18,
+      "name": "tv_device"
+    },
+    {
+      "id": 19,
+      "name": "monitor_device"
+    },
+    {
+      "id": 20,
+      "name": "clothing_top"
+    },
+    {
+      "id": 21,
+      "name": "clothing_bottom"
+    },
+    {
+      "id": 22,
+      "name": "outerwear"
+    },
+    {
+      "id": 23,
+      "name": "suit"
+    },
+    {
+      "id": 24,
+      "name": "dress"
+    },
+    {
+      "id": 25,
+      "name": "shoes"
+    },
+    {
+      "id": 26,
+      "name": "bag"
+    },
+    {
+      "id": 27,
+      "name": "hat"
+    },
+    {
+      "id": 28,
+      "name": "glasses"
+    },
+    {
+      "id": 29,
+      "name": "ring"
+    },
+    {
+      "id": 30,
+      "name": "bracelet"
+    },
+    {
+      "id": 31,
+      "name": "earrings"
+    },
+    {
+      "id": 32,
+      "name": "pendant"
+    },
+    {
+      "id": 33,
+      "name": "logo_region"
+    },
+    {
+      "id": 34,
+      "name": "text_region"
+    },
+    {
+      "id": 35,
+      "name": "cosmetics_product"
+    },
+    {
+      "id": 36,
+      "name": "screen_phone"
+    },
+    {
+      "id": 37,
+      "name": "screen_laptop"
+    },
+    {
+      "id": 38,
+      "name": "screen_monitor"
+    },
+    {
+      "id": 39,
+      "name": "tv_screen"
+    },
+    {
+      "id": 40,
+      "name": "food_item"
+    }
+  ]
+}

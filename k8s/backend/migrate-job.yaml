@@ -1,0 +1,48 @@
+# Backend DB migrations (task 5 / P8). Run before/with backend rollout.
+# Idempotent: `alembic upgrade head` is safe to re-run. With Helm this would be a
+# pre-install/pre-upgrade hook; with plain kustomize, apply and let it complete
+# (backend tolerates running against an already-migrated DB).
+apiVersion: batch/v1
+kind: Job
+metadata:
+  name: backend-migrate
+  namespace: trendflow
+  labels: { app: backend, component: migrate }
+spec:
+  backoffLimit: 5
+  ttlSecondsAfterFinished: 86400
+  template:
+    metadata:
+      labels: { app: backend, component: migrate }
+    spec:
+      restartPolicy: OnFailure
+      containers:
+      - name: migrate
+        image: trendflow-backend:latest
+        imagePullPolicy: IfNotPresent
+        workingDir: /srv/backend
+        command: ["/bin/sh", "-c"]
+        args:
+          - |
+            set -e
+            echo "[migrate] waiting for postgres..."
+            python - <<'PY'
+            import os, time, urllib.parse, socket
+            dsn = os.environ["TF_BACKEND_DB_DSN"]
+            host = urllib.parse.urlparse(dsn.replace("postgresql+psycopg","postgresql")).hostname or "postgres"
+            for _ in range(60):
+                try:
+                    socket.create_connection((host, 5432), timeout=2).close(); break
+                except OSError:
+                    time.sleep(2)
+            PY
+            echo "[migrate] alembic upgrade head"
+            alembic upgrade head
+            echo "[migrate] done"
+        env:
+        - name: TF_BACKEND_DB_DSN
+          valueFrom:
+            secretKeyRef: { name: app-secrets, key: database-url }
+        resources:
+          requests: { cpu: "100m", memory: "256Mi" }
+          limits:   { cpu: "500m", memory: "512Mi" }

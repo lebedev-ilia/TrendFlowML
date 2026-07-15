@@ -1,0 +1,82 @@
+# Embedding Service (task A1 / multi-node blocker): faiss + category-менеджеры
+# (brand/car/face/place). Semantic-хеды DataProcessor ходят сюда по HTTP.
+# Запускается в образе DataProcessor (код ES внутри). Зависит от Postgres (БД
+# `embeddings`) и Triton (CLIP-эмбеддинги). FAISS-индексы — на персистентном PVC.
+---
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata:
+  name: embedding-faiss-pvc
+  namespace: trendflow
+spec:
+  accessModes: ["ReadWriteOnce"]      # ES = 1 реплика (faiss в процессе)
+  resources: { requests: { storage: 5Gi } }
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: embedding-service
+  namespace: trendflow
+  labels: { app: embedding-service }
+spec:
+  replicas: 1                          # faiss in-process -> один инстанс
+  strategy: { type: Recreate }         # RWO PVC: не два пода одновременно
+  selector:
+    matchLabels: { app: embedding-service }
+  template:
+    metadata:
+      labels: { app: embedding-service }
+      annotations:
+        prometheus.io/scrape: "true"
+        prometheus.io/path: "/metrics"
+        prometheus.io/port: "8005"
+    spec:
+      initContainers:
+      # Создать БД `embeddings` в общем Postgres (идемпотентно).
+      - name: create-db
+        image: postgres:15-alpine
+        env:
+        - { name: PGPASSWORD, valueFrom: { secretKeyRef: { name: app-secrets, key: postgres-password } } }
+        command: ["/bin/sh","-c"]
+        args:
+          - |
+            until pg_isready -h postgres -U trendflow; do echo "wait pg"; sleep 2; done
+            psql -h postgres -U trendflow -tc "SELECT 1 FROM pg_database WHERE datname='embeddings'" | grep -q 1 \
+              || psql -h postgres -U trendflow -c "CREATE DATABASE embeddings"
+            echo "embeddings db ready"
+      containers:
+      - name: embedding-service
+        image: trendflow-dataprocessor:latest
+        imagePullPolicy: Always
+        workingDir: /app
+        command: ["python", "embedding_service/run_server.py"]
+        ports:
+        - { containerPort: 8005, name: http }
+        env:
+        - { name: EMBEDDING_SERVICE_HOST, value: "0.0.0.0" }
+        - { name: EMBEDDING_SERVICE_PORT, value: "8005" }
+        - { name: POSTGRES_HOST, value: "postgres" }
+        - { name: POSTGRES_PORT, value: "5432" }
+        - { name: POSTGRES_DB, value: "embeddings" }
+        - { name: POSTGRES_USER, value: "trendflow" }
+        - { name: POSTGRES_PASSWORD, valueFrom: { secretKeyRef: { name: app-secrets, key: postgres-password } } }
+        - { name: TRITON_BASE_URL, value: "http://triton:8000" }
+        - { name: FAISS_INDEX_PATH, value: "/faiss" }
+        - { name: STORAGE_TYPE, value: "local" }
+        - { name: STORAGE_LOCAL_PATH, value: "/faiss/storage" }
+        resources:
+          requests: { cpu: "500m", memory: "1Gi" }
+          limits:   { cpu: "2", memory: "4Gi" }
+        readinessProbe:
+          httpGet: { path: /health, port: 8005 }
+          initialDelaySeconds: 15
+          periodSeconds: 10
+        livenessProbe:
+          httpGet: { path: /health, port: 8005 }
+          initialDelaySeconds: 40
+          periodSeconds: 30
+        volumeMounts:
+        - { name: faiss, mountPath: /faiss }
+      volumes:
+      - name: faiss
+        persistentVolumeClaim: { claimName: embedding-faiss-pvc }

@@ -1,0 +1,22 @@
+apiVersion: v1
+kind: Service
+metadata:
+  name: dataprocessor
+  namespace: trendflow
+  labels: { app: dataprocessor, component: api }
+spec:
+  selector: { app: dataprocessor, component: api }
+  ports:
+  - { name: http, port: 8002, targetPort: 8000 }   # cluster-internal API on :8002 (matches e2e convention)
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: dataprocessor-worker-metrics
+  namespace: trendflow
+  labels: { app: dataprocessor, component: worker }
+spec:
+  clusterIP: None              # headless: lets Prometheus scrape every worker pod
+  selector: { app: dataprocessor, component: worker }
+  ports:
+  - { name: metrics, port: 8001, targetPort: 8001 }

@@ -1,0 +1,3 @@
+{"ts": "2026-06-30T13:44:07Z", "scope": "run", "event": "init"}
+{"ts": "2026-06-30T13:44:07Z", "scope": "processor", "processor": "segmenter", "status": "running", "error_code": null}
+{"ts": "2026-06-30T13:44:07Z", "scope": "processor", "processor": "segmenter", "status": "success", "error_code": null}

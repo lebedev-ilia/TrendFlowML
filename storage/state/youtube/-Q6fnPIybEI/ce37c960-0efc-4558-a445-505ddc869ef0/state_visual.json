@@ -1,0 +1,438 @@
+{
+  "schema_version": "state_processor_v1",
+  "processor": {
+    "name": "visual",
+    "status": "success",
+    "started_at": "2026-07-01T04:52:22Z",
+    "finished_at": "2026-07-01T04:53:28Z",
+    "duration_ms": 66107,
+    "error": null,
+    "error_code": null
+  },
+  "run": {
+    "platform_id": "youtube",
+    "video_id": "-Q6fnPIybEI",
+    "run_id": "ce37c960-0efc-4558-a445-505ddc869ef0",
+    "config_hash": "446ec6652db72a5c",
+    "sampling_policy_version": "v1",
+    "dataprocessor_version": "unknown",
+    "created_at": "2026-07-01T04:51:34Z"
+  },
+  "components": {
+    "brand_semantics": {
+      "name": "brand_semantics",
+      "status": "error",
+      "artifacts": [],
+      "error": "subprocess exit 1 (python): /home/ilya/Рабочий стол/TrendFlowML/DataProcessor/VisualProcessor/core/model_process/core_identity/brand_semantics/main.py:149: DeprecationWarning: datetime.datetime.utcnow() is deprecated and scheduled for removal in a future version. Use timezone-aware objects to represent datetimes in UTC: datetime.datetime.now(datetime.UTC). · \"ts\": datetime.utcnow().isoformat() + \"Z\", · Traceback (most recent call last): · File \"/home/ilya/Рабочий стол/TrendFlowML/DataProcessor/VisualProcessor/core/model_process/core_identity/brand_semantics/main.py\", line 971, in <module> · raise SystemExit(main()) · ~~~~^^ · File \"/home/ilya/Рабочий стол/TrendFlowML/DataProcessor/VisualProcessor/core/model_process/core_identity/brand_semantics/main.py\", line 517, in main · raise RuntimeError( · f\"{NAME} | proposal_classes not found in core_object_detections taxonomy: {missing}\" · ) · RuntimeError: brand_semantics | proposal_classes not found in core_object_detections taxonomy: ['logo_region', 'text_region']",
+      "error_code": "component_failed",
+      "notes": null,
+      "device_used": "cpu",
+      "started_at": "2026-07-01T04:52:51Z",
+      "finished_at": "2026-07-01T04:52:51Z",
+      "duration_ms": 336,
+      "updated_at": "2026-07-01T04:53:28Z"
+    },
+    "car_semantics": {
+      "name": "car_semantics",
+      "status": "empty",
+      "artifacts": [
+        {
+          "path": "car_semantics/car_semantics.npz",
+          "type": "npz"
+        }
+      ],
+      "error": null,
+      "error_code": null,
+      "notes": null,
+      "device_used": "cpu",
+      "started_at": "2026-07-01T04:52:51Z",
+      "finished_at": "2026-07-01T04:52:51Z",
+      "duration_ms": 440,
+      "updated_at": "2026-07-01T04:53:28Z"
+    },
+    "content_domain": {
+      "name": "content_domain",
+      "status": "error",
+      "artifacts": [],
+      "error": "subprocess exit 1 (python): /home/ilya/Рабочий стол/TrendFlowML/DataProcessor/VisualProcessor/core/model_process/core_identity/content_domain/main.py:424: DeprecationWarning: datetime.datetime.utcnow() is deprecated and scheduled for removal in a future version. Use timezone-aware objects to represent datetimes in UTC: datetime.datetime.now(datetime.UTC). · \"ts\": datetime.utcnow().isoformat() + \"Z\", · Traceback (most recent call last): · File \"/home/ilya/Рабочий стол/TrendFlowML/DataProcessor/VisualProcessor/core/model_process/core_identity/content_domain/main.py\", line 825, in <module> · raise SystemExit(main()) · ~~~~^^ · File \"/home/ilya/Рабочий стол/TrendFlowML/DataProcessor/VisualProcessor/core/model_process/core_identity/content_domain/main.py\", line 557, in main · clip_npz = _load_npz(core_clip_path) · File \"/home/ilya/Рабочий стол/TrendFlowML/DataProcessor/VisualProcessor/core/model_process/core_identity/content_domain/main.py\", line 85, in _load_npz · raise RuntimeError(f\"{NAME} | required artifact not found: {path}\") · RuntimeError: content_domain | required artifact not found: /home/ilya/Рабочий стол/TrendFlowML/storage/result_store/youtube/-Q6fnPIybEI/ce37c960-0efc-4558-a445-505ddc869ef0/core_clip/embeddings.npz",
+      "error_code": "component_failed",
+      "notes": null,
+      "device_used": "cuda",
+      "started_at": "2026-07-01T04:52:28Z",
+      "finished_at": "2026-07-01T04:52:28Z",
+      "duration_ms": 212,
+      "updated_at": "2026-07-01T04:53:28Z"
+    },
+    "core_clip": {
+      "name": "core_clip",
+      "status": "error",
+      "artifacts": [],
+      "error": "subprocess exit 1 (python): /home/ilya/Рабочий стол/TrendFlowML/DataProcessor/VisualProcessor/core/model_process/core_clip/main.py:147: DeprecationWarning: datetime.datetime.utcnow() is deprecated and scheduled for removal in a future version. Use timezone-aware objects to represent datetimes in UTC: datetime.datetime.now(datetime.UTC). · \"ts\": datetime.utcnow().isoformat() + \"Z\", · 2026-07-01 14:52:26,520 \u001b[92mINFO\u001b[0m: core_clip | sampled frames: 12 / total=30 · /home/ilya/Рабочий стол/TrendFlowML/DataProcessor/VisualProcessor/core/model_process/core_clip/main.py:177: DeprecationWarning: datetime.datetime.utcnow() is deprecated and scheduled for removal in a future version. Use timezone-aware objects to represent datetimes in UTC: datetime.datetime.now(datetime.UTC). · \"ts\": datetime.utcnow().isoformat() + \"Z\", · 2026-07-01 14:52:27,648 \u001b[92mINFO\u001b[0m: core_clip | processed 12/12 · Traceback (most recent call last): · File \"/home/ilya/Рабочий стол/TrendFlowML/DataProcessor/VisualProcessor/core/model_process/core_clip/main.py\", line 1434, in <module> · main() · ~~~~^^ · File \"/home/ilya/Рабочий стол/TrendFlowML/DataProcessor/VisualProcessor/core/model_process/core_clip/main.py\", line 1039, in main · import clip # type: ignore · ^^^^^^^^^^^ · ModuleNotFoundError: No module named 'clip'",
+      "error_code": "component_failed",
+      "notes": null,
+      "device_used": "cuda",
+      "started_at": "2026-07-01T04:52:24Z",
+      "finished_at": "2026-07-01T04:52:28Z",
+      "duration_ms": 3181,
+      "updated_at": "2026-07-01T04:53:28Z"
+    },
+    "core_depth_midas": {
+      "name": "core_depth_midas",
+      "status": "success",
+      "artifacts": [
+        {
+          "path": "core_depth_midas/depth.npz",
+          "type": "npz"
+        }
+      ],
+      "error": null,
+      "error_code": null,
+      "notes": null,
+      "device_used": "cuda",
+      "started_at": "2026-07-01T04:52:28Z",
+      "finished_at": "2026-07-01T04:52:37Z",
+      "duration_ms": 8898,
+      "updated_at": "2026-07-01T04:53:28Z"
+    },
+    "core_face_landmarks": {
+      "name": "core_face_landmarks",
+      "status": "empty",
+      "artifacts": [
+        {
+          "path": "core_face_landmarks/landmarks.npz",
+          "type": "npz"
+        }
+      ],
+      "error": null,
+      "error_code": null,
+      "notes": null,
+      "device_used": "cpu",
+      "started_at": "2026-07-01T04:52:51Z",
+      "finished_at": "2026-07-01T04:53:00Z",
+      "duration_ms": 8552,
+      "updated_at": "2026-07-01T04:53:28Z"
+    },
+    "core_object_detections": {
+      "name": "core_object_detections",
+      "status": "empty",
+      "artifacts": [
+        {
+          "path": "core_object_detections/detections.npz",
+          "type": "npz"
+        }
+      ],
+      "error": null,
+      "error_code": null,
+      "notes": null,
+      "device_used": "cuda",
+      "started_at": "2026-07-01T04:52:37Z",
+      "finished_at": "2026-07-01T04:52:43Z",
+      "duration_ms": 6383,
+      "updated_at": "2026-07-01T04:53:28Z"
+    },
+    "core_optical_flow": {
+      "name": "core_optical_flow",
+      "status": "success",
+      "artifacts": [
+        {
+          "path": "core_optical_flow/flow.npz",
+          "type": "npz"
+        }
+      ],
+      "error": null,
+      "error_code": null,
+      "notes": null,
+      "device_used": "cuda",
+      "started_at": "2026-07-01T04:53:01Z",
+      "finished_at": "2026-07-01T04:53:08Z",
+      "duration_ms": 7518,
+      "updated_at": "2026-07-01T04:53:28Z"
+    },
+    "face_identity": {
+      "name": "face_identity",
+      "status": "success",
+      "artifacts": [],
+      "error": null,
+      "error_code": null,
+      "notes": null,
+      "device_used": "cpu",
+      "started_at": "2026-07-01T04:53:18Z",
+      "finished_at": "2026-07-01T04:53:18Z",
+      "duration_ms": 347,
+      "updated_at": "2026-07-01T04:53:28Z"
+    },
+    "franchise_recognition": {
+      "name": "franchise_recognition",
+      "status": "error",
+      "artifacts": [],
+      "error": "subprocess exit 1 (python): /home/ilya/Рабочий стол/TrendFlowML/DataProcessor/VisualProcessor/core/model_process/core_identity/franchise_recognition/main.py:145: DeprecationWarning: datetime.datetime.utcnow() is deprecated and scheduled for removal in a future version. Use timezone-aware objects to represent datetimes in UTC: datetime.datetime.now(datetime.UTC). · \"ts\": datetime.utcnow().isoformat() + \"Z\", · Traceback (most recent call last): · File \"/home/ilya/Рабочий стол/TrendFlowML/DataProcessor/VisualProcessor/core/model_process/core_identity/franchise_recognition/main.py\", line 1159, in <module> · raise SystemExit(main()) · ~~~~^^ · File \"/home/ilya/Рабочий стол/TrendFlowML/DataProcessor/VisualProcessor/core/model_process/core_identity/franchise_recognition/main.py\", line 417, in main · clip_npz = _load_npz(core_clip_path) · File \"/home/ilya/Рабочий стол/TrendFlowML/DataProcessor/VisualProcessor/core/model_process/core_identity/franchise_recognition/main.py\", line 194, in _load_npz · raise RuntimeError(f\"{NAME} | required artifact not found: {path}\") · RuntimeError: franchise_recognition | required artifact not found: /home/ilya/Рабочий стол/TrendFlowML/storage/result_store/youtube/-Q6fnPIybEI/ce37c960-0efc-4558-a445-505ddc869ef0/core_clip/embeddings.npz",
+      "error_code": "component_failed",
+      "notes": null,
+      "device_used": "cuda",
+      "started_at": "2026-07-01T04:53:19Z",
+      "finished_at": "2026-07-01T04:53:19Z",
+      "duration_ms": 334,
+      "updated_at": "2026-07-01T04:53:28Z"
+    },
+    "place_semantics": {
+      "name": "place_semantics",
+      "status": "error",
+      "artifacts": [],
+      "error": "subprocess exit 1 (python): /home/ilya/Рабочий стол/TrendFlowML/DataProcessor/VisualProcessor/core/model_process/core_identity/place_semantics/main.py:135: DeprecationWarning: datetime.datetime.utcnow() is deprecated and scheduled for removal in a future version. Use timezone-aware objects to represent datetimes in UTC: datetime.datetime.now(datetime.UTC). · \"ts\": datetime.utcnow().isoformat() + \"Z\", · Traceback (most recent call last): · File \"/home/ilya/Рабочий стол/TrendFlowML/DataProcessor/VisualProcessor/core/model_process/core_identity/place_semantics/main.py\", line 969, in <module> · raise SystemExit(main()) · ~~~~^^ · File \"/home/ilya/Рабочий стол/TrendFlowML/DataProcessor/VisualProcessor/core/model_process/core_identity/place_semantics/main.py\", line 407, in main · clip_npz = _load_npz(core_clip_path) · File \"/home/ilya/Рабочий стол/TrendFlowML/DataProcessor/VisualProcessor/core/model_process/core_identity/place_semantics/main.py\", line 184, in _load_npz · raise RuntimeError(f\"{NAME} | required artifact not found: {path}\") · RuntimeError: place_semantics | required artifact not found: /home/ilya/Рабочий стол/TrendFlowML/storage/result_store/youtube/-Q6fnPIybEI/ce37c960-0efc-4558-a445-505ddc869ef0/core_clip/embeddings.npz",
+      "error_code": "component_failed",
+      "notes": null,
+      "device_used": "cpu",
+      "started_at": "2026-07-01T04:53:19Z",
+      "finished_at": "2026-07-01T04:53:20Z",
+      "duration_ms": 341,
+      "updated_at": "2026-07-01T04:53:28Z"
+    },
+    "action_recognition": {
+      "name": "action_recognition",
+      "status": "error",
+      "artifacts": [],
+      "error": "subprocess exit 1 (python): Traceback (most recent call last): · File \"/home/ilya/Рабочий стол/TrendFlowML/DataProcessor/VisualProcessor/modules/action_recognition/main.py\", line 67, in <module> · _spec.loader.exec_module(_ar_mod) · ~~~~~~~~~~~~~~~~~~~~~~~~^^^^^^^^^ · File \"<frozen importlib._bootstrap_external>\", line 759, in exec_module · File \"<frozen importlib._bootstrap>\", line 491, in _call_with_frames_removed · File \"/home/ilya/Рабочий стол/TrendFlowML/DataProcessor/VisualProcessor/modules/action_recognition/utils/action_recognition_slowfast.py\", line 49, in <module> · from sklearn.decomposition import PCA · ModuleNotFoundError: No module named 'sklearn'",
+      "error_code": "component_failed",
+      "notes": null,
+      "device_used": "cuda",
+      "started_at": "2026-07-01T04:52:43Z",
+      "finished_at": "2026-07-01T04:52:51Z",
+      "duration_ms": 7261,
+      "updated_at": "2026-07-01T04:53:28Z"
+    },
+    "behavioral": {
+      "name": "behavioral",
+      "status": "empty",
+      "artifacts": [
+        {
+          "path": "behavioral/behavioral_features.npz",
+          "type": "npz"
+        }
+      ],
+      "error": null,
+      "error_code": null,
+      "notes": null,
+      "device_used": "cpu",
+      "started_at": "2026-07-01T04:53:00Z",
+      "finished_at": "2026-07-01T04:53:01Z",
+      "duration_ms": 527,
+      "updated_at": "2026-07-01T04:53:28Z"
+    },
+    "color_light": {
+      "name": "color_light",
+      "status": "error",
+      "artifacts": [],
+      "error": "subprocess exit 1 (python): Traceback (most recent call last): · File \"/home/ilya/Рабочий стол/TrendFlowML/DataProcessor/VisualProcessor/modules/color_light/main.py\", line 29, in <module> · from modules.color_light.utils.processor import ColorLightProcessor · File \"/home/ilya/Рабочий стол/TrendFlowML/DataProcessor/VisualProcessor/modules/color_light/utils/processor.py\", line 28, in <module> · from sklearn.cluster import KMeans · ModuleNotFoundError: No module named 'sklearn'",
+      "error_code": "component_failed",
+      "notes": null,
+      "device_used": "cpu",
+      "started_at": "2026-07-01T04:53:24Z",
+      "finished_at": "2026-07-01T04:53:25Z",
+      "duration_ms": 1063,
+      "updated_at": "2026-07-01T04:53:28Z"
+    },
+    "cut_detection": {
+      "name": "cut_detection",
+      "status": "error",
+      "artifacts": [],
+      "error": "subprocess exit 1 (python): Traceback (most recent call last): · File \"/home/ilya/Рабочий стол/TrendFlowML/DataProcessor/VisualProcessor/modules/cut_detection/main.py\", line 33, in <module> · from modules.cut_detection.utils.cut_detection import CutDetectionPipeline · File \"/home/ilya/Рабочий стол/TrendFlowML/DataProcessor/VisualProcessor/modules/cut_detection/utils/cut_detection.py\", line 60, in <module> · from skimage.metrics import structural_similarity as ssim · ModuleNotFoundError: No module named 'skimage'",
+      "error_code": "component_failed",
+      "notes": null,
+      "device_used": "auto",
+      "started_at": "2026-07-01T04:53:08Z",
+      "finished_at": "2026-07-01T04:53:14Z",
+      "duration_ms": 5686,
+      "updated_at": "2026-07-01T04:53:28Z"
+    },
+    "detalize_face": {
+      "name": "detalize_face",
+      "status": "error",
+      "artifacts": [],
+      "error": "subprocess exit 1 (python): File \"/home/ilya/Рабочий стол/TrendFlowML/DataProcessor/VisualProcessor/modules/detalize_face/main.py\", line 22, in <module> · from modules.detalize_face.utils.detalize_face_refactored import DetalizeFaceModule # type: ignore · ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^ · File \"/home/ilya/Рабочий стол/TrendFlowML/DataProcessor/VisualProcessor/modules/detalize_face/utils/detalize_face_refactored.py\", line 29, in <module> · from _modules import MODULE_REGISTRY · File \"/home/ilya/Рабочий стол/TrendFlowML/DataProcessor/VisualProcessor/modules/detalize_face/_modules/__init__.py\", line 6, in <module> · from .geometry_module import GeometryModule · File \"/home/ilya/Рабочий стол/TrendFlowML/DataProcessor/VisualProcessor/modules/detalize_face/_modules/geometry_module.py\", line 10, in <module> · from _utils.landmarks_utils import LANDMARKS · File \"/home/ilya/Рабочий стол/TrendFlowML/DataProcessor/VisualProcessor/modules/detalize_face/_utils/__init__.py\", line 8, in <module> · from .compression_utils import LandmarkCompressor, simple_landmark_projection · File \"/home/ilya/Рабочий стол/TrendFlowML/DataProcessor/VisualProcessor/modules/detalize_face/_utils/compression_utils.py\", line 7, in <module> · from sklearn.decomposition import PCA · ModuleNotFoundError: No module named 'sklearn'",
+      "error_code": "component_failed",
+      "notes": null,
+      "device_used": "cpu",
+      "started_at": "2026-07-01T04:53:14Z",
+      "finished_at": "2026-07-01T04:53:14Z",
+      "duration_ms": 261,
+      "updated_at": "2026-07-01T04:53:28Z"
+    },
+    "emotion_face": {
+      "name": "emotion_face",
+      "status": "empty",
+      "artifacts": [
+        {
+          "path": "emotion_face/emotion_face.npz",
+          "type": "npz"
+        }
+      ],
+      "error": null,
+      "error_code": null,
+      "notes": null,
+      "device_used": "cuda",
+      "started_at": "2026-07-01T04:53:14Z",
+      "finished_at": "2026-07-01T04:53:18Z",
+      "duration_ms": 3767,
+      "updated_at": "2026-07-01T04:53:28Z"
+    },
+    "frames_composition": {
+      "name": "frames_composition",
+      "status": "empty",
+      "artifacts": [
+        {
+          "path": "frames_composition/frames_composition.npz",
+          "type": "npz"
+        }
+      ],
+      "error": null,
+      "error_code": null,
+      "notes": null,
+      "device_used": "cpu",
+      "started_at": "2026-07-01T04:53:18Z",
+      "finished_at": "2026-07-01T04:53:19Z",
+      "duration_ms": 315,
+      "updated_at": "2026-07-01T04:53:28Z"
+    },
+    "high_level_semantic": {
+      "name": "high_level_semantic",
+      "status": "error",
+      "artifacts": [],
+      "error": "subprocess exit 4 (python): File \"/home/ilya/Рабочий стол/TrendFlowML/DataProcessor/VisualProcessor/modules/high_level_semantic/utils/hl_semantic.py\", line 576, in process · core_clip = fut_core.result() · File \"/usr/lib/python3.14/concurrent/futures/_base.py\", line 443, in result · return self.__get_result() · ~~~~~~~~~~~~~~~~~^^ · File \"/usr/lib/python3.14/concurrent/futures/_base.py\", line 395, in __get_result · raise self._exception · File \"/usr/lib/python3.14/concurrent/futures/thread.py\", line 86, in run · result = ctx.run(self.task) · File \"/usr/lib/python3.14/concurrent/futures/thread.py\", line 73, in run · return fn(*args, **kwargs) · File \"/home/ilya/Рабочий стол/TrendFlowML/DataProcessor/VisualProcessor/modules/high_level_semantic/utils/hl_semantic.py\", line 515, in _load_core_clip · raise RuntimeError(\"high_level_semantic | failed to load core_clip\") · RuntimeError: high_level_semantic | failed to load core_clip",
+      "error_code": "component_failed",
+      "notes": null,
+      "device_used": "cpu",
+      "started_at": "2026-07-01T04:53:19Z",
+      "finished_at": "2026-07-01T04:53:19Z",
+      "duration_ms": 212,
+      "updated_at": "2026-07-01T04:53:28Z"
+    },
+    "micro_emotion": {
+      "name": "micro_emotion",
+      "status": "error",
+      "artifacts": [],
+      "error": "subprocess exit 1 (python): Traceback (most recent call last): · File \"/home/ilya/Рабочий стол/TrendFlowML/DataProcessor/VisualProcessor/modules/micro_emotion/main.py\", line 34, in <module> · from modules.micro_emotion.utils.micro_emotion_processor import MicroEmotionModule # type: ignore · ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^ · File \"/home/ilya/Рабочий стол/TrendFlowML/DataProcessor/VisualProcessor/modules/micro_emotion/utils/micro_emotion_processor.py\", line 24, in <module> · import pandas as pd · ModuleNotFoundError: No module named 'pandas'",
+      "error_code": "component_failed",
+      "notes": null,
+      "device_used": "cuda",
+      "started_at": "2026-07-01T04:53:19Z",
+      "finished_at": "2026-07-01T04:53:19Z",
+      "duration_ms": 175,
+      "updated_at": "2026-07-01T04:53:28Z"
+    },
+    "optical_flow": {
+      "name": "optical_flow",
+      "status": "success",
+      "artifacts": [
+        {
+          "path": "optical_flow/optical_flow.npz",
+          "type": "npz"
+        }
+      ],
+      "error": null,
+      "error_code": null,
+      "notes": null,
+      "device_used": "cpu",
+      "started_at": "2026-07-01T04:53:19Z",
+      "finished_at": "2026-07-01T04:53:19Z",
+      "duration_ms": 200,
+      "updated_at": "2026-07-01T04:53:28Z"
+    },
+    "scene_classification": {
+      "name": "scene_classification",
+      "status": "error",
+      "artifacts": [],
+      "error": "subprocess exit 4 (python): 2026-07-01 14:53:23,216 \u001b[93mWARNING\u001b[0m: scene_classification | Не найдено результатов для core провайдера core_clip · 2026-07-01 14:53:23,216 \u001b[91mERROR\u001b[0m: Fatal error в scene_classification: scene_classification | core_clip is required but not found (no-fallback) · Traceback (most recent call last): · File \"/home/ilya/Рабочий стол/TrendFlowML/DataProcessor/VisualProcessor/modules/scene_classification/main.py\", line 143, in main · saved_path = classifier.run(frames_dir=args.frames_dir, config=config) · File \"/home/ilya/Рабочий стол/TrendFlowML/DataProcessor/VisualProcessor/modules/scene_classification/utils/scene_classification.py\", line 1793, in run · results = self.process(frame_manager=fm, frame_indices=frame_indices, config=config or {}) · File \"/home/ilya/Рабочий стол/TrendFlowML/DataProcessor/VisualProcessor/modules/scene_classification/utils/scene_classification.py\", line 515, in process · self._load_core_clip_dependency() · ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~^^ · File \"/home/ilya/Рабочий стол/TrendFlowML/DataProcessor/VisualProcessor/modules/scene_classification/utils/scene_classification.py\", line 581, in _load_core_clip_dependency · raise RuntimeError(\"scene_classification | core_clip is required but not found (no-fallback)\") · RuntimeError: scene_classification | core_clip is required but not found (no-fallback)",
+      "error_code": "component_failed",
+      "notes": null,
+      "device_used": "cuda",
+      "started_at": "2026-07-01T04:53:20Z",
+      "finished_at": "2026-07-01T04:53:24Z",
+      "duration_ms": 3739,
+      "updated_at": "2026-07-01T04:53:28Z"
+    },
+    "shot_quality": {
+      "name": "shot_quality",
+      "status": "error",
+      "artifacts": [],
+      "error": "subprocess exit 2 (python): 2026-07-01 14:53:25,288 \u001b[92mINFO\u001b[0m: shot_quality | device=cuda requested, but implementation is numpy-only (CPU). · 2026-07-01 14:53:25,289 \u001b[92mINFO\u001b[0m: shot_quality | process | Начало обработки: frames=12, device=cuda · 2026-07-01 14:53:25,289 \u001b[93mWARNING\u001b[0m: shot_quality | Не найдено результатов для core провайдера core_clip · 2026-07-01 14:53:25,387 \u001b[91mERROR\u001b[0m: shot_quality | shot_quality | Обязательная зависимость 'cut_detection' не найдена в /home/ilya/Рабочий стол/TrendFlowML/storage/result_store/youtube/-Q6fnPIybEI/ce37c960-0efc-4558-a445-505ddc869ef0/cut_detection · 2026-07-01 14:53:25,387 \u001b[91mERROR\u001b[0m: Файл не найден: shot_quality | Обязательная зависимость 'cut_detection' не найдена в /home/ilya/Рабочий стол/TrendFlowML/storage/result_store/youtube/-Q6fnPIybEI/ce37c960-0efc-4558-a445-505ddc869ef0/cut_detection",
+      "error_code": "component_failed",
+      "notes": null,
+      "device_used": "cpu",
+      "started_at": "2026-07-01T04:53:25Z",
+      "finished_at": "2026-07-01T04:53:25Z",
+      "duration_ms": 302,
+      "updated_at": "2026-07-01T04:53:28Z"
+    },
+    "similarity_metrics": {
+      "name": "similarity_metrics",
+      "status": "error",
+      "artifacts": [],
+      "error": "subprocess exit 2 (python): 2026-07-01 14:53:25,562 \u001b[91mERROR\u001b[0m: Файл не найден: similarity_metrics | missing core_clip embeddings: /home/ilya/Рабочий стол/TrendFlowML/storage/result_store/youtube/-Q6fnPIybEI/ce37c960-0efc-4558-a445-505ddc869ef0/core_clip/embeddings.npz",
+      "error_code": "component_failed",
+      "notes": null,
+      "device_used": "cpu",
+      "started_at": "2026-07-01T04:53:25Z",
+      "finished_at": "2026-07-01T04:53:25Z",
+      "duration_ms": 164,
+      "updated_at": "2026-07-01T04:53:28Z"
+    },
+    "story_structure": {
+      "name": "story_structure",
+      "status": "error",
+      "artifacts": [],
+      "error": "subprocess exit 4 (python): 2026-07-01 14:53:26,550 \u001b[91mERROR\u001b[0m: Fatal error в story_structure: story_structure | too few frames: N=12 < min_frames=30 (no-fallback) · Traceback (most recent call last): · File \"/home/ilya/Рабочий стол/TrendFlowML/DataProcessor/VisualProcessor/modules/story_structure/main.py\", line 81, in main · saved_path = module.run(frames_dir=args.frames_dir, config=config) · File \"/home/ilya/Рабочий стол/TrendFlowML/DataProcessor/VisualProcessor/modules/story_structure/utils/story_structure.py\", line 721, in run · results = self.process(frame_manager=fm, frame_indices=frame_indices, config=config or {}) · File \"/home/ilya/Рабочий стол/TrendFlowML/DataProcessor/VisualProcessor/modules/story_structure/utils/story_structure.py\", line 399, in process · raise RuntimeError(f\"{MODULE_NAME} | too few frames: N={int(fi.size)} < min_frames={int(min_frames)} (no-fallback)\") · RuntimeError: story_structure | too few frames: N=12 < min_frames=30 (no-fallback)",
+      "error_code": "component_failed",
+      "notes": null,
+      "device_used": "cpu",
+      "started_at": "2026-07-01T04:53:25Z",
+      "finished_at": "2026-07-01T04:53:26Z",
+      "duration_ms": 1116,
+      "updated_at": "2026-07-01T04:53:28Z"
+    },
+    "text_scoring": {
+      "name": "text_scoring",
+      "status": "empty",
+      "artifacts": [
+        {
+          "path": "text_scoring/text_scoring.npz",
+          "type": "npz"
+        }
+      ],
+      "error": null,
+      "error_code": null,
+      "notes": null,
+      "device_used": "cpu",
+      "started_at": "2026-07-01T04:53:26Z",
+      "finished_at": "2026-07-01T04:53:27Z",
+      "duration_ms": 1043,
+      "updated_at": "2026-07-01T04:53:28Z"
+    },
+    "uniqueness": {
+      "name": "uniqueness",
+      "status": "error",
+      "artifacts": [],
+      "error": "subprocess exit 2 (python): 2026-07-01 14:53:27,902 \u001b[91mERROR\u001b[0m: Файл не найден: uniqueness | missing core_clip embeddings: /home/ilya/Рабочий стол/TrendFlowML/storage/result_store/youtube/-Q6fnPIybEI/ce37c960-0efc-4558-a445-505ddc869ef0/core_clip/embeddings.npz",
+      "error_code": "component_failed",
+      "notes": null,
+      "device_used": "cpu",
+      "started_at": "2026-07-01T04:53:27Z",
+      "finished_at": "2026-07-01T04:53:27Z",
+      "duration_ms": 171,
+      "updated_at": "2026-07-01T04:53:28Z"
+    },
+    "video_pacing": {
+      "name": "video_pacing",
+      "status": "error",
+      "artifacts": [],
+      "error": "subprocess exit 1 (python): Traceback (most recent call last): · File \"/home/ilya/Рабочий стол/TrendFlowML/DataProcessor/VisualProcessor/modules/video_pacing/main.py\", line 23, in <module> · from modules.video_pacing.utils.video_pacing import VideoPacingModule · File \"/home/ilya/Рабочий стол/TrendFlowML/DataProcessor/VisualProcessor/modules/video_pacing/utils/video_pacing.py\", line 17, in <module> · from skimage.metrics import structural_similarity as ssim · ModuleNotFoundError: No module named 'skimage'",
+      "error_code": "component_failed",
+      "notes": null,
+      "device_used": "cpu",
+      "started_at": "2026-07-01T04:53:27Z",
+      "finished_at": "2026-07-01T04:53:28Z",
+      "duration_ms": 186,
+      "updated_at": "2026-07-01T04:53:28Z"
+    }
+  },
+  "updated_at": "2026-07-01T04:53:28Z"
+}

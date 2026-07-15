@@ -1,0 +1,13 @@
+{
+  "run_id": "644fea6a-122e-4694-ae9d-b42f28934bd3",
+  "platform_id": "youtube",
+  "video_id": "-Q6fnPIybEI",
+  "status": "running",
+  "last_processor": null,
+  "processor_order": [
+    "segmenter",
+    "audio",
+    "text",
+    "visual"
+  ]
+}

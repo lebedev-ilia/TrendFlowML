@@ -1,0 +1,20 @@
+{
+  "timestamp": "2026-07-14T00:35:20",
+  "opus_active": false,
+  "limits": {
+    "browser": {
+      "five_hour_reset": "Resets in 1 hr 51 min",
+      "five_hour_pct": 62,
+      "weekly_reset": "Resets Sat 5:00 PM",
+      "weekly_pct": 73,
+      "fable_pct": 0,
+      "credits_used_usd": 26.56,
+      "credits_reset": "Resets Aug 1",
+      "credits_pct": 30,
+      "ts": 1783927159.142967,
+      "raw": "### https://claude.ai/settings/usage\n\n\n\nNew chat\n\nChats\n\nProjects\n\nArtifacts\n\nCustomize\nProducts\n\n\nCode\n\nDesign\n\nYour chats will show up here\n\n\nIlya Lebedev\nPro plan\nGood evening, Ilya\n\n\n\n\nHow can I help you today?\n\nSonnet 5 Medium\n\n\nWrite\nLearn\nCode\nLife stuff\nClaude’s choice\nSettings\n\nSettings\n\nGeneral\n\nAccount\n\nPrivacy\n\nBilling\n\nUsage\n\nCapabilities\n\nClaude Code\n\nClaude in Chrome\nCustomize\n\nSkills\n\nConnectors\n\nPlugins\n\nPlan usage limits\nPro\nCurrent session\nResets in 1 hr 51 min\n62% used\nWeekly limits\nLearn more about usage limits\nAll models\nResets Sat 5:00 PM\n73% used\nFable\nYou haven’t used Fable yet\n0% used\nLast updated: just now\n\nUsage credits\nTurn on usage credits to keep using Claude if you hit a limit. Learn more\n$26.56 spent\nResets Aug 1\nUnlimited\nMonthly spend limit\nAdjust limit\n-$0.01\nCurrent balance·\nAuto-reload\nOff\nBuy usage credits\nUp to 30% off\n\n### https://claude.ai/settings/billing\n\n\n\nNew chat\n\nChats\n\nProjects\n\nArtifacts\n\nCustomize\nProducts\n\n\nCode\n\nDesign\n\nYour chats will show up here\n\n\nIlya Lebedev\nPro plan\nGood evening, Ilya\n\n\n\n\nHow can I help you today?\n\nSonnet 5 Medium\n\n\nWrite\nLearn\nCode\nLife stuff\nClaude’s choice\nSettings\n\nSettings\n\nGeneral\n\nAccount\n\nPrivacy\n\nBilling\n\nUsage\n\nCapabilities\n\nClaude Code\n\nClaude in Chrome\nCustomize\n\nSkills\n\nConnectors\n\nPlugins\n\nPro plan\n\nMonthly\n\nYour subscription will auto renew on Jul 18, 2026.\n\nAdjust plan\nPayment\n\nMastercard • • • • 8445\n\nUpdate\nUsage credits\nBuy usage credits so your team can keep using Claude if they hit a limit.\n-$0.01\nCurrent balance\nBuy more\nUp to 30% off\nAuto-reload\nAutomatically buy more usage credits when you’re running low\nTurn on\nInvoices\nDate\n\t\nTotal\n\t\nStatus\n\t\nActions\n\n\nJul 7, 2026\n\t\n20 $\n\t\nPaid\n\t\nView\n\n\nJun 18, 2026\n\t\n20 $\n\t\nPaid\n\t\nView\nCancellation\nCancel plan\nCancel\nPayment method\n\nUse a different name on invoices\nCancel\nUpdate"
+    }
+  },
+  "pods": {},
+  "process_running": true
+}

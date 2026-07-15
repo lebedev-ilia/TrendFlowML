@@ -1,0 +1,61 @@
+# Aggregate kustomization for the whole TrendFlow stack.
+#
+#   kubectl apply -k k8s/                 # everything into namespace `trendflow`
+#   kubectl -n trendflow get pods
+#
+# Order of bring-up is handled by readiness probes + the wait-for-models init
+# container; after apply, run the model-download Job (included) once.
+#
+# NOTE: secrets-example.yaml and fetcher/secrets-example.yaml ship DEFAULT creds
+# for staging. For production, remove them here and create real Secrets out-of-band.
+apiVersion: kustomize.config.k8s.io/v1beta1
+kind: Kustomization
+
+namespace: trendflow
+
+resources:
+  # --- namespace + secrets + governance ---
+  - infrastructure/namespace.yaml
+  - secrets-example.yaml
+  - fetcher/secrets-example.yaml
+  - governance.yaml
+  # --- infrastructure ---
+  - infrastructure/postgres.yaml
+  - infrastructure/redis.yaml
+  - infrastructure/minio.yaml
+  - infrastructure/triton.yaml
+  - infrastructure/models.yaml
+  - infrastructure/backups.yaml
+  # --- embedding service ---
+  - embedding_service/deployment.yaml
+  - embedding_service/service.yaml
+  # --- backend ---
+  - backend/configmap.yaml
+  - backend/migrate-job.yaml
+  - backend/deployment.yaml
+  - backend/ingress.yaml
+  # --- dataprocessor ---
+  - dataprocessor/configmap.yaml
+  - dataprocessor/deployment.yaml
+  - dataprocessor/service.yaml
+  - dataprocessor/hpa.yaml
+  - dataprocessor/retention-cronjob.yaml
+  # --- fetcher ---
+  - fetcher/configmap.yaml
+  - fetcher/orchestrator-deployment.yaml
+  - fetcher/orchestrator-service.yaml
+  - fetcher/deployment.yaml
+  - fetcher/hpa.yaml
+  - fetcher/beat-deployment.yaml
+  - fetcher/metadata-worker-deployment.yaml
+  - fetcher/metadata-worker-hpa.yaml
+  - fetcher/comments-worker-deployment.yaml
+  - fetcher/comments-worker-hpa.yaml
+  - fetcher/download-worker-deployment.yaml
+  - fetcher/download-worker-hpa.yaml
+  - fetcher/finalize-worker-deployment.yaml
+
+images:
+  - { name: trendflow-backend, newName: trendflow-backend, newTag: latest }
+  - { name: trendflow-fetcher, newName: trendflow-fetcher, newTag: latest }
+  - { name: trendflow-dataprocessor, newName: trendflow-dataprocessor, newTag: latest }

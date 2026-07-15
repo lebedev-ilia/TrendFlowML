@@ -1,0 +1,84 @@
+# Model provisioning for DataProcessor (task 5 / P1).
+#
+# Strategy: one shared ReadWriteMany PVC holds the model weights + semantic bases
+# in their repo-relative layout (DataProcessor/dp_models/..., DataProcessor/
+# VisualProcessor/.../known_*). A one-shot Job downloads them with
+# `download_models.py`. DataProcessor pods mount this PVC read-only and point
+# DP_MODELS_ROOT at it; the dp_models *code* still comes from the image.
+#
+# RWX REQUIREMENT: `models-pvc` must be ReadWriteMany so every node's pods can
+# read it. Use an RWX-capable StorageClass (NFS, CephFS, Longhorn, AWS EFS,
+# GCP Filestore, Azure Files). Set it below.
+---
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata:
+  name: models-pvc
+  namespace: trendflow
+spec:
+  accessModes:
+    - ReadWriteMany            # REQUIRED for multi-node read
+  # storageClassName: nfs-client   # <-- set your RWX storage class
+  resources:
+    requests:
+      storage: 10Gi            # unified repo is ~3.4 GB; headroom for new models
+---
+apiVersion: batch/v1
+kind: Job
+metadata:
+  name: model-download
+  namespace: trendflow
+  labels:
+    app: dataprocessor
+    component: model-download
+spec:
+  backoffLimit: 3
+  ttlSecondsAfterFinished: 86400
+  template:
+    metadata:
+      labels:
+        app: dataprocessor
+        component: model-download
+    spec:
+      restartPolicy: OnFailure
+      containers:
+      - name: download
+        image: trendflow-dataprocessor:latest   # same image as DP (has download_models.py)
+        imagePullPolicy: IfNotPresent
+        env:
+        # Optional: only needed if the HF repo is private.
+        - name: HF_TOKEN
+          valueFrom:
+            secretKeyRef:
+              name: app-secrets
+              key: hf-token
+              optional: true
+        command: ["/bin/sh", "-c"]
+        args:
+          - |
+            set -e
+            echo "[model-download] fetching manifest from HF repo..."
+            python - <<'PY'
+            import os, urllib.request
+            tok = os.environ.get("HF_TOKEN") or os.environ.get("HUGGINGFACE_HUB_TOKEN")
+            url = "https://huggingface.co/datasets/Ilialebedev/trendflow_models/resolve/main/models_manifest.json"
+            req = urllib.request.Request(url, headers={"Authorization": f"Bearer {tok}"} if tok else {})
+            open("/tmp/models_manifest.json","wb").write(urllib.request.urlopen(req).read())
+            print("manifest saved")
+            PY
+            echo "[model-download] downloading into /models ..."
+            python /app/scripts/download_models.py \
+              --manifest /tmp/models_manifest.json \
+              --repo-root /models \
+              --jobs 8
+            echo "[model-download] done."
+        volumeMounts:
+        - name: models
+          mountPath: /models
+        resources:
+          requests: { cpu: "1", memory: "1Gi" }
+          limits:   { cpu: "2", memory: "2Gi" }
+      volumes:
+      - name: models
+        persistentVolumeClaim:
+          claimName: models-pvc

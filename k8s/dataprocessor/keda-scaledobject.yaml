@@ -1,0 +1,38 @@
+# OPTIONAL: queue-based autoscaling for the GPU worker via KEDA.
+# Requires KEDA installed in the cluster (https://keda.sh).
+#
+# NOTE: KEDA creates its own HPA for the target Deployment. Do NOT run this at the
+# same time as `dataprocessor-worker-hpa` (in hpa.yaml) — remove that HPA first.
+# This file is intentionally NOT in kustomization.yaml; apply it explicitly:
+#   kubectl delete hpa dataprocessor-worker-hpa -n trendflow
+#   kubectl apply -f k8s/dataprocessor/keda-scaledobject.yaml
+---
+apiVersion: keda.sh/v1alpha1
+kind: ScaledObject
+metadata:
+  name: dataprocessor-worker-scaler
+  namespace: trendflow
+spec:
+  scaleTargetRef:
+    name: dataprocessor-worker
+  minReplicaCount: 1
+  maxReplicaCount: 16            # bounded by GPUs available / ResourceQuota
+  cooldownPeriod: 300
+  pollingInterval: 15
+  triggers:
+  # Scale on pending/backlog in the Redis Streams queues consumed by workers
+  # (queue:high / queue:normal / queue:low, consumer group "workers").
+  - type: redis-streams
+    metadata:
+      address: "redis:6379"
+      stream: "queue:normal"
+      consumerGroup: "workers"
+      pendingEntriesCount: "5"    # target pending per replica
+      enableTLS: "false"
+  - type: redis-streams
+    metadata:
+      address: "redis:6379"
+      stream: "queue:high"
+      consumerGroup: "workers"
+      pendingEntriesCount: "2"
+      enableTLS: "false"

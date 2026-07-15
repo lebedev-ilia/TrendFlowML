@@ -1,0 +1,23 @@
+{
+  "schema_version": "state_processor_v1",
+  "processor": {
+    "name": "audio",
+    "status": "error",
+    "started_at": "2026-07-01T06:48:27Z",
+    "finished_at": "2026-07-01T06:49:16Z",
+    "duration_ms": 49097,
+    "error": "exit=2: AudioProcessor | [ 90%] Validating artifact (0.01s, total: 29.85s) · AudioProcessor | [ 95%] Updating manifest (0.00s, total: 29.87s) · AudioProcessor | [ 98%] Updating manifest (0.00s, total: 29.87s) · AudioProcessor | [ 85%] Validating artifact (0.00s, total: 29.87s) · AudioProcessor | [ 90%] Validating artifact (0.00s, total: 29.87s) · AudioProcessor | [ 95%] Updating manifest (0.00s, total: 29.88s) · AudioProcessor | [ 98%] Updating manifest (0.00s, total: 29.88s) · AudioProcessor | [ 85%] Saving NPZ artifacts (3.54s, total: 29.88s) · AudioProcessor | [100%] Complete (29.88s, total: 29.88s) · AudioProcessor | [100%] Complete · AudioProcessor | overall_ok=False, returning exit code 2 · AudioProcessor | ERROR: overall_ok=False, returning exit code 2 · AudioProcessor | Extractors with errors: clap_extractor (key=clap) · AudioProcessor | Extractors with errors: clap_extractor (key=clap)",
+    "error_code": "non_zero_exit"
+  },
+  "run": {
+    "platform_id": "youtube",
+    "video_id": "-Q6fnPIybEI",
+    "run_id": "86de243f-d772-49eb-8343-e70b5721d91e",
+    "config_hash": "0ad5af3660be63ee",
+    "sampling_policy_version": "v1",
+    "dataprocessor_version": "unknown",
+    "created_at": "2026-07-01T06:48:26Z"
+  },
+  "components": {},
+  "updated_at": "2026-07-01T06:49:16Z"
+}

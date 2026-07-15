@@ -282,10 +282,33 @@ class OpticalFlowModule(BaseModule):
             core_meta = core.get("meta")
         if isinstance(core_meta, dict) and core_meta.get("status") == "empty":
             empty_reason = core_meta.get("empty_reason") or "dependency_missing"
+            _empty_ffnames = np.asarray(
+                [
+                    "motion_norm_per_sec_mean",
+                    "flow_mag_std_per_sec_norm",
+                    "flow_mag_p95_per_sec_norm",
+                    "flow_dx_mean_per_sec_norm",
+                    "flow_dy_mean_per_sec_norm",
+                    "flow_dir_sin_mean",
+                    "flow_dir_cos_mean",
+                    "flow_dir_dispersion",
+                    "flow_div_abs_mean",
+                    "flow_consistency",
+                    "cam_affine_scale",
+                    "cam_affine_rotation",
+                    "cam_tx_per_sec_norm",
+                    "cam_ty_per_sec_norm",
+                    "cam_shake_std_norm",
+                    "bg_ratio",
+                ],
+                dtype=object,
+            )
             return {
                 "frame_indices": want,
                 "times_s": times_s,
                 "motion_norm_per_sec_mean": np.full((int(want.size),), np.nan, dtype=np.float32),
+                "frame_feature_names": _empty_ffnames,
+                "frame_feature_values": np.full((int(want.size), 16), np.nan, dtype=np.float32),
                 "feature_names": np.asarray(
                     [
                         "motion_curve_mean",
@@ -293,10 +316,17 @@ class OpticalFlowModule(BaseModule):
                         "motion_curve_p90",
                         "motion_curve_variance",
                         "missing_frame_ratio",
+                        "cam_shake_std_mean",
+                        "cam_rotation_abs_mean",
+                        "cam_translation_abs_mean",
+                        "flow_consistency_mean",
                     ],
                     dtype=object,
                 ),
-                "feature_values": np.asarray([np.nan, np.nan, np.nan, np.nan, 1.0], dtype=np.float32),
+                "feature_values": np.asarray(
+                    [np.nan, np.nan, np.nan, np.nan, 1.0, np.nan, np.nan, np.nan, np.nan],
+                    dtype=np.float32,
+                ),
                 "__meta_override__": {"status": "empty", "empty_reason": str(empty_reason)},
             }
 

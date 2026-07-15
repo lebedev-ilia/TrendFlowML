@@ -1,0 +1,23 @@
+{
+  "schema_version": "state_processor_v1",
+  "processor": {
+    "name": "text",
+    "status": "error",
+    "started_at": "2026-07-01T04:03:14Z",
+    "finished_at": "2026-07-01T04:03:17Z",
+    "duration_ms": 2438,
+    "error": "exit=2: from core.text_feature_grouping import ( · ...<2 lines>... · ) · ModuleNotFoundError: No module named 'core.text_feature_grouping' · 2026-07-01 14:03:16,915 [INFO] TextProcessor.run_cli: TextProcessor | wall timing breakdown (ms): {\"load_document_ms\": 0, \"main_processor_run_ms\": 1771, \"post_run_npz_validate_render_ms\": 41, \"sum_extractor_timings_ms\": 0, \"main_processor_orchestration_overhead_ms\": 1771, \"text_processor_internal_wall_ms\": 1813, \"note\": \"duration_ms on text_processor manifest row is full wall from internal t0 through NPZ/render; extractors only cover MainProcessor.run phase.\", \"text_subprocess_wall_ms\": 1945, \"subprocess_residual_ms\": 132} · [W701 14:03:17.137729545 AllocatorConfig.cpp:28] Warning: PYTORCH_CUDA_ALLOC_CONF is deprecated, use PYTORCH_ALLOC_CONF instead (function operator())",
+    "error_code": "non_zero_exit"
+  },
+  "run": {
+    "platform_id": "youtube",
+    "video_id": "-Q6fnPIybEI",
+    "run_id": "ca16f81f-ddda-45cf-aa46-cbf83f02b081",
+    "config_hash": "e976f0f056164c42",
+    "sampling_policy_version": "v1",
+    "dataprocessor_version": "unknown",
+    "created_at": "2026-07-01T04:03:08Z"
+  },
+  "components": {},
+  "updated_at": "2026-07-01T04:03:17Z"
+}

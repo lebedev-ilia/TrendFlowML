@@ -1,0 +1,82 @@
+# MinIO (S3-compatible object storage) for raw video + artifacts.
+# For production prefer a managed S3 (AWS S3 / GCS / managed MinIO operator);
+# this single-replica StatefulSet is for self-hosted / staging.
+---
+apiVersion: apps/v1
+kind: StatefulSet
+metadata:
+  name: minio
+  namespace: trendflow
+  labels: { app: minio }
+spec:
+  serviceName: minio
+  replicas: 1
+  selector:
+    matchLabels: { app: minio }
+  template:
+    metadata:
+      labels: { app: minio }
+    spec:
+      containers:
+      - name: minio
+        image: minio/minio:latest
+        args: ["server", "/data", "--console-address", ":9001"]
+        ports:
+        - { containerPort: 9000, name: s3 }
+        - { containerPort: 9001, name: console }
+        env:
+        - { name: MINIO_ROOT_USER,     valueFrom: { secretKeyRef: { name: app-secrets, key: minio-access-key } } }
+        - { name: MINIO_ROOT_PASSWORD, valueFrom: { secretKeyRef: { name: app-secrets, key: minio-secret-key } } }
+        resources:
+          requests: { cpu: "250m", memory: "512Mi" }
+          limits:   { cpu: "2", memory: "2Gi" }
+        readinessProbe:
+          httpGet: { path: /minio/health/ready, port: 9000 }
+          initialDelaySeconds: 10
+          periodSeconds: 10
+        volumeMounts:
+        - { name: data, mountPath: /data }
+  volumeClaimTemplates:
+  - metadata: { name: data }
+    spec:
+      accessModes: ["ReadWriteOnce"]
+      resources: { requests: { storage: 200Gi } }
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: minio
+  namespace: trendflow
+  labels: { app: minio }
+spec:
+  selector: { app: minio }
+  ports:
+  - { name: s3, port: 9000, targetPort: 9000 }
+  - { name: console, port: 9001, targetPort: 9001 }
+---
+# One-shot job to create the raw bucket after MinIO is up.
+apiVersion: batch/v1
+kind: Job
+metadata:
+  name: minio-init
+  namespace: trendflow
+spec:
+  backoffLimit: 5
+  ttlSecondsAfterFinished: 86400
+  template:
+    spec:
+      restartPolicy: OnFailure
+      containers:
+      - name: mc
+        image: minio/mc:latest
+        env:
+        - { name: MINIO_ACCESS_KEY, valueFrom: { secretKeyRef: { name: app-secrets, key: minio-access-key } } }
+        - { name: MINIO_SECRET_KEY, valueFrom: { secretKeyRef: { name: app-secrets, key: minio-secret-key } } }
+        command: ["/bin/sh","-c"]
+        args:
+          - |
+            set -e
+            until mc alias set tf http://minio:9000 "$MINIO_ACCESS_KEY" "$MINIO_SECRET_KEY"; do sleep 3; done
+            mc mb -p tf/video-analytics-raw || true   # Fetcher raw video
+            mc mb -p tf/trendflow || true             # DataProcessor result_store (S3_BUCKET)
+            echo "buckets ready"

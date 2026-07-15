@@ -1,0 +1,23 @@
+{
+  "schema_version": "state_processor_v1",
+  "processor": {
+    "name": "segmenter",
+    "status": "success",
+    "started_at": "2026-07-02T04:02:04Z",
+    "finished_at": "2026-07-02T04:02:08Z",
+    "duration_ms": 3885,
+    "error": null,
+    "error_code": null
+  },
+  "run": {
+    "platform_id": "youtube",
+    "video_id": "-4RHVBIikn8",
+    "run_id": "21a279af-a6cd-4810-957c-29aaabed7a2e",
+    "config_hash": "9ad114f2bf4435fc",
+    "sampling_policy_version": "v1",
+    "dataprocessor_version": "unknown",
+    "created_at": "2026-07-02T04:02:04Z"
+  },
+  "components": {},
+  "updated_at": "2026-07-02T04:02:08Z"
+}

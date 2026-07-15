@@ -1,0 +1,3840 @@
+{
+  "schema_version": "1.0",
+  "manifest_version": "2026-06-29",
+  "repo_id": "Ilialebedev/trendflow_models",
+  "repo_type": "dataset",
+  "revision": "main",
+  "dp_models_root": "DataProcessor/dp_models",
+  "description": "Unified TrendFlow model & artifact manifest. Each entry path is BOTH the path inside the HF dataset and the local path relative to the TrendFlowML repo root.",
+  "groups": {
+    "audio": "AudioProcessor weights (dp_models/audio)",
+    "visual": "VisualProcessor weights (dp_models/visual, bundled_models/visual)",
+    "semantic_bases": "VisualProcessor core_identity reference bases"
+  },
+  "entries": [
+    {
+      "path": "DataProcessor/VisualProcessor/core/model_process/core_identity/brand_semantics/known_brands/car/audi/1.jpg",
+      "sha256": "f21192a63d9e7af4fab96b2ee660f3dd12dea4806b3d0598bc383f332f6095cb",
+      "size": 217428,
+      "lfs": true,
+      "group": "semantic_bases"
+    },
+    {
+      "path": "DataProcessor/VisualProcessor/core/model_process/core_identity/brand_semantics/known_brands/car/audi/4.jpg",
+      "sha256": "5d0c1f9ead7b38687bfb8e2728add154447010f528d218eac8ccf9bfd8185763",
+      "size": 18562,
+      "lfs": true,
+      "group": "semantic_bases"
+    },
+    {
+      "path": "DataProcessor/VisualProcessor/core/model_process/core_identity/brand_semantics/known_brands/car/audi/5.jpg",
+      "sha256": "089814ea731d5b4bb18b3ea7ac04bc99ee2d42f9b55a0a68d1c63333dd42150e",
+      "size": 10420,
+      "lfs": true,
+      "group": "semantic_bases"
+    },
+    {
+      "path": "DataProcessor/VisualProcessor/core/model_process/core_identity/brand_semantics/known_brands/car/audi/7.jpg",
+      "sha256": "5826c43d86b45af3cfab8599499d9110469a56642f4a52e7f23a55cdfc11cd48",
+      "size": 11239,
+      "lfs": true,
+      "group": "semantic_bases"
+    },
+    {
+      "path": "DataProcessor/VisualProcessor/core/model_process/core_identity/brand_semantics/known_brands/car/audi/Снимок экрана от 2026-02-13 13-01-32.png",
+      "sha256": "6b70ced6c2bfebea590a1cd442d81dc23e55512a385f60fbdd537ebbc32ee215",
+      "size": 36314,
+      "lfs": true,
+      "group": "semantic_bases"
+    },
+    {
+      "path": "DataProcessor/VisualProcessor/core/model_process/core_identity/brand_semantics/known_brands/car/audi/Снимок экрана от 2026-02-13 13-01-42.png",
+      "sha256": "ef6789fae51fa373adbeeeeefd048aa62041a8096e3121e9515cf73ae5f08e59",
+      "size": 44015,
+      "lfs": true,
+      "group": "semantic_bases"
+    },
+    {
+      "path": "DataProcessor/VisualProcessor/core/model_process/core_identity/brand_semantics/known_brands/car/audi/Снимок экрана от 2026-02-13 13-01-52.png",
+      "sha256": "85921ceedb2b3aaafb1b7541947b0035dc69c699417759466a95f722cf40343b",
+      "size": 89492,
+      "lfs": true,
+      "group": "semantic_bases"
+    },
+    {
+      "path": "DataProcessor/VisualProcessor/core/model_process/core_identity/brand_semantics/known_brands/car/audi/Снимок экрана от 2026-02-13 13-02-16.png",
+      "sha256": "1c198695e9e49265db71a2ed2d59e9135b9b14d60086b788ef5015e750dc2ac3",
+      "size": 107795,
+      "lfs": true,
+      "group": "semantic_bases"
+    },
+    {
+      "path": "DataProcessor/VisualProcessor/core/model_process/core_identity/brand_semantics/known_brands/car/audi/Снимок экрана от 2026-02-13 13-02-26.png",
+      "sha256": "655b3828af6f406dbcd69528500d17dcf43fe86b6d10573a0ff5d653f142cc06",
+      "size": 158077,
+      "lfs": true,
+      "group": "semantic_bases"
+    },
+    {
+      "path": "DataProcessor/VisualProcessor/core/model_process/core_identity/brand_semantics/known_brands/car/audi/Снимок экрана от 2026-02-13 13-02-36.png",
+      "sha256": "c4be00c124d86f4237228e5775e537944f31e0b6e36daf09c5edf10f1a2aaf58",
+      "size": 132476,
+      "lfs": true,
+      "group": "semantic_bases"
+    },
+    {
+      "path": "DataProcessor/VisualProcessor/core/model_process/core_identity/brand_semantics/known_brands/car/audi/Снимок экрана от 2026-02-18 15-37-03.png",
+      "sha256": "215ea2497ac380b899616bcd22c1f20482c4b8bbccf87c82ac35a5e2c938634b",
+      "size": 110614,
+      "lfs": true,
+      "group": "semantic_bases"
+    },
+    {
+      "path": "DataProcessor/VisualProcessor/core/model_process/core_identity/brand_semantics/known_brands/car/audi/Снимок экрана от 2026-02-18 15-37-12.png",
+      "sha256": "828d60e5fb2550118a437c01002efb3004bb9e39a875cf6fdd980f6b12ec7521",
+      "size": 60531,
+      "lfs": true,
+      "group": "semantic_bases"
+    },
+    {
+      "path": "DataProcessor/VisualProcessor/core/model_process/core_identity/brand_semantics/known_brands/car/audi/Снимок экрана от 2026-02-18 15-37-19.png",
+      "sha256": "ba39d14c3f81c97694503bd9b6f9d8c9604ea1a76e5af51a3f0cf089c2ac2c46",
+      "size": 104659,
+      "lfs": true,
+      "group": "semantic_bases"
+    },
+    {
+      "path": "DataProcessor/VisualProcessor/core/model_process/core_identity/brand_semantics/known_brands/car/audi/Снимок экрана от 2026-02-18 15-38-39.png",
+      "sha256": "fc96cf392b3fca00a795c43d2876efe03cd4ebf5a2391b649087bac8930bdcf4",
+      "size": 90006,
+      "lfs": true,
+      "group": "semantic_bases"
+    },
+    {
+      "path": "DataProcessor/VisualProcessor/core/model_process/core_identity/brand_semantics/known_brands/car/audi/Снимок экрана от 2026-02-18 15-38-52.png",
+      "sha256": "576a268758ac8eadc898f9fe6c8b98644ce1ba88778dff48405dec162fe7fd54",
+      "size": 42229,
+      "lfs": true,
+      "group": "semantic_bases"
+    },
+    {
+      "path": "DataProcessor/VisualProcessor/core/model_process/core_identity/brand_semantics/known_brands/car/audi/Снимок экрана от 2026-02-18 15-39-01.png",
+      "sha256": "0a76f9c9b1f4603877a24b18a35a8fa26c6ccf47688a5c35b99e158afc9666ad",
+      "size": 46303,
+      "lfs": true,
+      "group": "semantic_bases"
+    },
+    {
+      "path": "DataProcessor/VisualProcessor/core/model_process/core_identity/brand_semantics/known_brands/car/audi/Снимок экрана от 2026-02-18 15-39-33.png",
+      "sha256": "3694401eeb5c15df9e96167121240ac4fb6586fe15d971957f90dc3ecda67ea0",
+      "size": 78692,
+      "lfs": true,
+      "group": "semantic_bases"
+    },
+    {
+      "path": "DataProcessor/VisualProcessor/core/model_process/core_identity/brand_semantics/known_brands/car/audi/Снимок экрана от 2026-02-18 15-39-44.png",
+      "sha256": "92af166111eb29d758df2cf87ebb13d5df5aec57690b52825ed0731fdf3e0173",
+      "size": 83859,
+      "lfs": true,
+      "group": "semantic_bases"
+    },
+    {
+      "path": "DataProcessor/VisualProcessor/core/model_process/core_identity/brand_semantics/known_brands/car/audi/Снимок экрана от 2026-02-18 15-39-58.png",
+      "sha256": "28d132f951242810d8f245647ad85c6d44d36a99a33a3ea8f0c8fb404a4d9105",
+      "size": 31391,
+      "lfs": true,
+      "group": "semantic_bases"
+    },
+    {
+      "path": "DataProcessor/VisualProcessor/core/model_process/core_identity/brand_semantics/known_brands/car/audi/Снимок экрана от 2026-02-18 15-40-31.png",
+      "sha256": "71427b2d77faa05eeafc788c353792ec37ae62f28f18405896efcac2eda9a3ab",
+      "size": 67544,
+      "lfs": true,
+      "group": "semantic_bases"
+    },
+    {
+      "path": "DataProcessor/VisualProcessor/core/model_process/core_identity/brand_semantics/known_brands/car/bmw/1.jpg",
+      "sha256": "ae8e79db37c04e7e62ef1dc430a565c22fc7b98bc338f2fd75689e64b13eeb84",
+      "size": 14591,
+      "lfs": true,
+      "group": "semantic_bases"
+    },
+    {
+      "path": "DataProcessor/VisualProcessor/core/model_process/core_identity/brand_semantics/known_brands/car/bmw/Снимок экрана от 2026-02-13 12-59-00.png",
+      "sha256": "7ea2aba538bd220499a2be18e8fd351d240b366664823556bda2626ca6160e7c",
+      "size": 9425,
+      "lfs": true,
+      "group": "semantic_bases"
+    },
+    {
+      "path": "DataProcessor/VisualProcessor/core/model_process/core_identity/brand_semantics/known_brands/car/bmw/Снимок экрана от 2026-02-13 12-59-10.png",
+      "sha256": "25d92fc5b41caafa83f0ceb40d2074352fe7e6c119510e4136642baf40e4bae0",
+      "size": 33206,
+      "lfs": true,
+      "group": "semantic_bases"
+    },
+    {
+      "path": "DataProcessor/VisualProcessor/core/model_process/core_identity/brand_semantics/known_brands/car/bmw/Снимок экрана от 2026-02-13 12-59-29.png",
+      "sha256": "dd841a531dbfdb679cd0f9b707dab086bd36b7e4ec788615436372b44b7046b8",
+      "size": 103092,
+      "lfs": true,
+      "group": "semantic_bases"
+    },
+    {
+      "path": "DataProcessor/VisualProcessor/core/model_process/core_identity/brand_semantics/known_brands/car/chevrolet/Снимок экрана от 2026-02-13 13-11-21.png",
+      "sha256": "c3e3fc1f64b12edfe1e38eaf3e338da675a927fc6165154ccd0fbf26040517db",
+      "size": 87208,
+      "lfs": true,
+      "group": "semantic_bases"
+    },
+    {
+      "path": "DataProcessor/VisualProcessor/core/model_process/core_identity/brand_semantics/known_brands/car/chevrolet/Снимок экрана от 2026-02-13 13-11-29.png",
+      "sha256": "3a5e4e659b05231af846ae492dcd62f7e706fce6597c27105d8a1fa2080f9603",
+      "size": 133573,
+      "lfs": true,
+      "group": "semantic_bases"
+    },
+    {
+      "path": "DataProcessor/VisualProcessor/core/model_process/core_identity/brand_semantics/known_brands/car/chevrolet/Снимок экрана от 2026-02-13 13-11-35.png",
+      "sha256": "c615f7a99bade34e6ef7a7212f1af550729d7bd794c353c242f0b1989b647eb8",
+      "size": 114679,
+      "lfs": true,
+      "group": "semantic_bases"
+    },
+    {
+      "path": "DataProcessor/VisualProcessor/core/model_process/core_identity/brand_semantics/known_brands/car/chevrolet/Снимок экрана от 2026-02-13 13-11-46.png",
+      "sha256": "b3dc5d1b17925fe2405be688c6b3d3a0b726f6a8950975bd0ed148089379390c",
+      "size": 73223,
+      "lfs": true,
+      "group": "semantic_bases"
+    },
+    {
+      "path": "DataProcessor/VisualProcessor/core/model_process/core_identity/brand_semantics/known_brands/car/chevrolet/Снимок экрана от 2026-02-13 13-11-55.png",
+      "sha256": "53104aebe65458d3454913551e1d49fece4e2f42ba5fe7ca93588641ae03409b",
+      "size": 80421,
+      "lfs": true,
+      "group": "semantic_bases"
+    },
+    {
+      "path": "DataProcessor/VisualProcessor/core/model_process/core_identity/brand_semantics/known_brands/car/chevrolet/Снимок экрана от 2026-02-13 13-11-59.png",
+      "sha256": "0aef17b602312e1a8ad3908b4fd81d9671c9679efc68880e7c82e5c81a125cd6",
+      "size": 71682,
+      "lfs": true,
+      "group": "semantic_bases"
+    },
+    {
+      "path": "DataProcessor/VisualProcessor/core/model_process/core_identity/brand_semantics/known_brands/car/chevrolet/Снимок экрана от 2026-02-13 13-12-08.png",
+      "sha256": "1ef8e195ec36cab00a217b9fcd7015887134105011c9fabc7faea8be94192b63",
+      "size": 37254,
+      "lfs": true,
+      "group": "semantic_bases"
+    },
+    {
+      "path": "DataProcessor/VisualProcessor/core/model_process/core_identity/brand_semantics/known_brands/car/chevrolet/Снимок экрана от 2026-02-18 16-01-51.png",
+      "sha256": "1652eaa137d421e504b7bfecd7d9385e2e7846320c9be4ee13ba23c315952606",
+      "size": 149323,
+      "lfs": true,
+      "group": "semantic_bases"
+    },
+    {
+      "path": "DataProcessor/VisualProcessor/core/model_process/core_identity/brand_semantics/known_brands/car/chevrolet/Снимок экрана от 2026-02-18 16-03-06.png",
+      "sha256": "1c9456e45af44399da22b2eda70eb0cdaa69a1aafb801f09a789b138597199eb",
+      "size": 91254,
+      "lfs": true,
+      "group": "semantic_bases"
+    },
+    {
+      "path": "DataProcessor/VisualProcessor/core/model_process/core_identity/brand_semantics/known_brands/car/chevrolet/Снимок экрана от 2026-02-18 16-03-19.png",
+      "sha256": "e95cd0544eeecfc448a3e9a6f349b51e6432d733d159dda8577038430eccd831",
+      "size": 153266,
+      "lfs": true,
+      "group": "semantic_bases"
+    },
+    {
+      "path": "DataProcessor/VisualProcessor/core/model_process/core_identity/brand_semantics/known_brands/car/chevrolet/Снимок экрана от 2026-02-18 16-03-45.png",
+      "sha256": "386ddfe93b4e4a45cd720e331cf17851e7851061ac4822bdcdf7512f1b284531",
+      "size": 48979,
+      "lfs": true,
+      "group": "semantic_bases"
+    },
+    {
+      "path": "DataProcessor/VisualProcessor/core/model_process/core_identity/brand_semantics/known_brands/car/chevrolet/Снимок экрана от 2026-02-18 16-03-54.png",
+      "sha256": "aaf883fadf03d1790b41f664b3ce83ba3b6ba8daabe305fa9c6d33caf4b9fa59",
+      "size": 63272,
+      "lfs": true,
+      "group": "semantic_bases"
+    },
+    {
+      "path": "DataProcessor/VisualProcessor/core/model_process/core_identity/brand_semantics/known_brands/car/chevrolet/Снимок экрана от 2026-02-18 16-04-05.png",
+      "sha256": "a3c3887e95f57403d4a2f88b0ab1d8f7b858c0e7a74f2bbf51cdafbb7f5ef776",
+      "size": 129266,
+      "lfs": true,
+      "group": "semantic_bases"
+    },
+    {
+      "path": "DataProcessor/VisualProcessor/core/model_process/core_identity/brand_semantics/known_brands/car/chevrolet/Снимок экрана от 2026-02-18 16-04-14.png",
+      "sha256": "ad4b9f08e79bba259025b7361060eca993dc16d02b42e67aee1054446e1af14a",
+      "size": 66289,
+      "lfs": true,
+      "group": "semantic_bases"
+    },
+    {
+      "path": "DataProcessor/VisualProcessor/core/model_process/core_identity/brand_semantics/known_brands/car/chevrolet/Снимок экрана от 2026-02-18 16-04-26.png",
+      "sha256": "d36e94827d8119f5c31f30c5ddea2a51f4f0ce7cc75e1f377f39f76a05826596",
+      "size": 43454,
+      "lfs": true,
+      "group": "semantic_bases"
+    },
+    {
+      "path": "DataProcessor/VisualProcessor/core/model_process/core_identity/brand_semantics/known_brands/car/chevrolet/Снимок экрана от 2026-02-18 16-04-43.png",
+      "sha256": "ec46dc01a8f54c393bd5e2467e7ad2484836aae31ee4eaded524e1a7e5be4708",
+      "size": 27210,
+      "lfs": true,
+      "group": "semantic_bases"
+    },
+    {
+      "path": "DataProcessor/VisualProcessor/core/model_process/core_identity/brand_semantics/known_brands/car/chevrolet/Снимок экрана от 2026-02-18 16-05-57.png",
+      "sha256": "c5934f396c8dfc402e72a229e863d826b09f86fd81e510fa83a121c5bf5bdecb",
+      "size": 29063,
+      "lfs": true,
+      "group": "semantic_bases"
+    },
+    {
+      "path": "DataProcessor/VisualProcessor/core/model_process/core_identity/brand_semantics/known_brands/car/chevrolet/Снимок экрана от 2026-02-18 16-06-09.png",
+      "sha256": "87853c643dd7e65e1fbc911475afb06f62f8f70a86b4ad66c87320b0a7207bec",
+      "size": 24074,
+      "lfs": true,
+      "group": "semantic_bases"
+    },
+    {
+      "path": "DataProcessor/VisualProcessor/core/model_process/core_identity/brand_semantics/known_brands/car/chevrolet/Снимок экрана от 2026-02-18 16-06-33.png",
+      "sha256": "3e38debe7096fcfcf01d765477a26a85edece641478c8758114d5dd0f36d9bc1",
+      "size": 30251,
+      "lfs": true,
+      "group": "semantic_bases"
+    },
+    {
+      "path": "DataProcessor/VisualProcessor/core/model_process/core_identity/brand_semantics/known_brands/car/chevrolet/Снимок экрана от 2026-02-18 16-06-45.png",
+      "sha256": "0b5983b176ccb667a81df301418710a6107404bcceedd2a50aa191a200d127e9",
+      "size": 26633,
+      "lfs": true,
+      "group": "semantic_bases"
+    },
+    {
+      "path": "DataProcessor/VisualProcessor/core/model_process/core_identity/brand_semantics/known_brands/car/ferrari/1.jpg",
+      "sha256": "cc63dc06b356ef75d63710aa8c00b5350c91f744a4ec860bcc89cb02fde279fa",
+      "size": 43485,
+      "lfs": true,
+      "group": "semantic_bases"
+    },
+    {
+      "path": "DataProcessor/VisualProcessor/core/model_process/core_identity/brand_semantics/known_brands/car/ferrari/Снимок экрана от 2026-02-15 18-31-43.png",
+      "sha256": "83d1b2448fa2198c6fe56002ef900be5d5dee8cddf5f198a6d21a3039412f725",
+      "size": 52078,
+      "lfs": true,
+      "group": "semantic_bases"
+    },
+    {
+      "path": "DataProcessor/VisualProcessor/core/model_process/core_identity/brand_semantics/known_brands/car/ferrari/Снимок экрана от 2026-02-15 18-31-52.png",
+      "sha256": "9289a89e67c08dd5908b08a0e9d722e5cbdcb9d39a5e98b806cec6b82c7b7190",
+      "size": 122762,
+      "lfs": true,
+      "group": "semantic_bases"
+    },
+    {
+      "path": "DataProcessor/VisualProcessor/core/model_process/core_identity/brand_semantics/known_brands/car/ferrari/Снимок экрана от 2026-02-15 18-31-59.png",
+      "sha256": "b89ac87a07a15b9804e03b89518a471d6a0e6ad347c19d7e9737fa6826c5174e",
+      "size": 25871,
+      "lfs": true,
+      "group": "semantic_bases"
+    },
+    {
+      "path": "DataProcessor/VisualProcessor/core/model_process/core_identity/brand_semantics/known_brands/car/ferrari/Снимок экрана от 2026-02-15 18-32-19.png",
+      "sha256": "957c14ff0dcfec4cb4c3b3c73280847f67d02b756fe70434a63e8754d2fe07ef",
+      "size": 60029,
+      "lfs": true,
+      "group": "semantic_bases"
+    },
+    {
+      "path": "DataProcessor/VisualProcessor/core/model_process/core_identity/brand_semantics/known_brands/car/ferrari/Снимок экрана от 2026-02-15 18-32-25.png",
+      "sha256": "79345952c8e9a6c22b97471d9432d4e63e4eed6619c1810301f438cc887824e4",
+      "size": 170309,
+      "lfs": true,
+      "group": "semantic_bases"
+    },
+    {
+      "path": "DataProcessor/VisualProcessor/core/model_process/core_identity/brand_semantics/known_brands/car/ferrari/Снимок экрана от 2026-02-15 18-32-32.png",
+      "sha256": "11909f9120d90f638ca11b47092a8c04b331af76a0dc91020eef0cd52cad2bd1",
+      "size": 37437,
+      "lfs": true,
+      "group": "semantic_bases"
+    },
+    {
+      "path": "DataProcessor/VisualProcessor/core/model_process/core_identity/brand_semantics/known_brands/car/ferrari/Снимок экрана от 2026-02-15 18-33-21.png",
+      "sha256": "58d4c2b0f21a39cf9c4bb74734a8ee04073d374889c39d7f6e70791cee10afd3",
+      "size": 19094,
+      "lfs": true,
+      "group": "semantic_bases"
+    },
+    {
+      "path": "DataProcessor/VisualProcessor/core/model_process/core_identity/brand_semantics/known_brands/car/ferrari/Снимок экрана от 2026-02-15 18-33-27.png",
+      "sha256": "96feb27467fdd39883b7c387b7e4b2c0d0e2ea59f1c7c3c15284b617c8c40736",
+      "size": 56269,
+      "lfs": true,
+      "group": "semantic_bases"
+    },
+    {
+      "path": "DataProcessor/VisualProcessor/core/model_process/core_identity/brand_semantics/known_brands/car/ferrari/Снимок экрана от 2026-02-15 18-34-05.png",
+      "sha256": "222ee7092a89630ba998844c2a20fc9e4c7f13048450432a67b37e96e6e69fc8",
+      "size": 54850,
+      "lfs": true,
+      "group": "semantic_bases"
+    },
+    {
+      "path": "DataProcessor/VisualProcessor/core/model_process/core_identity/brand_semantics/known_brands/car/ferrari/Снимок экрана от 2026-02-18 15-41-09.png",
+      "sha256": "b5491e07534ee00bbdc738b797ca6596bc7040061707e88b73e8e006d8112dfc",
+      "size": 48943,
+      "lfs": true,
+      "group": "semantic_bases"
+    },
+    {
+      "path": "DataProcessor/VisualProcessor/core/model_process/core_identity/brand_semantics/known_brands/car/ferrari/Снимок экрана от 2026-02-18 15-41-20.png",
+      "sha256": "3c3ac4858282bdcaef11ff53978ea6eeb30b8e1899eaae06861e7b20edf3cc50",
+      "size": 66353,
+      "lfs": true,
+      "group": "semantic_bases"
+    },
+    {
+      "path": "DataProcessor/VisualProcessor/core/model_process/core_identity/brand_semantics/known_brands/car/ferrari/Снимок экрана от 2026-02-18 15-41-40.png",
+      "sha256": "946387957e6fd9d1d568ee247304ecde5ea2ab39aa6590c90b6369a04785f151",
+      "size": 65589,
+      "lfs": true,
+      "group": "semantic_bases"
+    },
+    {
+      "path": "DataProcessor/VisualProcessor/core/model_process/core_identity/brand_semantics/known_brands/car/ferrari/Снимок экрана от 2026-02-18 15-42-17.png",
+      "sha256": "9ff5f4f0e1af27215fdd60f642feb657a0ab8cbe1a3f509a1fc5715ac647db38",
+      "size": 142991,
+      "lfs": true,
+      "group": "semantic_bases"
+    },
+    {
+      "path": "DataProcessor/VisualProcessor/core/model_process/core_identity/brand_semantics/known_brands/car/ferrari/Снимок экрана от 2026-02-18 15-42-31.png",
+      "sha256": "c71eb5b26971c86863c5da45c48a524844a399fb2b576e098808147de682ab3e",
+      "size": 27244,
+      "lfs": true,
+      "group": "semantic_bases"
+    },
+    {
+      "path": "DataProcessor/VisualProcessor/core/model_process/core_identity/brand_semantics/known_brands/car/ferrari/Снимок экрана от 2026-02-18 15-42-43.png",
+      "sha256": "1dd57954d2c5e3e3c511ab509391709416c960b0e89d9a6ab021981a9a9b6f71",
+      "size": 56816,
+      "lfs": true,
+      "group": "semantic_bases"
+    },
+    {
+      "path": "DataProcessor/VisualProcessor/core/model_process/core_identity/brand_semantics/known_brands/car/ferrari/Снимок экрана от 2026-02-18 15-43-00.png",
+      "sha256": "17b0e9f5262d08a41f997013c7e5e4b084030c8b6f8995c6b59bc8c8f621c3a3",
+      "size": 37678,
+      "lfs": true,
+      "group": "semantic_bases"
+    },
+    {
+      "path": "DataProcessor/VisualProcessor/core/model_process/core_identity/brand_semantics/known_brands/car/ferrari/Снимок экрана от 2026-02-18 15-43-58.png",
+      "sha256": "6c8a13ff6cae3c9ec900658eff694fdeda91bbb0c48292382b187c84c1614198",
+      "size": 42765,
+      "lfs": true,
+      "group": "semantic_bases"
+    },
+    {
+      "path": "DataProcessor/VisualProcessor/core/model_process/core_identity/brand_semantics/known_brands/car/ferrari/Снимок экрана от 2026-02-18 15-44-13.png",
+      "sha256": "5b18be12fe821fc64d9cc3768f118a898fce3886294b82700d9561fb479d3c9b",
+      "size": 114752,
+      "lfs": true,
+      "group": "semantic_bases"
+    },
+    {
+      "path": "DataProcessor/VisualProcessor/core/model_process/core_identity/brand_semantics/known_brands/car/ferrari/Снимок экрана от 2026-02-18 15-44-25.png",
+      "sha256": "95a99c43f2bae19ccba7bbb219b609943c60f7d235c7ec0bdbb0507a4a1b61a2",
+      "size": 33248,
+      "lfs": true,
+      "group": "semantic_bases"
+    },
+    {
+      "path": "DataProcessor/VisualProcessor/core/model_process/core_identity/brand_semantics/known_brands/car/ferrari/Снимок экрана от 2026-02-18 15-44-46.png",
+      "sha256": "1a72cdb1908c513153aea9fbe0007649653fe41088d07e00f7b7d8337180eb94",
+      "size": 34015,
+      "lfs": true,
+      "group": "semantic_bases"
+    },
+    {
+      "path": "DataProcessor/VisualProcessor/core/model_process/core_identity/brand_semantics/known_brands/car/ford/1.jpg",
+      "sha256": "408304caff8945ec38749006a7d5955cfd0f66ae7328c241317abe2570d91452",
+      "size": 18910,
+      "lfs": true,
+      "group": "semantic_bases"
+    },
+    {
+      "path": "DataProcessor/VisualProcessor/core/model_process/core_identity/brand_semantics/known_brands/car/ford/Снимок экрана от 2026-02-13 13-07-56.png",
+      "sha256": "e7631fc30dd7dabbe8e7447d08b2a70280b463d9e55647c8de861744c45bb71d",
+      "size": 94883,
+      "lfs": true,
+      "group": "semantic_bases"
+    },
+    {
+      "path": "DataProcessor/VisualProcessor/core/model_process/core_identity/brand_semantics/known_brands/car/ford/Снимок экрана от 2026-02-13 13-08-03.png",
+      "sha256": "ed3eda08efca5ef50ae6ffeeb7db221d9007af6aa5896e2c69cce921115424ab",
+      "size": 136600,
+      "lfs": true,
+      "group": "semantic_bases"
+    },
+    {
+      "path": "DataProcessor/VisualProcessor/core/model_process/core_identity/brand_semantics/known_brands/car/ford/Снимок экрана от 2026-02-13 13-08-21.png",
+      "sha256": "0bba7e21944eabc651a80261b5c1f6632e86352fd6096a0bf90f698ef8986771",
+      "size": 29590,
+      "lfs": true,
+      "group": "semantic_bases"
+    },
+    {
+      "path": "DataProcessor/VisualProcessor/core/model_process/core_identity/brand_semantics/known_brands/car/ford/Снимок экрана от 2026-02-13 13-08-28.png",
+      "sha256": "ebf20bc0f7f74cdd79e9612cedac573f1bf60b69c5eeab5f0879517f7518944f",
+      "size": 47640,
+      "lfs": true,
+      "group": "semantic_bases"
+    },
+    {
+      "path": "DataProcessor/VisualProcessor/core/model_process/core_identity/brand_semantics/known_brands/car/ford/Снимок экрана от 2026-02-13 13-08-35.png",
+      "sha256": "550e172b2e18021939a64a7b32342d3ffa00ddf0366361b9c0974204ac84f966",
+      "size": 118487,
+      "lfs": true,
+      "group": "semantic_bases"
+    },
+    {
+      "path": "DataProcessor/VisualProcessor/core/model_process/core_identity/brand_semantics/known_brands/car/ford/Снимок экрана от 2026-02-13 13-08-43.png",
+      "sha256": "b26c7dba5b0c57aa412eab0557d550a7109b0d38048eda0f6620d14d5a686559",
+      "size": 103907,
+      "lfs": true,
+      "group": "semantic_bases"
+    },
+    {
+      "path": "DataProcessor/VisualProcessor/core/model_process/core_identity/brand_semantics/known_brands/car/ford/Снимок экрана от 2026-02-13 13-08-48.png",
+      "sha256": "234af2271694d4a500e388cefcbeae7ace74b7260ccae95abac6da6688063226",
+      "size": 106931,
+      "lfs": true,
+      "group": "semantic_bases"
+    },
+    {
+      "path": "DataProcessor/VisualProcessor/core/model_process/core_identity/brand_semantics/known_brands/car/ford/Снимок экрана от 2026-02-13 13-09-09.png",
+      "sha256": "2460667131e0d2f76df211018b97c4abc3de314e9d6b57a36de6213c67185bdd",
+      "size": 143700,
+      "lfs": true,
+      "group": "semantic_bases"
+    },
+    {
+      "path": "DataProcessor/VisualProcessor/core/model_process/core_identity/brand_semantics/known_brands/car/ford/Снимок экрана от 2026-02-13 13-09-16.png",
+      "sha256": "15bbf334c987e5f7c79258982cf7a97f22be5ad0f03e8da8a46603759f1ae9d7",
+      "size": 34754,
+      "lfs": true,
+      "group": "semantic_bases"
+    },
+    {
+      "path": "DataProcessor/VisualProcessor/core/model_process/core_identity/brand_semantics/known_brands/car/ford/Снимок экрана от 2026-02-13 13-09-24.png",
+      "sha256": "cbd7aca0796f74b7dc37db6c1198cf6a5425be802a37c7420c07671341e49e4b",
+      "size": 124503,
+      "lfs": true,
+      "group": "semantic_bases"
+    },
+    {
+      "path": "DataProcessor/VisualProcessor/core/model_process/core_identity/brand_semantics/known_brands/car/ford/Снимок экрана от 2026-02-13 13-09-33.png",
+      "sha256": "70a1d2b35bbe0e7305b769013ec2a4983050410f7eb142db17dc1a8c3cb3e08d",
+      "size": 45785,
+      "lfs": true,
+      "group": "semantic_bases"
+    },
+    {
+      "path": "DataProcessor/VisualProcessor/core/model_process/core_identity/brand_semantics/known_brands/car/ford/Снимок экрана от 2026-02-18 15-25-51.png",
+      "sha256": "98495640d9d83106cbfd8c23228451d12eb991923bd53be52993b9b6ad63a205",
+      "size": 218819,
+      "lfs": true,
+      "group": "semantic_bases"
+    },
+    {
+      "path": "DataProcessor/VisualProcessor/core/model_process/core_identity/brand_semantics/known_brands/car/ford/Снимок экрана от 2026-02-18 15-26-22.png",
+      "sha256": "2505dd28d665042fa2ca3f4281621ad7da413f67ef0004a8f41f0e51407f47ba",
+      "size": 81155,
+      "lfs": true,
+      "group": "semantic_bases"
+    },
+    {
+      "path": "DataProcessor/VisualProcessor/core/model_process/core_identity/brand_semantics/known_brands/car/ford/Снимок экрана от 2026-02-18 15-26-36.png",
+      "sha256": "71d3ff03be583ac2fb37ff7c5de59f10c07e2faca828a8d1fd51d59385c2621b",
+      "size": 72079,
+      "lfs": true,
+      "group": "semantic_bases"
+    },
+    {
+      "path": "DataProcessor/VisualProcessor/core/model_process/core_identity/brand_semantics/known_brands/car/ford/Снимок экрана от 2026-02-18 15-28-11.png",
+      "sha256": "9a8372a4ff9a54bce9c1f8d6c205c3839109b6300f8e909af228f1fab006e2dc",
+      "size": 41587,
+      "lfs": true,
+      "group": "semantic_bases"
+    },
+    {
+      "path": "DataProcessor/VisualProcessor/core/model_process/core_identity/brand_semantics/known_brands/car/ford/Снимок экрана от 2026-02-18 15-29-09.png",
+      "sha256": "552627ab2af680e748f51911f56efbbed85c4ffa035aca9d21d64229a9baf427",
+      "size": 27688,
+      "lfs": true,
+      "group": "semantic_bases"
+    },
+    {
+      "path": "DataProcessor/VisualProcessor/core/model_process/core_identity/brand_semantics/known_brands/car/ford/Снимок экрана от 2026-02-18 15-29-31.png",
+      "sha256": "ea8c0a65fcf8e9530c0335c6acf149967d1dab908d4b6b30dd05fd7b4871d46c",
+      "size": 48910,
+      "lfs": true,
+      "group": "semantic_bases"
+    },
+    {
+      "path": "DataProcessor/VisualProcessor/core/model_process/core_identity/brand_semantics/known_brands/car/ford/Снимок экрана от 2026-02-18 15-29-58.png",
+      "sha256": "34e410b7b5891c38d9d3aea16e67e0dd4fcfc07343eaf39836f7aa316949950b",
+      "size": 43743,
+      "lfs": true,
+      "group": "semantic_bases"
+    },
+    {
+      "path": "DataProcessor/VisualProcessor/core/model_process/core_identity/brand_semantics/known_brands/car/ford/Снимок экрана от 2026-02-18 15-30-29.png",
+      "sha256": "45d43b80bd09662563b66c0edc633f3860745f4c488d2f8bf2ec1580b0bdaa14",
+      "size": 85824,
+      "lfs": true,
+      "group": "semantic_bases"
+    },
+    {
+      "path": "DataProcessor/VisualProcessor/core/model_process/core_identity/brand_semantics/known_brands/car/honda/Снимок экрана от 2026-02-13 13-14-28.png",
+      "sha256": "5afc053171f7ad80b2b81d2ad516cdde2fa49b3e3ae4409877595bc9825c01d8",
+      "size": 26631,
+      "lfs": true,
+      "group": "semantic_bases"
+    },
+    {
+      "path": "DataProcessor/VisualProcessor/core/model_process/core_identity/brand_semantics/known_brands/car/honda/Снимок экрана от 2026-02-13 13-14-37.png",
+      "sha256": "3a331b94b3fcd2f685334b86c478a8ed3852826669d75559b140ee8f4a158ea7",
+      "size": 75358,
+      "lfs": true,
+      "group": "semantic_bases"
+    },
+    {
+      "path": "DataProcessor/VisualProcessor/core/model_process/core_identity/brand_semantics/known_brands/car/honda/Снимок экрана от 2026-02-13 13-14-51.png",
+      "sha256": "5e13413d99feee7613adfa5dd3a92510520135ceefb887ca08958d841d239667",
+      "size": 36267,
+      "lfs": true,
+      "group": "semantic_bases"
+    },
+    {
+      "path": "DataProcessor/VisualProcessor/core/model_process/core_identity/brand_semantics/known_brands/car/honda/Снимок экрана от 2026-02-13 13-15-32.png",
+      "sha256": "e31d9dd6dd6f5458ffec1e5273bd65d74ee6347bada8ec8858e8341c20c8e2b9",
+      "size": 56286,
+      "lfs": true,
+      "group": "semantic_bases"
+    },
+    {
+      "path": "DataProcessor/VisualProcessor/core/model_process/core_identity/brand_semantics/known_brands/car/honda/Снимок экрана от 2026-02-13 13-15-36.png",
+      "sha256": "d2cd529dd23603daa391383eeb5a8773d887e043710ebfe5dcd0bc2445a9d6f3",
+      "size": 88688,
+      "lfs": true,
+      "group": "semantic_bases"
+    },
+    {
+      "path": "DataProcessor/VisualProcessor/core/model_process/core_identity/brand_semantics/known_brands/car/honda/Снимок экрана от 2026-02-13 13-16-00.png",
+      "sha256": "b9c840f818427d9175588b15fcfd490f185f6c96fa786280b58b44f3db10da8e",
+      "size": 80449,
+      "lfs": true,
+      "group": "semantic_bases"
+    },
+    {
+      "path": "DataProcessor/VisualProcessor/core/model_process/core_identity/brand_semantics/known_brands/car/honda/Снимок экрана от 2026-02-13 13-16-38.png",
+      "sha256": "febed3cd961943e3bbd9d5d40fb0b9343d7159c8cbc150244e63f1ead75fdd75",
+      "size": 28723,
+      "lfs": true,
+      "group": "semantic_bases"
+    },
+    {
+      "path": "DataProcessor/VisualProcessor/core/model_process/core_identity/brand_semantics/known_brands/car/honda/Снимок экрана от 2026-02-13 13-16-47.png",
+      "sha256": "e3e72ccafad20d28c83ffeb829ec51ccfef4b3c09a6c75e8299e38b9cd8c4cc2",
+      "size": 22432,
+      "lfs": true,
+      "group": "semantic_bases"
+    },
+    {
+      "path": "DataProcessor/VisualProcessor/core/model_process/core_identity/brand_semantics/known_brands/car/honda/Снимок экрана от 2026-02-13 13-16-51.png",
+      "sha256": "86d3a9f454ad18c94e94eb09440aff10c9651b047f0f6c0d699d5c7dc8ae5667",
+      "size": 28453,
+      "lfs": true,
+      "group": "semantic_bases"
+    },
+    {
+      "path": "DataProcessor/VisualProcessor/core/model_process/core_identity/brand_semantics/known_brands/car/honda/Снимок экрана от 2026-02-13 13-17-31.png",
+      "sha256": "76677c1c3b4efac75a21cffeeac957de9412886b281d50366feaabc367592d45",
+      "size": 27769,
+      "lfs": true,
+      "group": "semantic_bases"
+    },
+    {
+      "path": "DataProcessor/VisualProcessor/core/model_process/core_identity/brand_semantics/known_brands/car/honda/Снимок экрана от 2026-02-18 15-45-49.png",
+      "sha256": "766edd1e10e55b50cef8fe7811fd445d06aa40e8828e7544135503768b9a84ab",
+      "size": 33663,
+      "lfs": true,
+      "group": "semantic_bases"
+    },
+    {
+      "path": "DataProcessor/VisualProcessor/core/model_process/core_identity/brand_semantics/known_brands/car/honda/Снимок экрана от 2026-02-18 15-46-15.png",
+      "sha256": "e14bfcbfec0187f8d0de8eaa4e9d5b23ff11dff47f3df582876efbf86b8df7e6",
+      "size": 29655,
+      "lfs": true,
+      "group": "semantic_bases"
+    },
+    {
+      "path": "DataProcessor/VisualProcessor/core/model_process/core_identity/brand_semantics/known_brands/car/honda/Снимок экрана от 2026-02-18 15-46-23.png",
+      "sha256": "6ebccecd31a9c6109cee199d4a09c0f07b9098f51d553f44cc768870efddc0e8",
+      "size": 31745,
+      "lfs": true,
+      "group": "semantic_bases"
+    },
+    {
+      "path": "DataProcessor/VisualProcessor/core/model_process/core_identity/brand_semantics/known_brands/car/honda/Снимок экрана от 2026-02-18 15-46-38.png",
+      "sha256": "990fc0f7b97eac11ffb229344a0a4a94e1bdac9e429ad80405c869770877a996",
+      "size": 46080,
+      "lfs": true,
+      "group": "semantic_bases"
+    },
+    {
+      "path": "DataProcessor/VisualProcessor/core/model_process/core_identity/brand_semantics/known_brands/car/honda/Снимок экрана от 2026-02-18 15-46-56.png",
+      "sha256": "759bc33bf2ab00d69c967b187a5cd43a5a5881e473e1424fb4bc18f4f10825ab",
+      "size": 38046,
+      "lfs": true,
+      "group": "semantic_bases"
+    },
+    {
+      "path": "DataProcessor/VisualProcessor/core/model_process/core_identity/brand_semantics/known_brands/car/honda/Снимок экрана от 2026-02-18 15-47-10.png",
+      "sha256": "c463c396c666dcc9e2f8a0280b7c908190451514af7b62d198a8ba8f3fbbe978",
+      "size": 83795,
+      "lfs": true,
+      "group": "semantic_bases"
+    },
+    {
+      "path": "DataProcessor/VisualProcessor/core/model_process/core_identity/brand_semantics/known_brands/car/honda/Снимок экрана от 2026-02-18 15-47-59.png",
+      "sha256": "788d52397d70e0dda9b107d878e072bbd113491f42b06fec7eed21ee54db5d82",
+      "size": 94512,
+      "lfs": true,
+      "group": "semantic_bases"
+    },
+    {
+      "path": "DataProcessor/VisualProcessor/core/model_process/core_identity/brand_semantics/known_brands/car/honda/Снимок экрана от 2026-02-18 15-48-11.png",
+      "sha256": "90b3206e4bdfaa5747414e184af33a43ffa90d2a8543e28e63ac199697f8f275",
+      "size": 48057,
+      "lfs": true,
+      "group": "semantic_bases"
+    },
+    {
+      "path": "DataProcessor/VisualProcessor/core/model_process/core_identity/brand_semantics/known_brands/car/honda/Снимок экрана от 2026-02-18 15-48-24.png",
+      "sha256": "39659c97f968bf9f12bbdb6fcbcd915ad76563e1734a52df1f209d07c85613db",
+      "size": 44307,
+      "lfs": true,
+      "group": "semantic_bases"
+    },
+    {
+      "path": "DataProcessor/VisualProcessor/core/model_process/core_identity/brand_semantics/known_brands/car/honda/Снимок экрана от 2026-02-18 15-48-44.png",
+      "sha256": "65e34a70dfb061be2e08b6674a3058f211b04912de15c30c7dabb0faaafac3d6",
+      "size": 50089,
+      "lfs": true,
+      "group": "semantic_bases"
+    },
+    {
+      "path": "DataProcessor/VisualProcessor/core/model_process/core_identity/brand_semantics/known_brands/car/hyundai/Снимок экрана от 2026-02-13 13-26-59.png",
+      "sha256": "a9b6fafc46b29a76a8911b88399a20b362c799ec8cfc50620a54c572d7658b21",
+      "size": 259454,
+      "lfs": true,
+      "group": "semantic_bases"
+    },
+    {
+      "path": "DataProcessor/VisualProcessor/core/model_process/core_identity/brand_semantics/known_brands/car/hyundai/Снимок экрана от 2026-02-13 13-27-10.png",
+      "sha256": "b9d7a448349c27d3823561dbb9464d6501d2f4a7c7ac4c6496e9672a9870406f",
+      "size": 19813,
+      "lfs": true,
+      "group": "semantic_bases"
+    },
+    {
+      "path": "DataProcessor/VisualProcessor/core/model_process/core_identity/brand_semantics/known_brands/car/hyundai/Снимок экрана от 2026-02-13 13-27-15.png",
+      "sha256": "6a846bab64c4b04e98b0c0c8434ff77d16a975f46d8206c0a89780b14e1ee39b",
+      "size": 52193,
+      "lfs": true,
+      "group": "semantic_bases"
+    },
+    {
+      "path": "DataProcessor/VisualProcessor/core/model_process/core_identity/brand_semantics/known_brands/car/hyundai/Снимок экрана от 2026-02-13 13-27-22.png",
+      "sha256": "189b00c52a2f58d3b8ed4592cf2424c01754c1fa365d85bdd654aadc13f86adc",
+      "size": 48872,
+      "lfs": true,
+      "group": "semantic_bases"
+    },
+    {
+      "path": "DataProcessor/VisualProcessor/core/model_process/core_identity/brand_semantics/known_brands/car/hyundai/Снимок экрана от 2026-02-13 13-27-37.png",
+      "sha256": "b71e23fa15c7d9a8be442e850187e131e82ace289e3786fedb99d8c1c2efd4a8",
+      "size": 96370,
+      "lfs": true,
+      "group": "semantic_bases"
+    },
+    {
+      "path": "DataProcessor/VisualProcessor/core/model_process/core_identity/brand_semantics/known_brands/car/hyundai/Снимок экрана от 2026-02-13 13-27-44.png",
+      "sha256": "1b82a975f57ee98220790bdba4918b9bfd2284ab138fc81ab0a4bdd2e0345ea7",
+      "size": 69937,
+      "lfs": true,
+      "group": "semantic_bases"
+    },
+    {
+      "path": "DataProcessor/VisualProcessor/core/model_process/core_identity/brand_semantics/known_brands/car/hyundai/Снимок экрана от 2026-02-13 13-28-07.png",
+      "sha256": "644f0cad54e13bc28728cb39d64199f8edd4af038a9d0d2fa50e980d61c33623",
+      "size": 156910,
+      "lfs": true,
+      "group": "semantic_bases"
+    },
+    {
+      "path": "DataProcessor/VisualProcessor/core/model_process/core_identity/brand_semantics/known_brands/car/hyundai/Снимок экрана от 2026-02-13 13-28-22.png",
+      "sha256": "5b6c30dd6800553ef11ccf9127eb2358af515e9f20ed621d7568cc5f5b43cc6b",
+      "size": 22592,
+      "lfs": true,
+      "group": "semantic_bases"
+    },
+    {
+      "path": "DataProcessor/VisualProcessor/core/model_process/core_identity/brand_semantics/known_brands/car/hyundai/Снимок экрана от 2026-02-13 13-28-31.png",
+      "sha256": "7a6ea6a555aa0aa8374c6c2b8f786445a58116653a33466cdb9dd249ffd9f72a",
+      "size": 24457,
+      "lfs": true,
+      "group": "semantic_bases"
+    },
+    {
+      "path": "DataProcessor/VisualProcessor/core/model_process/core_identity/brand_semantics/known_brands/car/hyundai/Снимок экрана от 2026-02-13 13-28-38.png",
+      "sha256": "d68e6aa7f8f01a4f1ae9ff45b01f639520728d39faa5e04211b99e2f13c2b4a8",
+      "size": 33928,
+      "lfs": true,
+      "group": "semantic_bases"
+    },
+    {
+      "path": "DataProcessor/VisualProcessor/core/model_process/core_identity/brand_semantics/known_brands/car/hyundai/Снимок экрана от 2026-02-13 13-29-05.png",
+      "sha256": "d65d9cf4bc13beb7f8f8c4e002b8db9808f61789a229804b06f32da42b7fc77e",
+      "size": 38548,
+      "lfs": true,
+      "group": "semantic_bases"
+    },
+    {
+      "path": "DataProcessor/VisualProcessor/core/model_process/core_identity/brand_semantics/known_brands/car/hyundai/Снимок экрана от 2026-02-18 15-31-36.png",
+      "sha256": "ff2ce11c9d8ad0b32c11949327a95eb7a694b3e1dc674112cd620b28c7a07f17",
+      "size": 75503,
+      "lfs": true,
+      "group": "semantic_bases"
+    },
+    {
+      "path": "DataProcessor/VisualProcessor/core/model_process/core_identity/brand_semantics/known_brands/car/hyundai/Снимок экрана от 2026-02-18 15-32-02.png",
+      "sha256": "5c9544eeabbc9c2d0fe8606ebda0d4f361b06e2a6389e22b370d3505751f3e7c",
+      "size": 60178,
+      "lfs": true,
+      "group": "semantic_bases"
+    },
+    {
+      "path": "DataProcessor/VisualProcessor/core/model_process/core_identity/brand_semantics/known_brands/car/hyundai/Снимок экрана от 2026-02-18 15-32-29.png",
+      "sha256": "4abbc2dba1f2214edaff50f4d371c32f66f4fe6347e1b3e0cfde2920c4821a9c",
+      "size": 44390,
+      "lfs": true,
+      "group": "semantic_bases"
+    },
+    {
+      "path": "DataProcessor/VisualProcessor/core/model_process/core_identity/brand_semantics/known_brands/car/hyundai/Снимок экрана от 2026-02-18 15-32-46.png",
+      "sha256": "17d487b3a769292de978b8b7db47623d929d5f0391425167d2ce9fc7ee90ea1f",
+      "size": 53210,
+      "lfs": true,
+      "group": "semantic_bases"
+    },
+    {
+      "path": "DataProcessor/VisualProcessor/core/model_process/core_identity/brand_semantics/known_brands/car/hyundai/Снимок экрана от 2026-02-18 15-32-54.png",
+      "sha256": "4268ed878b1f823a7b8825eda0b6a1f4e6de255a53ec627b32bd0da446293686",
+      "size": 53472,
+      "lfs": true,
+      "group": "semantic_bases"
+    },
+    {
+      "path": "DataProcessor/VisualProcessor/core/model_process/core_identity/brand_semantics/known_brands/car/hyundai/Снимок экрана от 2026-02-18 15-33-09.png",
+      "sha256": "a6fddb18c240ea4754381fb0efcc710801672d7ebcec9ba93d8ffe483663b1de",
+      "size": 59437,
+      "lfs": true,
+      "group": "semantic_bases"
+    },
+    {
+      "path": "DataProcessor/VisualProcessor/core/model_process/core_identity/brand_semantics/known_brands/car/hyundai/Снимок экрана от 2026-02-18 15-33-29.png",
+      "sha256": "bb9a4df377e54c83ea80f451d0ba6cbd4b675c5507d27dc143d1bc176913bdb4",
+      "size": 54781,
+      "lfs": true,
+      "group": "semantic_bases"
+    },
+    {
+      "path": "DataProcessor/VisualProcessor/core/model_process/core_identity/brand_semantics/known_brands/car/hyundai/Снимок экрана от 2026-02-18 15-33-38.png",
+      "sha256": "28e98f09a9ff2dddb503a945be08a494ecc034e5db9cd2a63a628262b57615c7",
+      "size": 76620,
+      "lfs": true,
+      "group": "semantic_bases"
+    },
+    {
+      "path": "DataProcessor/VisualProcessor/core/model_process/core_identity/brand_semantics/known_brands/car/hyundai/Снимок экрана от 2026-02-18 15-33-50.png",
+      "sha256": "9b0917345a31edde15741347aa35e24844c5c4e929a615ec9b4fd6212b9198f5",
+      "size": 77043,
+      "lfs": true,
+      "group": "semantic_bases"
+    },
+    {
+      "path": "DataProcessor/VisualProcessor/core/model_process/core_identity/brand_semantics/known_brands/car/kia/Снимок экрана от 2026-02-13 13-33-07.png",
+      "sha256": "3282541b3be38866752ca3f6efd2e4ffbac7fc0910d035d9c11f7e1508006175",
+      "size": 105776,
+      "lfs": true,
+      "group": "semantic_bases"
+    },
+    {
+      "path": "DataProcessor/VisualProcessor/core/model_process/core_identity/brand_semantics/known_brands/car/kia/Снимок экрана от 2026-02-13 13-33-13.png",
+      "sha256": "55db5f037887911ae8f2ebd3e6e077fc46a86c113a71c32daaa85b5f2457059a",
+      "size": 75502,
+      "lfs": true,
+      "group": "semantic_bases"
+    },
+    {
+      "path": "DataProcessor/VisualProcessor/core/model_process/core_identity/brand_semantics/known_brands/car/kia/Снимок экрана от 2026-02-13 13-33-26.png",
+      "sha256": "83a04083b17cef0552861342d83634882f7fa7ecef6e2d6568f450ea0404d345",
+      "size": 57149,
+      "lfs": true,
+      "group": "semantic_bases"
+    },
+    {
+      "path": "DataProcessor/VisualProcessor/core/model_process/core_identity/brand_semantics/known_brands/car/kia/Снимок экрана от 2026-02-13 13-33-32.png",
+      "sha256": "59ac0912eda5b7a52aa619ef5b7afb80261234f59910aeb3bacbe3b86318dd8f",
+      "size": 39978,
+      "lfs": true,
+      "group": "semantic_bases"
+    },
+    {
+      "path": "DataProcessor/VisualProcessor/core/model_process/core_identity/brand_semantics/known_brands/car/kia/Снимок экрана от 2026-02-13 13-33-39.png",
+      "sha256": "16c215a21450ea629f0f1caa477d5bdf56ca9e615f006e69dadf2ebd31eab25e",
+      "size": 34596,
+      "lfs": true,
+      "group": "semantic_bases"
+    },
+    {
+      "path": "DataProcessor/VisualProcessor/core/model_process/core_identity/brand_semantics/known_brands/car/kia/Снимок экрана от 2026-02-13 13-33-55.png",
+      "sha256": "63fb6b5d361c8627217e223ce786f49a130510e23ed96156a0dafcdf8853ea39",
+      "size": 143742,
+      "lfs": true,
+      "group": "semantic_bases"
+    },
+    {
+      "path": "DataProcessor/VisualProcessor/core/model_process/core_identity/brand_semantics/known_brands/car/kia/Снимок экрана от 2026-02-13 13-34-44.png",
+      "sha256": "e4e49497375a317984a1566b8b82f64bd57deea9c2b3756878cffa0f980d1718",
+      "size": 102344,
+      "lfs": true,
+      "group": "semantic_bases"
+    },
+    {
+      "path": "DataProcessor/VisualProcessor/core/model_process/core_identity/brand_semantics/known_brands/car/kia/Снимок экрана от 2026-02-18 16-07-31.png",
+      "sha256": "0e63049d0af91dbb59ead39dcbfef854b91f4cfc7a86f3c6d6dbafd59d9c9c8a",
+      "size": 157947,
+      "lfs": true,
+      "group": "semantic_bases"
+    },
+    {
+      "path": "DataProcessor/VisualProcessor/core/model_process/core_identity/brand_semantics/known_brands/car/kia/Снимок экрана от 2026-02-18 16-07-37.png",
+      "sha256": "eb6d74ebd238bf7019cd7db923cfab547d53da6c329869d042b873f12b6a9379",
+      "size": 85634,
+      "lfs": true,
+      "group": "semantic_bases"
+    },
+    {
+      "path": "DataProcessor/VisualProcessor/core/model_process/core_identity/brand_semantics/known_brands/car/kia/Снимок экрана от 2026-02-18 16-07-42.png",
+      "sha256": "87a5250e4ee82e09bb73a3d1cab278cd7a3b50c3ae03140da81af494adff47f9",
+      "size": 85302,
+      "lfs": true,
+      "group": "semantic_bases"
+    },
+    {
+      "path": "DataProcessor/VisualProcessor/core/model_process/core_identity/brand_semantics/known_brands/car/kia/Снимок экрана от 2026-02-18 16-07-47.png",
+      "sha256": "58a7a3e5e28a6e8acaa66fe6f65261d9c271a8f49e8ed5e0835613c8a8a24457",
+      "size": 153882,
+      "lfs": true,
+      "group": "semantic_bases"
+    },
+    {
+      "path": "DataProcessor/VisualProcessor/core/model_process/core_identity/brand_semantics/known_brands/car/kia/Снимок экрана от 2026-02-18 16-08-05.png",
+      "sha256": "9f96d534118b92b870757406ff0728e55eb6e36e7ecae33159214c4badeceaf7",
+      "size": 83001,
+      "lfs": true,
+      "group": "semantic_bases"
+    },
+    {
+      "path": "DataProcessor/VisualProcessor/core/model_process/core_identity/brand_semantics/known_brands/car/kia/Снимок экрана от 2026-02-18 16-08-25.png",
+      "sha256": "da6aa2dddab73fd689716080645a95a0968e85cf9040439c53bad15a6e63204f",
+      "size": 147455,
+      "lfs": true,
+      "group": "semantic_bases"
+    },
+    {
+      "path": "DataProcessor/VisualProcessor/core/model_process/core_identity/brand_semantics/known_brands/car/kia/Снимок экрана от 2026-02-18 16-08-34.png",
+      "sha256": "03bdb47cc20c7b894f5b21316b8d5b1a2b889ca15770540ec0bf2af7f8d95109",
+      "size": 96814,
+      "lfs": true,
+      "group": "semantic_bases"
+    },
+    {
+      "path": "DataProcessor/VisualProcessor/core/model_process/core_identity/brand_semantics/known_brands/car/kia/Снимок экрана от 2026-02-18 16-08-49.png",
+      "sha256": "ae3d299cc79157a20cc7c715d677c10e165343f89c10cce6d4f6079d63dc4382",
+      "size": 50320,
+      "lfs": true,
+      "group": "semantic_bases"
+    },
+    {
+      "path": "DataProcessor/VisualProcessor/core/model_process/core_identity/brand_semantics/known_brands/car/kia/Снимок экрана от 2026-02-18 16-08-54.png",
+      "sha256": "53902856bdae0383039c41bf3565e67939c204628c00f91d198bb1dc7706e671",
+      "size": 42229,
+      "lfs": true,
+      "group": "semantic_bases"
+    },
+    {
+      "path": "DataProcessor/VisualProcessor/core/model_process/core_identity/brand_semantics/known_brands/car/kia/Снимок экрана от 2026-02-18 16-09-06.png",
+      "sha256": "09fdf862959cb5bf9f8a5ff50e96634c886f99f4c26a6be6354d6d8d07c9b6da",
+      "size": 104759,
+      "lfs": true,
+      "group": "semantic_bases"
+    },
+    {
+      "path": "DataProcessor/VisualProcessor/core/model_process/core_identity/brand_semantics/known_brands/car/kia/Снимок экрана от 2026-02-18 16-09-39.png",
+      "sha256": "155253ddbab1d27274bdc57af6616a232b03305214e7d6201abe2131118f152b",
+      "size": 47254,
+      "lfs": true,
+      "group": "semantic_bases"
+    },
+    {
+      "path": "DataProcessor/VisualProcessor/core/model_process/core_identity/brand_semantics/known_brands/car/kia/Снимок экрана от 2026-02-18 16-09-49.png",
+      "sha256": "406db8aed935e467794130340c346d4ec5f7f3fca7575df4ec6e1f57f221d003",
+      "size": 165396,
+      "lfs": true,
+      "group": "semantic_bases"
+    },
+    {
+      "path": "DataProcessor/VisualProcessor/core/model_process/core_identity/brand_semantics/known_brands/car/kia/Снимок экрана от 2026-02-18 16-09-55.png",
+      "sha256": "e4b206f1925d2b2eeb16938204d022599fc46f6be51a81d08fefba280fb0251f",
+      "size": 178201,
+      "lfs": true,
+      "group": "semantic_bases"
+    },
+    {
+      "path": "DataProcessor/VisualProcessor/core/model_process/core_identity/brand_semantics/known_brands/car/kia/Снимок экрана от 2026-02-18 16-10-00.png",
+      "sha256": "8d81331120e26f6e580ec1be56689255da62a4cf38ed37de3ee023c0f08be721",
+      "size": 124055,
+      "lfs": true,
+      "group": "semantic_bases"
+    },
+    {
+      "path": "DataProcessor/VisualProcessor/core/model_process/core_identity/brand_semantics/known_brands/car/lamborghini/Снимок экрана от 2026-02-15 18-35-19.png",
+      "sha256": "c209c6b8d6beec483f90aa6c0cb8b5f4524fe6935155326c194c14eccf9caf19",
+      "size": 76021,
+      "lfs": true,
+      "group": "semantic_bases"
+    },
+    {
+      "path": "DataProcessor/VisualProcessor/core/model_process/core_identity/brand_semantics/known_brands/car/lamborghini/Снимок экрана от 2026-02-15 18-35-25.png",
+      "sha256": "571a0a0a69f5103891e53d8959f854b1981e97277c65b95b4a24fc96b5715172",
+      "size": 40939,
+      "lfs": true,
+      "group": "semantic_bases"
+    },
+    {
+      "path": "DataProcessor/VisualProcessor/core/model_process/core_identity/brand_semantics/known_brands/car/lamborghini/Снимок экрана от 2026-02-15 18-35-44.png",
+      "sha256": "090525015adc7acf86662260be9f134e3e9bc2b19e7278fe80deb3a73decc4e6",
+      "size": 91377,
+      "lfs": true,
+      "group": "semantic_bases"
+    },
+    {
+      "path": "DataProcessor/VisualProcessor/core/model_process/core_identity/brand_semantics/known_brands/car/lamborghini/Снимок экрана от 2026-02-15 18-35-53.png",
+      "sha256": "da7fa5e6eacd2b8a01b1b853fba95ec9043c056f4b6fb1a4a7ce98b491ffdc83",
+      "size": 65575,
+      "lfs": true,
+      "group": "semantic_bases"
+    },
+    {
+      "path": "DataProcessor/VisualProcessor/core/model_process/core_identity/brand_semantics/known_brands/car/lamborghini/Снимок экрана от 2026-02-15 18-35-59.png",
+      "sha256": "92ad3e8740b1581d71cf58d8fbea8a422cc6f0df04bcc1e71f1970ce78d931dc",
+      "size": 25381,
+      "lfs": true,
+      "group": "semantic_bases"
+    },
+    {
+      "path": "DataProcessor/VisualProcessor/core/model_process/core_identity/brand_semantics/known_brands/car/lamborghini/Снимок экрана от 2026-02-15 18-36-29.png",
+      "sha256": "74470556f55df84eb25584d78f356a8113f290d9369d27c47b8e3f296dcccbd2",
+      "size": 29377,
+      "lfs": true,
+      "group": "semantic_bases"
+    },
+    {
+      "path": "DataProcessor/VisualProcessor/core/model_process/core_identity/brand_semantics/known_brands/car/lamborghini/Снимок экрана от 2026-02-15 18-36-58.png",
+      "sha256": "5719ea9328b9d6ee8e7b80950571d52ac547e9e52915c4e922d967a5f2cf3063",
+      "size": 46744,
+      "lfs": true,
+      "group": "semantic_bases"
+    },
+    {
+      "path": "DataProcessor/VisualProcessor/core/model_process/core_identity/brand_semantics/known_brands/car/lamborghini/Снимок экрана от 2026-02-15 18-37-08.png",
+      "sha256": "5252a6844dcb0ec77d757ac01557ecb6c921c26079d95ecde9d3ddaf76bdd7d8",
+      "size": 75828,
+      "lfs": true,
+      "group": "semantic_bases"
+    },
+    {
+      "path": "DataProcessor/VisualProcessor/core/model_process/core_identity/brand_semantics/known_brands/car/lamborghini/Снимок экрана от 2026-02-18 15-57-31.png",
+      "sha256": "da67fbfa95346a57abe46e1951455da1b8ce91a4704f1d0229bba2c1d852c442",
+      "size": 28035,
+      "lfs": true,
+      "group": "semantic_bases"
+    },
+    {
+      "path": "DataProcessor/VisualProcessor/core/model_process/core_identity/brand_semantics/known_brands/car/lamborghini/Снимок экрана от 2026-02-18 15-57-51.png",
+      "sha256": "974aae1e9a227ce74ba6e515292616103d7513f2ef04e4207761fc8f125f7c74",
+      "size": 36490,
+      "lfs": true,
+      "group": "semantic_bases"
+    },
+    {
+      "path": "DataProcessor/VisualProcessor/core/model_process/core_identity/brand_semantics/known_brands/car/lamborghini/Снимок экрана от 2026-02-18 15-57-58.png",
+      "sha256": "9135a4b51bbd0790631391a3eca48c7e77bf420a64e5027714ab3cd54772d567",
+      "size": 31768,
+      "lfs": true,
+      "group": "semantic_bases"
+    },
+    {
+      "path": "DataProcessor/VisualProcessor/core/model_process/core_identity/brand_semantics/known_brands/car/lamborghini/Снимок экрана от 2026-02-18 15-58-23.png",
+      "sha256": "aed3786e7bc83bb27663349f714f38716f41094a561c54256e961ac8d15ae712",
+      "size": 139113,
+      "lfs": true,
+      "group": "semantic_bases"
+    },
+    {
+      "path": "DataProcessor/VisualProcessor/core/model_process/core_identity/brand_semantics/known_brands/car/lamborghini/Снимок экрана от 2026-02-18 15-58-30.png",
+      "sha256": "ebf8be8abb3540e872cb58e8e05f0212ecb507cee8587de7f97039452e4a463a",
+      "size": 87518,
+      "lfs": true,
+      "group": "semantic_bases"
+    },
+    {
+      "path": "DataProcessor/VisualProcessor/core/model_process/core_identity/brand_semantics/known_brands/car/lamborghini/Снимок экрана от 2026-02-18 15-58-58.png",
+      "sha256": "7ffaeb7fc5a53c27fc2c4e8df91b6bfa07111da76f3c812b6a0964838f915292",
+      "size": 50299,
+      "lfs": true,
+      "group": "semantic_bases"
+    },
+    {
+      "path": "DataProcessor/VisualProcessor/core/model_process/core_identity/brand_semantics/known_brands/car/lamborghini/Снимок экрана от 2026-02-18 15-59-18.png",
+      "sha256": "37ad165993437acce614b2852e368f840179a32abc49d45a9f105f177eb30c71",
+      "size": 65332,
+      "lfs": true,
+      "group": "semantic_bases"
+    },
+    {
+      "path": "DataProcessor/VisualProcessor/core/model_process/core_identity/brand_semantics/known_brands/car/lamborghini/Снимок экрана от 2026-02-18 15-59-29.png",
+      "sha256": "f90670f75cb57325577247678cff35f03b82ecdd5d555465006bd727d73c1aa0",
+      "size": 17737,
+      "lfs": true,
+      "group": "semantic_bases"
+    },
+    {
+      "path": "DataProcessor/VisualProcessor/core/model_process/core_identity/brand_semantics/known_brands/car/lamborghini/Снимок экрана от 2026-02-18 16-00-01.png",
+      "sha256": "f18f8e81c87fc1deca17d875f61180418d0089cf63c89a9fb3f0af5708e25ab3",
+      "size": 43328,
+      "lfs": true,
+      "group": "semantic_bases"
+    },
+    {
+      "path": "DataProcessor/VisualProcessor/core/model_process/core_identity/brand_semantics/known_brands/car/lamborghini/Снимок экрана от 2026-02-18 16-00-11.png",
+      "sha256": "3fbaf9a7e9b856030aa71d3f107319700c8fd6cb941f2741557d0a126a28bb84",
+      "size": 76866,
+      "lfs": true,
+      "group": "semantic_bases"
+    },
+    {
+      "path": "DataProcessor/VisualProcessor/core/model_process/core_identity/brand_semantics/known_brands/car/lamborghini/Снимок экрана от 2026-02-18 16-00-24.png",
+      "sha256": "f9b178c485664f9d7512ae90645cd14e987adad3eb07410fed7ba680087fa0a1",
+      "size": 24202,
+      "lfs": true,
+      "group": "semantic_bases"
+    },
+    {
+      "path": "DataProcessor/VisualProcessor/core/model_process/core_identity/brand_semantics/known_brands/car/lamborghini/Снимок экрана от 2026-02-18 16-01-51.png",
+      "sha256": "1652eaa137d421e504b7bfecd7d9385e2e7846320c9be4ee13ba23c315952606",
+      "size": 149323,
+      "lfs": true,
+      "group": "semantic_bases"
+    },
+    {
+      "path": "DataProcessor/VisualProcessor/core/model_process/core_identity/brand_semantics/known_brands/car/lexus/Снимок экрана от 2026-02-11 13-19-35.png",
+      "sha256": "91e6c13f2233b273aeb05de0876407c0c131c3b3add8d8795eb09d00e024e555",
+      "size": 36350,
+      "lfs": true,
+      "group": "semantic_bases"
+    },
+    {
+      "path": "DataProcessor/VisualProcessor/core/model_process/core_identity/brand_semantics/known_brands/car/lexus/Снимок экрана от 2026-02-11 13-20-07.png",
+      "sha256": "227aed2b35f61155800285d471d578dbf920c840ac0027d3a8c7e2c3c06ba610",
+      "size": 27880,
+      "lfs": true,
+      "group": "semantic_bases"
+    },
+    {
+      "path": "DataProcessor/VisualProcessor/core/model_process/core_identity/brand_semantics/known_brands/car/lexus/Снимок экрана от 2026-02-11 13-20-21.png",
+      "sha256": "085c9b8ad8a84a98453299b9ee6cc94b8d1771be0fdabc4c4229518f4f95fcc8",
+      "size": 77332,
+      "lfs": true,
+      "group": "semantic_bases"
+    },
+    {
+      "path": "DataProcessor/VisualProcessor/core/model_process/core_identity/brand_semantics/known_brands/car/lexus/Снимок экрана от 2026-02-11 13-20-48.png",
+      "sha256": "dbdb9ca58221a5519a94224666fb5ed21a5b303ca878cc3e4361d6e43fde6452",
+      "size": 65999,
+      "lfs": true,
+      "group": "semantic_bases"
+    },
+    {
+      "path": "DataProcessor/VisualProcessor/core/model_process/core_identity/brand_semantics/known_brands/car/lexus/Снимок экрана от 2026-02-11 13-21-08.png",
+      "sha256": "2d1444e17cd40e2aaf1fd9021a8cf1712a6722c94a62d897490abadd39e50116",
+      "size": 53038,
+      "lfs": true,
+      "group": "semantic_bases"
+    },
+    {
+      "path": "DataProcessor/VisualProcessor/core/model_process/core_identity/brand_semantics/known_brands/car/mers/2.jpg",
+      "sha256": "3b17c9d20c201d18010a4a256f61e7c46d589f4c90da6347c4b9996045ad72f3",
+      "size": 9727,
+      "lfs": true,
+      "group": "semantic_bases"
+    },
+    {
+      "path": "DataProcessor/VisualProcessor/core/model_process/core_identity/brand_semantics/known_brands/car/mers/Снимок экрана от 2026-02-11 13-22-24.png",
+      "sha256": "9ba9b565cdcd5dccfbfafb3e58aca4781b7d7bc53adcfba031a763ee936ed0b4",
+      "size": 69699,
+      "lfs": true,
+      "group": "semantic_bases"
+    },
+    {
+      "path": "DataProcessor/VisualProcessor/core/model_process/core_identity/brand_semantics/known_brands/car/mers/Снимок экрана от 2026-02-11 13-22-37.png",
+      "sha256": "71dae5d55914ec33e6e58f968b18024d3751d6cf548f129226ca32f7f9515029",
+      "size": 35829,
+      "lfs": true,
+      "group": "semantic_bases"
+    },
+    {
+      "path": "DataProcessor/VisualProcessor/core/model_process/core_identity/brand_semantics/known_brands/car/mers/Снимок экрана от 2026-02-11 13-22-44.png",
+      "sha256": "016e905fe617c2cc33e66fa7f0e600050740a38c8969aea9817c1a8b2674000e",
+      "size": 84390,
+      "lfs": true,
+      "group": "semantic_bases"
+    },
+    {
+      "path": "DataProcessor/VisualProcessor/core/model_process/core_identity/brand_semantics/known_brands/car/mers/Снимок экрана от 2026-02-11 13-22-54.png",
+      "sha256": "5f7c13c0db4dbd3114a6ca831777ca7aa6f58ca7c57187c062a90f4001d22834",
+      "size": 73390,
+      "lfs": true,
+      "group": "semantic_bases"
+    },
+    {
+      "path": "DataProcessor/VisualProcessor/core/model_process/core_identity/brand_semantics/known_brands/car/mers/Снимок экрана от 2026-02-11 13-23-23.png",
+      "sha256": "ae5290309fb981a694033a92b7a1d9fd6595de80b8fc2ac631ec8f73051f764c",
+      "size": 203069,
+      "lfs": true,
+      "group": "semantic_bases"
+    },
+    {
+      "path": "DataProcessor/VisualProcessor/core/model_process/core_identity/brand_semantics/known_brands/car/mers/Снимок экрана от 2026-02-11 13-23-35.png",
+      "sha256": "d76162009c4873d2450620d1aa5b22cd77e00bc5c9acf2228f7ec6db9b850809",
+      "size": 178663,
+      "lfs": true,
+      "group": "semantic_bases"
+    },
+    {
+      "path": "DataProcessor/VisualProcessor/core/model_process/core_identity/brand_semantics/known_brands/car/mers/Снимок экрана от 2026-02-11 13-23-52.png",
+      "sha256": "ec7981c735b444d0ae943882d3f55642e12904f24f05e64d22efe4d40a41c061",
+      "size": 31939,
+      "lfs": true,
+      "group": "semantic_bases"
+    },
+    {
+      "path": "DataProcessor/VisualProcessor/core/model_process/core_identity/brand_semantics/known_brands/car/mers/Снимок экрана от 2026-02-11 13-24-03.png",
+      "sha256": "e3d2560a11cac587bd863dbe835c9f918a9445552c8a3e338147ff10679528b3",
+      "size": 47266,
+      "lfs": true,
+      "group": "semantic_bases"
+    },
+    {
+      "path": "DataProcessor/VisualProcessor/core/model_process/core_identity/brand_semantics/known_brands/car/mers/Снимок экрана от 2026-02-18 15-49-36.png",
+      "sha256": "e786c65e72449bd90d1688d1300a920569d8ab7d5b641ba06e6c1118899ba8f6",
+      "size": 50534,
+      "lfs": true,
+      "group": "semantic_bases"
+    },
+    {
+      "path": "DataProcessor/VisualProcessor/core/model_process/core_identity/brand_semantics/known_brands/car/mers/Снимок экрана от 2026-02-18 15-49-48.png",
+      "sha256": "4812264b6a5ce29cc48da0908fd8fefa1b1c05799e9b78cc62d70b26ce51636e",
+      "size": 52240,
+      "lfs": true,
+      "group": "semantic_bases"
+    },
+    {
+      "path": "DataProcessor/VisualProcessor/core/model_process/core_identity/brand_semantics/known_brands/car/mers/Снимок экрана от 2026-02-18 15-50-05.png",
+      "sha256": "8058708f4a06d0fcc3ee3268f67855756ab80ec0b99fc84e2159a8cdcd421577",
+      "size": 38852,
+      "lfs": true,
+      "group": "semantic_bases"
+    },
+    {
+      "path": "DataProcessor/VisualProcessor/core/model_process/core_identity/brand_semantics/known_brands/car/mers/Снимок экрана от 2026-02-18 15-50-25.png",
+      "sha256": "e051ee406e8e48326be5823cd1a6bd514f3088b9be7a1dfe90eaaf567a43efb3",
+      "size": 144184,
+      "lfs": true,
+      "group": "semantic_bases"
+    },
+    {
+      "path": "DataProcessor/VisualProcessor/core/model_process/core_identity/brand_semantics/known_brands/car/mers/Снимок экрана от 2026-02-18 15-50-35.png",
+      "sha256": "e37514a0e825143fcdf2bb7be6c328453c60ffa27fced7bbc16fdaa444cec0ec",
+      "size": 107904,
+      "lfs": true,
+      "group": "semantic_bases"
+    },
+    {
+      "path": "DataProcessor/VisualProcessor/core/model_process/core_identity/brand_semantics/known_brands/car/mers/Снимок экрана от 2026-02-18 15-50-50.png",
+      "sha256": "379c556acc8c67b2489359f97021241905f34ef2662be455b058b31cdf9af5fb",
+      "size": 52883,
+      "lfs": true,
+      "group": "semantic_bases"
+    },
+    {
+      "path": "DataProcessor/VisualProcessor/core/model_process/core_identity/brand_semantics/known_brands/car/mers/Снимок экрана от 2026-02-18 15-51-02.png",
+      "sha256": "7b03fa4484370389292cc0559b19d6b6d06beb05e2088824c5b7e51af71f2eeb",
+      "size": 181036,
+      "lfs": true,
+      "group": "semantic_bases"
+    },
+    {
+      "path": "DataProcessor/VisualProcessor/core/model_process/core_identity/brand_semantics/known_brands/car/mers/Снимок экрана от 2026-02-18 15-51-29.png",
+      "sha256": "95c7ad5e0d0d8d8f3af6b86960dcd2fe73b270b9791eebd8b5b9ce2d97507920",
+      "size": 101612,
+      "lfs": true,
+      "group": "semantic_bases"
+    },
+    {
+      "path": "DataProcessor/VisualProcessor/core/model_process/core_identity/brand_semantics/known_brands/car/mers/Снимок экрана от 2026-02-18 15-51-38.png",
+      "sha256": "3745ceafd5ecbd9d03745de081e522636baeafc1690e54e603a014962a9ce321",
+      "size": 49906,
+      "lfs": true,
+      "group": "semantic_bases"
+    },
+    {
+      "path": "DataProcessor/VisualProcessor/core/model_process/core_identity/brand_semantics/known_brands/car/mers/Снимок экрана от 2026-02-18 15-52-32.png",
+      "sha256": "774350c9359e8b0fcdae1ee8372be0bbae2b875b4c4557786d6c0ff99e3ec4d2",
+      "size": 93885,
+      "lfs": true,
+      "group": "semantic_bases"
+    },
+    {
+      "path": "DataProcessor/VisualProcessor/core/model_process/core_identity/brand_semantics/known_brands/car/mers/Снимок экрана от 2026-02-18 15-53-29.png",
+      "sha256": "c9857aeb23925cc7fd5814655976c3037c1a20fc13ea058898fae38e89e6f05e",
+      "size": 52470,
+      "lfs": true,
+      "group": "semantic_bases"
+    },
+    {
+      "path": "DataProcessor/VisualProcessor/core/model_process/core_identity/brand_semantics/known_brands/car/nissan/Снимок экрана от 2026-02-13 13-21-40.png",
+      "sha256": "1f27dd7ce42e2ec88b2711269ef42939de7cb6a462e96036fb956a985f532d9c",
+      "size": 122097,
+      "lfs": true,
+      "group": "semantic_bases"
+    },
+    {
+      "path": "DataProcessor/VisualProcessor/core/model_process/core_identity/brand_semantics/known_brands/car/nissan/Снимок экрана от 2026-02-13 13-21-48.png",
+      "sha256": "156164c078a1584278edff97306046b789f7a9639a0307f760fae75b0b0fbe49",
+      "size": 56303,
+      "lfs": true,
+      "group": "semantic_bases"
+    },
+    {
+      "path": "DataProcessor/VisualProcessor/core/model_process/core_identity/brand_semantics/known_brands/car/nissan/Снимок экрана от 2026-02-13 13-21-54.png",
+      "sha256": "edf1f0b68d7602dff15ddb05e64b319193043dbb51348b1717c32ee07e355f16",
+      "size": 12574,
+      "lfs": true,
+      "group": "semantic_bases"
+    },
+    {
+      "path": "DataProcessor/VisualProcessor/core/model_process/core_identity/brand_semantics/known_brands/car/nissan/Снимок экрана от 2026-02-13 13-22-11.png",
+      "sha256": "636f7f0ae2c15d974cab3d9380a46ad06c62eb6adb71b323aebd2ef79c564f2d",
+      "size": 59806,
+      "lfs": true,
+      "group": "semantic_bases"
+    },
+    {
+      "path": "DataProcessor/VisualProcessor/core/model_process/core_identity/brand_semantics/known_brands/car/nissan/Снимок экрана от 2026-02-13 13-22-22.png",
+      "sha256": "447deda7d5e1927b722241fbe6f2d3823410328343c322ea516bfcbc0c6c1883",
+      "size": 106271,
+      "lfs": true,
+      "group": "semantic_bases"
+    },
+    {
+      "path": "DataProcessor/VisualProcessor/core/model_process/core_identity/brand_semantics/known_brands/car/nissan/Снимок экрана от 2026-02-13 13-24-42.png",
+      "sha256": "6a311e624b74859546891c7e99c4df343d41a0b22b96b4e64895b1ebcd58d1fa",
+      "size": 61631,
+      "lfs": true,
+      "group": "semantic_bases"
+    },
+    {
+      "path": "DataProcessor/VisualProcessor/core/model_process/core_identity/brand_semantics/known_brands/car/nissan/Снимок экрана от 2026-02-13 13-24-51.png",
+      "sha256": "ae5ea7dd06cd90b54a7d2953b9835396715ec358dc3139beb1037b5ffc0c0c67",
+      "size": 122856,
+      "lfs": true,
+      "group": "semantic_bases"
+    },
+    {
+      "path": "DataProcessor/VisualProcessor/core/model_process/core_identity/brand_semantics/known_brands/car/nissan/Снимок экрана от 2026-02-13 13-25-02.png",
+      "sha256": "8d98d13218e61a9dd73a989d064ab4f6c791f6dd59cdc673d05f138bec66bf21",
+      "size": 62612,
+      "lfs": true,
+      "group": "semantic_bases"
+    },
+    {
+      "path": "DataProcessor/VisualProcessor/core/model_process/core_identity/brand_semantics/known_brands/car/nissan/Снимок экрана от 2026-02-13 13-25-07.png",
+      "sha256": "42d253d4950711690d23176137f216d62e557f4258cb3bad12dc0eefab32aa2f",
+      "size": 59112,
+      "lfs": true,
+      "group": "semantic_bases"
+    },
+    {
+      "path": "DataProcessor/VisualProcessor/core/model_process/core_identity/brand_semantics/known_brands/car/nissan/Снимок экрана от 2026-02-18 15-54-03.png",
+      "sha256": "7b2861fa5445ae66afa474b21ac74c97a02672db58f38ffcfc1948daba42ea60",
+      "size": 45197,
+      "lfs": true,
+      "group": "semantic_bases"
+    },
+    {
+      "path": "DataProcessor/VisualProcessor/core/model_process/core_identity/brand_semantics/known_brands/car/nissan/Снимок экрана от 2026-02-18 15-54-25.png",
+      "sha256": "9088b4bbbc787bb14b88254e91b4a8934f70f0306cbd3efb4bc3c2d83e580d18",
+      "size": 143023,
+      "lfs": true,
+      "group": "semantic_bases"
+    },
+    {
+      "path": "DataProcessor/VisualProcessor/core/model_process/core_identity/brand_semantics/known_brands/car/nissan/Снимок экрана от 2026-02-18 15-54-38.png",
+      "sha256": "2cf5652f2cf34c86cbb0158e39f3ea7af76716dedc75a3f0aaf7a5e52f1cf88d",
+      "size": 63282,
+      "lfs": true,
+      "group": "semantic_bases"
+    },
+    {
+      "path": "DataProcessor/VisualProcessor/core/model_process/core_identity/brand_semantics/known_brands/car/nissan/Снимок экрана от 2026-02-18 15-54-44.png",
+      "sha256": "45251a7faf4492df2144c9e002966559d1ad805bcd255b146515ffa9d0ec6187",
+      "size": 47262,
+      "lfs": true,
+      "group": "semantic_bases"
+    },
+    {
+      "path": "DataProcessor/VisualProcessor/core/model_process/core_identity/brand_semantics/known_brands/car/nissan/Снимок экрана от 2026-02-18 15-54-52.png",
+      "sha256": "4027d69f402edd1d280ae93eb534a016078836e49c6a396c214e338b148072f3",
+      "size": 55133,
+      "lfs": true,
+      "group": "semantic_bases"
+    },
+    {
+      "path": "DataProcessor/VisualProcessor/core/model_process/core_identity/brand_semantics/known_brands/car/nissan/Снимок экрана от 2026-02-18 15-55-01.png",
+      "sha256": "e195a106e3d324dfa0091741686b61567ad9d81996e0dfb2fcfedbdcce92f5b9",
+      "size": 39846,
+      "lfs": true,
+      "group": "semantic_bases"
+    },
+    {
+      "path": "DataProcessor/VisualProcessor/core/model_process/core_identity/brand_semantics/known_brands/car/nissan/Снимок экрана от 2026-02-18 15-55-14.png",
+      "sha256": "e64b642682a887aca0b046edb79ec2e8a66abfba356c6c5f09a53cb603539690",
+      "size": 42255,
+      "lfs": true,
+      "group": "semantic_bases"
+    },
+    {
+      "path": "DataProcessor/VisualProcessor/core/model_process/core_identity/brand_semantics/known_brands/car/nissan/Снимок экрана от 2026-02-18 15-55-25.png",
+      "sha256": "86d743ed441578077470f4137ad44ccb2cf4217267d1595045e5f2e9f21a1388",
+      "size": 36271,
+      "lfs": true,
+      "group": "semantic_bases"
+    },
+    {
+      "path": "DataProcessor/VisualProcessor/core/model_process/core_identity/brand_semantics/known_brands/car/nissan/Снимок экрана от 2026-02-18 15-55-31.png",
+      "sha256": "d39d9c11ac476750b0f1bd1e862e851e4194c05c6ef32a7af15060a324d04c19",
+      "size": 137995,
+      "lfs": true,
+      "group": "semantic_bases"
+    },
+    {
+      "path": "DataProcessor/VisualProcessor/core/model_process/core_identity/brand_semantics/known_brands/car/nissan/Снимок экрана от 2026-02-18 15-55-42.png",
+      "sha256": "69bbb591c4235f49a0478949dd6051849b4d8f70a1e1422d6f5f84d8f4b6db59",
+      "size": 44962,
+      "lfs": true,
+      "group": "semantic_bases"
+    },
+    {
+      "path": "DataProcessor/VisualProcessor/core/model_process/core_identity/brand_semantics/known_brands/car/nissan/Снимок экрана от 2026-02-18 15-56-07.png",
+      "sha256": "d7566982c26e13cef4700e2471409811ca876c75aaab839950923b603acaae47",
+      "size": 162331,
+      "lfs": true,
+      "group": "semantic_bases"
+    },
+    {
+      "path": "DataProcessor/VisualProcessor/core/model_process/core_identity/brand_semantics/known_brands/car/porsche/1.jpg",
+      "sha256": "8f1cdd3898c9c31a4e0591d9dc2cc2869dcc1c0375b180852b975c48a059d8a0",
+      "size": 22580,
+      "lfs": true,
+      "group": "semantic_bases"
+    },
+    {
+      "path": "DataProcessor/VisualProcessor/core/model_process/core_identity/brand_semantics/known_brands/car/porsche/Снимок экрана от 2026-02-15 18-27-21.png",
+      "sha256": "f68d46f88d85691316efda2a927ceb5ded84e4659a2b58c44453db0de141a257",
+      "size": 21238,
+      "lfs": true,
+      "group": "semantic_bases"
+    },
+    {
+      "path": "DataProcessor/VisualProcessor/core/model_process/core_identity/brand_semantics/known_brands/car/porsche/Снимок экрана от 2026-02-15 18-27-43.png",
+      "sha256": "5e34d7d9ae245335f9a0bc2a7dc3d8e396a693876eb4493c534912dfcfa5f257",
+      "size": 74843,
+      "lfs": true,
+      "group": "semantic_bases"
+    },
+    {
+      "path": "DataProcessor/VisualProcessor/core/model_process/core_identity/brand_semantics/known_brands/car/porsche/Снимок экрана от 2026-02-15 18-27-54.png",
+      "sha256": "5f9564411a123dd4421952f25088862559afad1213c19eee66fbc44eba629662",
+      "size": 335019,
+      "lfs": true,
+      "group": "semantic_bases"
+    },
+    {
+      "path": "DataProcessor/VisualProcessor/core/model_process/core_identity/brand_semantics/known_brands/car/porsche/Снимок экрана от 2026-02-15 18-28-02.png",
+      "sha256": "c2e718ed9e1f4c16eb2574559f20af57f6d2c05feb0773078aad77c6fee25eac",
+      "size": 87139,
+      "lfs": true,
+      "group": "semantic_bases"
+    },
+    {
+      "path": "DataProcessor/VisualProcessor/core/model_process/core_identity/brand_semantics/known_brands/car/porsche/Снимок экрана от 2026-02-15 18-30-06.png",
+      "sha256": "53bcdfc3ac515647b7b824b7959f45c37b2fea672ded4e0d189af0aca4946e60",
+      "size": 91634,
+      "lfs": true,
+      "group": "semantic_bases"
+    },
+    {
+      "path": "DataProcessor/VisualProcessor/core/model_process/core_identity/brand_semantics/known_brands/car/porsche/Снимок экрана от 2026-02-18 16-10-46.png",
+      "sha256": "f7594a62d6c8d8936f5c2cbe51109dc49e4171e9214306eb66bbfca602a3414d",
+      "size": 224293,
+      "lfs": true,
+      "group": "semantic_bases"
+    },
+    {
+      "path": "DataProcessor/VisualProcessor/core/model_process/core_identity/brand_semantics/known_brands/car/porsche/Снимок экрана от 2026-02-18 16-10-56.png",
+      "sha256": "8650a3bee48e16cf94823d20533964b44ae30a9c665de38742e3f71cf250bc8d",
+      "size": 37275,
+      "lfs": true,
+      "group": "semantic_bases"
+    },
+    {
+      "path": "DataProcessor/VisualProcessor/core/model_process/core_identity/brand_semantics/known_brands/car/porsche/Снимок экрана от 2026-02-18 16-11-04.png",
+      "sha256": "c5565ce418c4b2b1df803503d4e8483594eae8e96cf4388a7c0df56a42a1ce39",
+      "size": 61872,
+      "lfs": true,
+      "group": "semantic_bases"
+    },
+    {
+      "path": "DataProcessor/VisualProcessor/core/model_process/core_identity/brand_semantics/known_brands/car/porsche/Снимок экрана от 2026-02-18 16-11-28.png",
+      "sha256": "ae221f5a1ce8535e00236ab219cf035c172a37300d1dc0d7d7620a45ad2feed4",
+      "size": 168329,
+      "lfs": true,
+      "group": "semantic_bases"
+    },
+    {
+      "path": "DataProcessor/VisualProcessor/core/model_process/core_identity/brand_semantics/known_brands/car/porsche/Снимок экрана от 2026-02-18 16-11-37.png",
+      "sha256": "73c832e2cbec10e1b3e7f1c7acce1241076dcfb33e09c56ac345c94cfdaabd54",
+      "size": 133362,
+      "lfs": true,
+      "group": "semantic_bases"
+    },
+    {
+      "path": "DataProcessor/VisualProcessor/core/model_process/core_identity/brand_semantics/known_brands/car/porsche/Снимок экрана от 2026-02-18 16-11-53.png",
+      "sha256": "b7a19bc4b8d7b0973fc52776e19a3a09a0ee8f9e8fcaf97f9a8baa6562360c39",
+      "size": 47174,
+      "lfs": true,
+      "group": "semantic_bases"
+    },
+    {
+      "path": "DataProcessor/VisualProcessor/core/model_process/core_identity/brand_semantics/known_brands/car/porsche/Снимок экрана от 2026-02-18 16-12-04.png",
+      "sha256": "75503ae1b17ccbed764c0f294da9072422fa39eabb0611f0c26881ab6f5eccf3",
+      "size": 101619,
+      "lfs": true,
+      "group": "semantic_bases"
+    },
+    {
+      "path": "DataProcessor/VisualProcessor/core/model_process/core_identity/brand_semantics/known_brands/car/porsche/Снимок экрана от 2026-02-18 16-12-15.png",
+      "sha256": "fc5d70ac39ba36ade4fe1f9dad369bd4dddca0a394e46c14557a2ac0b20fc2f6",
+      "size": 32323,
+      "lfs": true,
+      "group": "semantic_bases"
+    },
+    {
+      "path": "DataProcessor/VisualProcessor/core/model_process/core_identity/brand_semantics/known_brands/car/porsche/Снимок экрана от 2026-02-18 16-12-32.png",
+      "sha256": "63bcc5fbdb83aaa1b07e0554dafe854daa8548e0312d32b65993e3a05a242d4d",
+      "size": 36943,
+      "lfs": true,
+      "group": "semantic_bases"
+    },
+    {
+      "path": "DataProcessor/VisualProcessor/core/model_process/core_identity/brand_semantics/known_brands/car/porsche/Снимок экрана от 2026-02-18 16-13-02.png",
+      "sha256": "8e30e95807edcb42dc0706f57223054e0b3f685bca6ca2fe0b8eb1088eb61453",
+      "size": 32349,
+      "lfs": true,
+      "group": "semantic_bases"
+    },
+    {
+      "path": "DataProcessor/VisualProcessor/core/model_process/core_identity/brand_semantics/known_brands/car/porsche/Снимок экрана от 2026-02-18 16-13-13.png",
+      "sha256": "8ff6c2a2501234e20cf7a3ebab1d437b0c7a6a8f5f54a69908ce39e030cbcef1",
+      "size": 23406,
+      "lfs": true,
+      "group": "semantic_bases"
+    },
+    {
+      "path": "DataProcessor/VisualProcessor/core/model_process/core_identity/brand_semantics/known_brands/car/porsche/Снимок экрана от 2026-02-18 16-13-22.png",
+      "sha256": "1523702b4f52f44c68a42a6bcc374bb550de1cce7502f1b272ba14ff4705bffb",
+      "size": 24264,
+      "lfs": true,
+      "group": "semantic_bases"
+    },
+    {
+      "path": "DataProcessor/VisualProcessor/core/model_process/core_identity/brand_semantics/known_brands/car/porsche/Снимок экрана от 2026-02-18 16-13-41.png",
+      "sha256": "8e71f5a071e9a6058f87cede6eb97f5c8a49b40c3d507d547f04458536af4f36",
+      "size": 54367,
+      "lfs": true,
+      "group": "semantic_bases"
+    },
+    {
+      "path": "DataProcessor/VisualProcessor/core/model_process/core_identity/brand_semantics/known_brands/car/porsche/Снимок экрана от 2026-02-18 16-14-21.png",
+      "sha256": "343d45d9c711bb22e9b9040a8d552ab6a7783dbf6393b0d8d09457326c30a719",
+      "size": 147692,
+      "lfs": true,
+      "group": "semantic_bases"
+    },
+    {
+      "path": "DataProcessor/VisualProcessor/core/model_process/core_identity/brand_semantics/known_brands/car/subaru/3.jpg",
+      "sha256": "f921e0acd6487b2ca4564e24569c4d098f9470119b89dfc40c724a06322fc7d8",
+      "size": 28523,
+      "lfs": true,
+      "group": "semantic_bases"
+    },
+    {
+      "path": "DataProcessor/VisualProcessor/core/model_process/core_identity/brand_semantics/known_brands/car/toyota/Снимок экрана от 2026-02-11 13-14-18.png",
+      "sha256": "35d77b47e734e298771831e6a420a29d6a1f0d98549b32ae9abed869c3803923",
+      "size": 38782,
+      "lfs": true,
+      "group": "semantic_bases"
+    },
+    {
+      "path": "DataProcessor/VisualProcessor/core/model_process/core_identity/brand_semantics/known_brands/car/toyota/Снимок экрана от 2026-02-11 13-14-52.png",
+      "sha256": "6b94f3c0331870147d6059b6d61d729a1ccacb821a232e811451850178950815",
+      "size": 98045,
+      "lfs": true,
+      "group": "semantic_bases"
+    },
+    {
+      "path": "DataProcessor/VisualProcessor/core/model_process/core_identity/brand_semantics/known_brands/car/toyota/Снимок экрана от 2026-02-11 13-15-51.png",
+      "sha256": "71239e4c7540e43f5ca0975ebb1534c87f9397d924602eaf37c3491fdd576b15",
+      "size": 96238,
+      "lfs": true,
+      "group": "semantic_bases"
+    },
+    {
+      "path": "DataProcessor/VisualProcessor/core/model_process/core_identity/brand_semantics/known_brands/car/volkswagen/Снимок экрана от 2026-02-13 13-04-49.png",
+      "sha256": "37650ccb6e0b1278d092c8ed9ff0195aa25eb9a687730973a21dce3f806a558f",
+      "size": 167462,
+      "lfs": true,
+      "group": "semantic_bases"
+    },
+    {
+      "path": "DataProcessor/VisualProcessor/core/model_process/core_identity/brand_semantics/known_brands/car/volkswagen/Снимок экрана от 2026-02-13 13-04-56.png",
+      "sha256": "f41b49295b5da75af5ab4f0c6b11ab6abc92696e67b1521cd103a8b7b6704e87",
+      "size": 94647,
+      "lfs": true,
+      "group": "semantic_bases"
+    },
+    {
+      "path": "DataProcessor/VisualProcessor/core/model_process/core_identity/brand_semantics/known_brands/car/volkswagen/Снимок экрана от 2026-02-13 13-05-02.png",
+      "sha256": "06c745e2a71236d5ed8acbe0e3c35f64744b5e36251b690de52c9a5e69e4d592",
+      "size": 119040,
+      "lfs": true,
+      "group": "semantic_bases"
+    },
+    {
+      "path": "DataProcessor/VisualProcessor/core/model_process/core_identity/brand_semantics/known_brands/car/volkswagen/Снимок экрана от 2026-02-13 13-05-08.png",
+      "sha256": "7d6f68da7757eab1399dcd834a0ab6be25bb537ed4285f4ce9e34dd55ce12dfe",
+      "size": 99433,
+      "lfs": true,
+      "group": "semantic_bases"
+    },
+    {
+      "path": "DataProcessor/VisualProcessor/core/model_process/core_identity/brand_semantics/known_brands/car/volkswagen/Снимок экрана от 2026-02-13 13-05-34.png",
+      "sha256": "b8c56835b6e9fcb950cf77604c5fdedd570b991c53dae1bed274389deb0fd061",
+      "size": 43451,
+      "lfs": true,
+      "group": "semantic_bases"
+    },
+    {
+      "path": "DataProcessor/VisualProcessor/core/model_process/core_identity/brand_semantics/known_brands/car/volkswagen/Снимок экрана от 2026-02-13 13-06-03.png",
+      "sha256": "0efe27d32dc520c1c2e6d2bbebadf8af5e22fdb4fe6820a1149753b97f41d2d8",
+      "size": 26692,
+      "lfs": true,
+      "group": "semantic_bases"
+    },
+    {
+      "path": "DataProcessor/VisualProcessor/core/model_process/core_identity/brand_semantics/known_brands/car/volkswagen/Снимок экрана от 2026-02-18 16-15-02.png",
+      "sha256": "fe06aaa65a5153e6dc13db6be7f436bcb4563249177ecde4b4b8e0b5a55f741f",
+      "size": 38827,
+      "lfs": true,
+      "group": "semantic_bases"
+    },
+    {
+      "path": "DataProcessor/VisualProcessor/core/model_process/core_identity/brand_semantics/known_brands/car/volkswagen/Снимок экрана от 2026-02-18 16-15-08.png",
+      "sha256": "b20f300912eb4f07d29aa93c52534e0c58869bdf5cb0a72ff541faffc2b4d1db",
+      "size": 49816,
+      "lfs": true,
+      "group": "semantic_bases"
+    },
+    {
+      "path": "DataProcessor/VisualProcessor/core/model_process/core_identity/brand_semantics/known_brands/car/volkswagen/Снимок экрана от 2026-02-18 16-15-17.png",
+      "sha256": "4b69f7ad553f6e59944066067021fa3a4ae6a4c7ae9d4fcd30e1105bb0a4fca5",
+      "size": 88824,
+      "lfs": true,
+      "group": "semantic_bases"
+    },
+    {
+      "path": "DataProcessor/VisualProcessor/core/model_process/core_identity/brand_semantics/known_brands/car/volkswagen/Снимок экрана от 2026-02-18 16-15-42.png",
+      "sha256": "792450c9a0913d203adb911850ba88ba87465736de06c8709dd499bedb577c32",
+      "size": 88400,
+      "lfs": true,
+      "group": "semantic_bases"
+    },
+    {
+      "path": "DataProcessor/VisualProcessor/core/model_process/core_identity/brand_semantics/known_brands/car/volkswagen/Снимок экрана от 2026-02-18 16-16-14.png",
+      "sha256": "8a3c7e3e327402a462cc931926ceb1e77ac3a71bdf8bf9fec830cf289746ac22",
+      "size": 60485,
+      "lfs": true,
+      "group": "semantic_bases"
+    },
+    {
+      "path": "DataProcessor/VisualProcessor/core/model_process/core_identity/brand_semantics/known_brands/car/volkswagen/Снимок экрана от 2026-02-18 16-16-20.png",
+      "sha256": "35731193a054296740150f7276ccb0c0e2226e7eb40a1cd384ea9ef104323711",
+      "size": 64828,
+      "lfs": true,
+      "group": "semantic_bases"
+    },
+    {
+      "path": "DataProcessor/VisualProcessor/core/model_process/core_identity/brand_semantics/known_brands/car/volkswagen/Снимок экрана от 2026-02-18 16-17-03.png",
+      "sha256": "61f34eb03234487b5ee11166321a8bccbd2841879430fde5624c53d633b28a5a",
+      "size": 24305,
+      "lfs": true,
+      "group": "semantic_bases"
+    },
+    {
+      "path": "DataProcessor/VisualProcessor/core/model_process/core_identity/brand_semantics/known_brands/car/volkswagen/Снимок экрана от 2026-02-18 16-17-21.png",
+      "sha256": "1568c0453d3dea7a18d1f7abff5192eba19ec0c8e49b7d10bfd96e1612b9d8f4",
+      "size": 16973,
+      "lfs": true,
+      "group": "semantic_bases"
+    },
+    {
+      "path": "DataProcessor/VisualProcessor/core/model_process/core_identity/brand_semantics/known_brands/car/volkswagen/Снимок экрана от 2026-02-18 16-17-31.png",
+      "sha256": "1b6790947a68cc08f3f2601938a845961300a26bbc36d0bd5e72edac1ae05030",
+      "size": 80701,
+      "lfs": true,
+      "group": "semantic_bases"
+    },
+    {
+      "path": "DataProcessor/VisualProcessor/core/model_process/core_identity/brand_semantics/known_brands/car/volkswagen/Снимок экрана от 2026-02-18 16-17-41.png",
+      "sha256": "d6ae888a5dbdaae18a6a95a019d7f0b3f8edad4669aba894d98fe523cb713a1b",
+      "size": 46190,
+      "lfs": true,
+      "group": "semantic_bases"
+    },
+    {
+      "path": "DataProcessor/VisualProcessor/core/model_process/core_identity/brand_semantics/known_brands/car/volkswagen/Снимок экрана от 2026-02-18 16-18-10.png",
+      "sha256": "c365f7a37514139134ebc0ac408f9626055dde68f789c9867253a236d4509756",
+      "size": 25499,
+      "lfs": true,
+      "group": "semantic_bases"
+    },
+    {
+      "path": "DataProcessor/VisualProcessor/core/model_process/core_identity/brand_semantics/known_brands/car/volkswagen/Снимок экрана от 2026-02-18 16-18-18.png",
+      "sha256": "4f5c9d8e067a145fe1b1f06d8e303913de29f2f35ee05b1f53aa36ccc4294f33",
+      "size": 63842,
+      "lfs": true,
+      "group": "semantic_bases"
+    },
+    {
+      "path": "DataProcessor/VisualProcessor/core/model_process/core_identity/brand_semantics/known_brands/car/volkswagen/Снимок экрана от 2026-02-18 16-18-49.png",
+      "sha256": "21f932f7f8963fb7f8c67407aa48d374339e5373667dce4cafab38c642160296",
+      "size": 150508,
+      "lfs": true,
+      "group": "semantic_bases"
+    },
+    {
+      "path": "DataProcessor/VisualProcessor/core/model_process/core_identity/brand_semantics/known_brands/car/volkswagen/Снимок экрана от 2026-02-18 16-19-02.png",
+      "sha256": "04f7425021ea9cb442301ed0117480b4381fe067b578c360b79509c27985b894",
+      "size": 170209,
+      "lfs": true,
+      "group": "semantic_bases"
+    },
+    {
+      "path": "DataProcessor/VisualProcessor/core/model_process/core_identity/brand_semantics/known_brands/sport_wear/adidas/1.jpg",
+      "sha256": "0de7ef45c0614836baa2b49eb76b5feb2082f987b77fb48b864df3283516df4c",
+      "size": 33320,
+      "lfs": true,
+      "group": "semantic_bases"
+    },
+    {
+      "path": "DataProcessor/VisualProcessor/core/model_process/core_identity/brand_semantics/known_brands/wear/zara/Снимок экрана от 2026-02-13 13-38-37.png",
+      "sha256": "f234b73fccbb3afd44feb151ed66e19c1cd0543565b0bfee8ca86baada729d73",
+      "size": 28387,
+      "lfs": true,
+      "group": "semantic_bases"
+    },
+    {
+      "path": "DataProcessor/VisualProcessor/core/model_process/core_identity/brand_semantics/known_brands/wear/zara/Снимок экрана от 2026-02-13 13-38-44.png",
+      "sha256": "e274b379c31b89a13d159a485606b0d3fa3d62777e55b40c4ca51173fad44cd5",
+      "size": 25519,
+      "lfs": true,
+      "group": "semantic_bases"
+    },
+    {
+      "path": "DataProcessor/VisualProcessor/core/model_process/core_identity/brand_semantics/known_brands/wear/zara/Снимок экрана от 2026-02-13 13-38-56.png",
+      "sha256": "9c14ad040c479188b7cba30a29d1c6a66fd3eb4bfecd340fe30ab2bcb7220277",
+      "size": 182251,
+      "lfs": true,
+      "group": "semantic_bases"
+    },
+    {
+      "path": "DataProcessor/VisualProcessor/core/model_process/core_identity/brand_semantics/known_brands/wear/zara/Снимок экрана от 2026-02-13 13-39-28.png",
+      "sha256": "6c97aa4d3d3ed516a29e185ece07747f44d34c46f238721dc55189107dc29ad1",
+      "size": 133153,
+      "lfs": true,
+      "group": "semantic_bases"
+    },
+    {
+      "path": "DataProcessor/VisualProcessor/core/model_process/core_identity/brand_semantics/known_brands/wear/zara/Снимок экрана от 2026-02-13 13-39-35.png",
+      "sha256": "9d42c4afba36ac9b6cc6be03379aaf6db79cb740f61a74130cee9ada7cab9e8f",
+      "size": 119404,
+      "lfs": true,
+      "group": "semantic_bases"
+    },
+    {
+      "path": "DataProcessor/VisualProcessor/core/model_process/core_identity/brand_semantics/known_brands/wear/zara/Снимок экрана от 2026-02-13 13-41-01.png",
+      "sha256": "9a0b88eaa49e959607a58955b6406cc21d019e5bab0d45dccb65e6e455c53e61",
+      "size": 49042,
+      "lfs": true,
+      "group": "semantic_bases"
+    },
+    {
+      "path": "DataProcessor/VisualProcessor/core/model_process/core_identity/brand_semantics/known_brands/wear/zara/Снимок экрана от 2026-02-18 16-19-45.png",
+      "sha256": "9a53e601f20a97debfeb7344f63a819a6258a3efc244ff8e4f405877c52f0863",
+      "size": 52486,
+      "lfs": true,
+      "group": "semantic_bases"
+    },
+    {
+      "path": "DataProcessor/VisualProcessor/core/model_process/core_identity/brand_semantics/known_brands/wear/zara/Снимок экрана от 2026-02-18 16-20-04.png",
+      "sha256": "dda33b4ceb5adda717d1bd01141215ad52f6839891e5a41a3314f0a2d83d3245",
+      "size": 152886,
+      "lfs": true,
+      "group": "semantic_bases"
+    },
+    {
+      "path": "DataProcessor/VisualProcessor/core/model_process/core_identity/brand_semantics/known_brands/wear/zara/Снимок экрана от 2026-02-18 16-20-21.png",
+      "sha256": "19568721b21cc7d1708b131b5f584bfe3c05e97788d720a0ceb13b2c596551a9",
+      "size": 41528,
+      "lfs": true,
+      "group": "semantic_bases"
+    },
+    {
+      "path": "DataProcessor/VisualProcessor/core/model_process/core_identity/brand_semantics/known_brands/wear/zara/Снимок экрана от 2026-02-18 16-20-42.png",
+      "sha256": "60c00fde5c5bee9715f0086c832d73608dbeaff6feabe6cfad7c2842c8b5d321",
+      "size": 53723,
+      "lfs": true,
+      "group": "semantic_bases"
+    },
+    {
+      "path": "DataProcessor/VisualProcessor/core/model_process/core_identity/brand_semantics/known_brands/wear/zara/Снимок экрана от 2026-02-18 16-20-54.png",
+      "sha256": "79e208e1d45bcabe05c8a6aa23a627e8ab092a6e38abeb3981b13221bea2355f",
+      "size": 31278,
+      "lfs": true,
+      "group": "semantic_bases"
+    },
+    {
+      "path": "DataProcessor/VisualProcessor/core/model_process/core_identity/brand_semantics/known_brands/wear/zara/Снимок экрана от 2026-02-18 16-21-28.png",
+      "sha256": "dabe13be1c27945de9e021f075799cd147723e3f952aea4067252d185bf497bd",
+      "size": 43536,
+      "lfs": true,
+      "group": "semantic_bases"
+    },
+    {
+      "path": "DataProcessor/VisualProcessor/core/model_process/core_identity/brand_semantics/known_brands/wear/zara/Снимок экрана от 2026-02-18 16-21-37.png",
+      "sha256": "da2d5438434778c57356fae59e53631ffb700e0d0266874a5d2062bf1d431065",
+      "size": 76421,
+      "lfs": true,
+      "group": "semantic_bases"
+    },
+    {
+      "path": "DataProcessor/VisualProcessor/core/model_process/core_identity/brand_semantics/known_brands/wear/zara/Снимок экрана от 2026-02-18 16-21-42.png",
+      "sha256": "0c7f966c9ba3157649b09ef7544449451c64a2caa30c42b8ef0ebed4418b2fb4",
+      "size": 48616,
+      "lfs": true,
+      "group": "semantic_bases"
+    },
+    {
+      "path": "DataProcessor/VisualProcessor/core/model_process/core_identity/brand_semantics/known_brands/wear/zara/Снимок экрана от 2026-02-18 16-21-50.png",
+      "sha256": "117ffe9d9e4b90787f3b3cd7ba5a76d29024f38bacae6e2137a9b7939f9bde2f",
+      "size": 74302,
+      "lfs": true,
+      "group": "semantic_bases"
+    },
+    {
+      "path": "DataProcessor/VisualProcessor/core/model_process/core_identity/brand_semantics/known_brands/wear/zara/Снимок экрана от 2026-02-18 16-22-10.png",
+      "sha256": "9809f5db051fc7709641a491d24693b0476d36f98100f10fc550f83101c63530",
+      "size": 72740,
+      "lfs": true,
+      "group": "semantic_bases"
+    },
+    {
+      "path": "DataProcessor/VisualProcessor/core/model_process/core_identity/brand_semantics/known_brands/wear/zara/Снимок экрана от 2026-02-18 16-22-33.png",
+      "sha256": "5220e0476544aab00bd7a92ff1ff3e24d37ef934ab5cda6eeef71be29007ea81",
+      "size": 76367,
+      "lfs": true,
+      "group": "semantic_bases"
+    },
+    {
+      "path": "DataProcessor/VisualProcessor/core/model_process/core_identity/brand_semantics/known_brands/wear/zara/Снимок экрана от 2026-02-18 16-22-46.png",
+      "sha256": "6691c7b03d6fd4f9b48072c0133fdbf3c6472b5e810827c4f5caed48939c4f04",
+      "size": 100653,
+      "lfs": true,
+      "group": "semantic_bases"
+    },
+    {
+      "path": "DataProcessor/VisualProcessor/core/model_process/core_identity/brand_semantics/known_brands/wear/zara/Снимок экрана от 2026-02-18 16-22-58.png",
+      "sha256": "5f809bd0019fa6b4da8e025fe5d7a20715fa74967e1305e26eb524ceec63f364",
+      "size": 23863,
+      "lfs": true,
+      "group": "semantic_bases"
+    },
+    {
+      "path": "DataProcessor/VisualProcessor/core/model_process/core_identity/brand_semantics/known_brands/wear/zara/Снимок экрана от 2026-02-18 16-23-10.png",
+      "sha256": "0e7dbb03b20392ee1dd0139439ae8e2cff570db61e13d1ee506bed629bda83b1",
+      "size": 67267,
+      "lfs": true,
+      "group": "semantic_bases"
+    },
+    {
+      "path": "DataProcessor/VisualProcessor/core/model_process/core_identity/brand_semantics/known_brands_auto/car/audi/10.png",
+      "sha256": "31f72c2fd01c491ca52cc60a02d0abb77eb69418a8ed54c81991864ac5421f21",
+      "size": 55513,
+      "lfs": true,
+      "group": "semantic_bases"
+    },
+    {
+      "path": "DataProcessor/VisualProcessor/core/model_process/core_identity/brand_semantics/known_brands_auto/car/audi/11.png",
+      "sha256": "a5fee8afcd6023274cf88e848c6257752272db3a1bb0aef05beadced2bd0863e",
+      "size": 19824,
+      "lfs": true,
+      "group": "semantic_bases"
+    },
+    {
+      "path": "DataProcessor/VisualProcessor/core/model_process/core_identity/brand_semantics/known_brands_auto/car/audi/12.png",
+      "sha256": "b173d322988dfb43a9633747019e7c016631a93ec20f0068bc1a86361ef05c09",
+      "size": 129349,
+      "lfs": true,
+      "group": "semantic_bases"
+    },
+    {
+      "path": "DataProcessor/VisualProcessor/core/model_process/core_identity/brand_semantics/known_brands_auto/car/audi/13.png",
+      "sha256": "6efae799ada78a697d2ebd17375a312482f78b17ed838d4573e45359ac06fec5",
+      "size": 9619,
+      "lfs": true,
+      "group": "semantic_bases"
+    },
+    {
+      "path": "DataProcessor/VisualProcessor/core/model_process/core_identity/brand_semantics/known_brands_auto/car/audi/14.jpg",
+      "sha256": "ce56639d077a8c777fc20c5ce4c7446ff75f19ce03d59fe3b9157908cece7295",
+      "size": 89306,
+      "lfs": true,
+      "group": "semantic_bases"
+    },
+    {
+      "path": "DataProcessor/VisualProcessor/core/model_process/core_identity/brand_semantics/known_brands_auto/car/audi/15.jpg",
+      "sha256": "c2faffd7c609c6b0d453602e5d8e8213a9e214c3e5b26e6a1566db20f5e0c2e2",
+      "size": 113438,
+      "lfs": true,
+      "group": "semantic_bases"
+    },
+    {
+      "path": "DataProcessor/VisualProcessor/core/model_process/core_identity/brand_semantics/known_brands_auto/car/audi/16.jpg",
+      "sha256": "3545672bbca820b926c1697a62c126bad1108dcaf35fe472f7f9c866a05d475a",
+      "size": 105735,
+      "lfs": true,
+      "group": "semantic_bases"
+    },
+    {
+      "path": "DataProcessor/VisualProcessor/core/model_process/core_identity/brand_semantics/known_brands_auto/car/audi/17.jpg",
+      "sha256": "877123f2d2fa576d5c0b181ff4fb024afe277f00280113128306a6b2edc3b8c9",
+      "size": 84258,
+      "lfs": true,
+      "group": "semantic_bases"
+    },
+    {
+      "path": "DataProcessor/VisualProcessor/core/model_process/core_identity/brand_semantics/known_brands_auto/car/audi/18.png",
+      "sha256": "1f4f7d8189f53f3f71429dca0c8e33eaf7b30e6de9dca56bc134d509a6a68e31",
+      "size": 15649,
+      "lfs": true,
+      "group": "semantic_bases"
+    },
+    {
+      "path": "DataProcessor/VisualProcessor/core/model_process/core_identity/brand_semantics/known_brands_auto/car/audi/19.png",
+      "sha256": "e65edc459bee923435ec810e7cf0aefd82a9dda8e4b37ed4848d44558501e3bf",
+      "size": 19972,
+      "lfs": true,
+      "group": "semantic_bases"
+    },
+    {
+      "path": "DataProcessor/VisualProcessor/core/model_process/core_identity/brand_semantics/known_brands_auto/car/audi/20.png",
+      "sha256": "2c2c607f9ba7b0b24a3172c9986b905c05337a2fdbff4a621d791d56e9719828",
+      "size": 309880,
+      "lfs": true,
+      "group": "semantic_bases"
+    },
+    {
+      "path": "DataProcessor/VisualProcessor/core/model_process/core_identity/brand_semantics/known_brands_auto/car/audi/21.jpg",
+      "sha256": "c7a7c65559040955727fe30ee9f9cac8f946375a5c3ecca6a426b216accc8982",
+      "size": 71877,
+      "lfs": true,
+      "group": "semantic_bases"
+    },
+    {
+      "path": "DataProcessor/VisualProcessor/core/model_process/core_identity/brand_semantics/known_brands_auto/car/audi/22.jpg",
+      "sha256": "b7c7e772477e8200b95091b4255db1d54a5b8cb7ed82c5034f919851a75837db",
+      "size": 27948,
+      "lfs": true,
+      "group": "semantic_bases"
+    },
+    {
+      "path": "DataProcessor/VisualProcessor/core/model_process/core_identity/brand_semantics/known_brands_auto/car/audi/23.png",
+      "sha256": "d92cd376057f34b1834d2bf633c054aaed68065ed38d7bb713ac9df20a344564",
+      "size": 16200,
+      "lfs": true,
+      "group": "semantic_bases"
+    },
+    {
+      "path": "DataProcessor/VisualProcessor/core/model_process/core_identity/brand_semantics/known_brands_auto/car/audi/24.jpg",
+      "sha256": "3472cfc7e0a95646836c499ce2472c748229a0627581247762280414c76755dd",
+      "size": 59597,
+      "lfs": true,
+      "group": "semantic_bases"
+    },
+    {
+      "path": "DataProcessor/VisualProcessor/core/model_process/core_identity/brand_semantics/known_brands_auto/car/audi/26.jpg",
+      "sha256": "4a6985748223f235b48e7a77b56e677d6ae7d6ecd7e433ee1896d62aa5bc80ad",
+      "size": 141537,
+      "lfs": true,
+      "group": "semantic_bases"
+    },
+    {
+      "path": "DataProcessor/VisualProcessor/core/model_process/core_identity/brand_semantics/known_brands_auto/car/audi/27.jpg",
+      "sha256": "8018da0af41ca987cea29c630fb716e7bd8d631860dceb922a56aa61d9404879",
+      "size": 42351,
+      "lfs": true,
+      "group": "semantic_bases"
+    },
+    {
+      "path": "DataProcessor/VisualProcessor/core/model_process/core_identity/brand_semantics/known_brands_auto/car/audi/28.jpg",
+      "sha256": "f7795662bf16305ad1a533f22d0d4847bc49bc77e3902aef09cfc18dc048e5d4",
+      "size": 164405,
+      "lfs": true,
+      "group": "semantic_bases"
+    },
+    {
+      "path": "DataProcessor/VisualProcessor/core/model_process/core_identity/brand_semantics/known_brands_auto/car/audi/3.png",
+      "sha256": "cc6d6fb347850f947a4cacc58b44a024bf069e57800e24f178a828e5a535e713",
+      "size": 92211,
+      "lfs": true,
+      "group": "semantic_bases"
+    },
+    {
+      "path": "DataProcessor/VisualProcessor/core/model_process/core_identity/brand_semantics/known_brands_auto/car/audi/4.png",
+      "sha256": "c40e4055e2ad764096cd156afeb55ba1d3ff3e87f29a9d7f208d89a157311f36",
+      "size": 20265,
+      "lfs": true,
+      "group": "semantic_bases"
+    },
+    {
+      "path": "DataProcessor/VisualProcessor/core/model_process/core_identity/brand_semantics/known_brands_auto/car/audi/5.jpg",
+      "sha256": "ba44b21563dd2a49e2ab132db6896c2652bed01df2898fee7efc494e782796d4",
+      "size": 101652,
+      "lfs": true,
+      "group": "semantic_bases"
+    },
+    {
+      "path": "DataProcessor/VisualProcessor/core/model_process/core_identity/brand_semantics/known_brands_auto/car/audi/6.jpg",
+      "sha256": "89dda1e9e61baf71db7dd78900aafb78ecb0e01dab450bddda989f6ed5a1ee39",
+      "size": 15660,
+      "lfs": true,
+      "group": "semantic_bases"
+    },
+    {
+      "path": "DataProcessor/VisualProcessor/core/model_process/core_identity/brand_semantics/known_brands_auto/car/audi/7.png",
+      "sha256": "bb557e5bb35d616ae5d4934f537e82f6c674f473598ed92bef8bd30e82d183c6",
+      "size": 28103,
+      "lfs": true,
+      "group": "semantic_bases"
+    },
+    {
+      "path": "DataProcessor/VisualProcessor/core/model_process/core_identity/brand_semantics/known_brands_auto/car/audi/8.png",
+      "sha256": "592c0124ea9d6c33c7d7a9d6443caa2bb8833e72bc884a224245952d02f239d8",
+      "size": 147768,
+      "lfs": true,
+      "group": "semantic_bases"
+    },
+    {
+      "path": "DataProcessor/VisualProcessor/core/model_process/core_identity/brand_semantics/known_brands_auto/car/audi/9.png",
+      "sha256": "fbb70b4f9a40a8fb7a9b8a560aafb9065ed4c13ebb62af8a01c4999bf6119058",
+      "size": 70194,
+      "lfs": true,
+      "group": "semantic_bases"
+    },
+    {
+      "path": "DataProcessor/VisualProcessor/core/model_process/core_identity/brand_semantics/known_brands_auto/car/bmw/1.jpg",
+      "sha256": "2b470d81a4c8ca420de7964604ff1f475bf16bc955f62a379e2831b454eae171",
+      "size": 116228,
+      "lfs": true,
+      "group": "semantic_bases"
+    },
+    {
+      "path": "DataProcessor/VisualProcessor/core/model_process/core_identity/brand_semantics/known_brands_auto/car/bmw/10.jpg",
+      "sha256": "c51c84c0fa02132de6b726a3ad36eb5cbc2033a88bf3d5e8811e39055037e90b",
+      "size": 261527,
+      "lfs": true,
+      "group": "semantic_bases"
+    },
+    {
+      "path": "DataProcessor/VisualProcessor/core/model_process/core_identity/brand_semantics/known_brands_auto/car/bmw/11.jpg",
+      "sha256": "44e4084d9056d77d89f6ee96ddf83addca19305c275c2c249d799d1d41aa6838",
+      "size": 180942,
+      "lfs": true,
+      "group": "semantic_bases"
+    },
+    {
+      "path": "DataProcessor/VisualProcessor/core/model_process/core_identity/brand_semantics/known_brands_auto/car/bmw/12.jpg",
+      "sha256": "ac9a7a9f65ebf59d075c9e80bc7d54eabfd7b59859d025a556c69efcb51fcab7",
+      "size": 218130,
+      "lfs": true,
+      "group": "semantic_bases"
+    },
+    {
+      "path": "DataProcessor/VisualProcessor/core/model_process/core_identity/brand_semantics/known_brands_auto/car/bmw/13.jpg",
+      "sha256": "e9668d9d31003f301d46169f8efd1d1cc17cf2fce65eb4d5923d53fdbb19ae0d",
+      "size": 224819,
+      "lfs": true,
+      "group": "semantic_bases"
+    },
+    {
+      "path": "DataProcessor/VisualProcessor/core/model_process/core_identity/brand_semantics/known_brands_auto/car/bmw/15.jpg",
+      "sha256": "cd2eca57774441f4a2aa25829ea241aa80e57f1df0cb7c7fc2dfa6720244a46a",
+      "size": 68176,
+      "lfs": true,
+      "group": "semantic_bases"
+    },
+    {
+      "path": "DataProcessor/VisualProcessor/core/model_process/core_identity/brand_semantics/known_brands_auto/car/bmw/16.jpg",
+      "sha256": "bcd46630ab80f30363a70efb3186f3816ace768231af57e3033a6263201ffc7b",
+      "size": 266409,
+      "lfs": true,
+      "group": "semantic_bases"
+    },
+    {
+      "path": "DataProcessor/VisualProcessor/core/model_process/core_identity/brand_semantics/known_brands_auto/car/bmw/17.jpg",
+      "sha256": "12ee250d87702a5dd18afd61a82ffbaa709cec1ba7e41ca3d2b3c6f42089d1c8",
+      "size": 105425,
+      "lfs": true,
+      "group": "semantic_bases"
+    },
+    {
+      "path": "DataProcessor/VisualProcessor/core/model_process/core_identity/brand_semantics/known_brands_auto/car/bmw/18.jpg",
+      "sha256": "35f0e9d49caad42840f53ac6f963486fad7541f472051b6991d2033cd9327c65",
+      "size": 73208,
+      "lfs": true,
+      "group": "semantic_bases"
+    },
+    {
+      "path": "DataProcessor/VisualProcessor/core/model_process/core_identity/brand_semantics/known_brands_auto/car/bmw/19.jpg",
+      "sha256": "79284eddab302ef7fd7bc82a275282377f5cab67bd485222c7215d95595adaf4",
+      "size": 155543,
+      "lfs": true,
+      "group": "semantic_bases"
+    },
+    {
+      "path": "DataProcessor/VisualProcessor/core/model_process/core_identity/brand_semantics/known_brands_auto/car/bmw/2.jpg",
+      "sha256": "815c5d7bd22f530bea14ea41a713b27153bb391bf3bf09e62e85fc7c44c180c8",
+      "size": 160932,
+      "lfs": true,
+      "group": "semantic_bases"
+    },
+    {
+      "path": "DataProcessor/VisualProcessor/core/model_process/core_identity/brand_semantics/known_brands_auto/car/bmw/20.jpg",
+      "sha256": "6372c46e084d84e5f8a5455dddc6061b02430057dc27d844611352ad23c56252",
+      "size": 260818,
+      "lfs": true,
+      "group": "semantic_bases"
+    },
+    {
+      "path": "DataProcessor/VisualProcessor/core/model_process/core_identity/brand_semantics/known_brands_auto/car/bmw/21.jpg",
+      "sha256": "b0ddd2769ae09320613a7c9ff0b0258126a0fe8f2e60fb14fd7dfe196509308c",
+      "size": 151981,
+      "lfs": true,
+      "group": "semantic_bases"
+    },
+    {
+      "path": "DataProcessor/VisualProcessor/core/model_process/core_identity/brand_semantics/known_brands_auto/car/bmw/22.png",
+      "sha256": "ed759caae5c7dacc1ed1d623053da4a18e45a79f50fb598f9518d68b18bbdf64",
+      "size": 384543,
+      "lfs": true,
+      "group": "semantic_bases"
+    },
+    {
+      "path": "DataProcessor/VisualProcessor/core/model_process/core_identity/brand_semantics/known_brands_auto/car/bmw/23.jpg",
+      "sha256": "89ca56e39ff13ae22ba6e1342cbbe392aa39ff643371f07f6dff71d6bff0c148",
+      "size": 232032,
+      "lfs": true,
+      "group": "semantic_bases"
+    },
+    {
+      "path": "DataProcessor/VisualProcessor/core/model_process/core_identity/brand_semantics/known_brands_auto/car/bmw/24.png",
+      "sha256": "bce05269f57c61f2c92713323902e83c0891c7b44a1f519c0adc486eab840a3e",
+      "size": 27461,
+      "lfs": true,
+      "group": "semantic_bases"
+    },
+    {
+      "path": "DataProcessor/VisualProcessor/core/model_process/core_identity/brand_semantics/known_brands_auto/car/bmw/25.jpg",
+      "sha256": "520321eebc88d40d7605ed40934790702759728c5acf6dd4ce945c6e3dad14c3",
+      "size": 142391,
+      "lfs": true,
+      "group": "semantic_bases"
+    },
+    {
+      "path": "DataProcessor/VisualProcessor/core/model_process/core_identity/brand_semantics/known_brands_auto/car/bmw/26.jpg",
+      "sha256": "c1acf3d0ba31a82242db0f9e4683ffbc04f8b2956f1363fa800bf59ec0f29a06",
+      "size": 207832,
+      "lfs": true,
+      "group": "semantic_bases"
+    },
+    {
+      "path": "DataProcessor/VisualProcessor/core/model_process/core_identity/brand_semantics/known_brands_auto/car/bmw/3.jpg",
+      "sha256": "b803672122acdd5686d43c2de5b244d38c34e9fc77e1a685cf131faa3763a9eb",
+      "size": 166200,
+      "lfs": true,
+      "group": "semantic_bases"
+    },
+    {
+      "path": "DataProcessor/VisualProcessor/core/model_process/core_identity/brand_semantics/known_brands_auto/car/bmw/4.jpg",
+      "sha256": "4916132ab9c4573b0c193ae9f072b0c0ba14b510b2acfc25aadeb0bcb4647323",
+      "size": 297032,
+      "lfs": true,
+      "group": "semantic_bases"
+    },
+    {
+      "path": "DataProcessor/VisualProcessor/core/model_process/core_identity/brand_semantics/known_brands_auto/car/bmw/5.jpg",
+      "sha256": "2efef13dfb75f7faf341aac8a7cbf0f6a8f6fb60f1a0402605c52826ee8e91c5",
+      "size": 92427,
+      "lfs": true,
+      "group": "semantic_bases"
+    },
+    {
+      "path": "DataProcessor/VisualProcessor/core/model_process/core_identity/brand_semantics/known_brands_auto/car/bmw/6.jpg",
+      "sha256": "22e26221322a863d6f6803b397c93f9e6a3957addb6af4d72aa5da0de6c465b9",
+      "size": 573133,
+      "lfs": true,
+      "group": "semantic_bases"
+    },
+    {
+      "path": "DataProcessor/VisualProcessor/core/model_process/core_identity/brand_semantics/known_brands_auto/car/bmw/7.png",
+      "sha256": "d8d426a3ec6a8c1a5128d20df34e0158c2776696fe5c71ce0b8ef41b29482db3",
+      "size": 186724,
+      "lfs": true,
+      "group": "semantic_bases"
+    },
+    {
+      "path": "DataProcessor/VisualProcessor/core/model_process/core_identity/brand_semantics/known_brands_auto/car/bmw/8.jpg",
+      "sha256": "7c01fef7c187cf8dae5d11952ec24814cc136d780c46d80879782e42cebc9cbd",
+      "size": 246069,
+      "lfs": true,
+      "group": "semantic_bases"
+    },
+    {
+      "path": "DataProcessor/VisualProcessor/core/model_process/core_identity/brand_semantics/known_brands_auto/car/bmw/9.jpg",
+      "sha256": "4d6a8fabe625642ec238c5f8102bca8d59dd5e65be542e6d4d6611bd126b895f",
+      "size": 199654,
+      "lfs": true,
+      "group": "semantic_bases"
+    },
+    {
+      "path": "DataProcessor/VisualProcessor/core/model_process/core_identity/brand_semantics/known_brands_auto/car/chevrolet/10.jpg",
+      "sha256": "1f8cedcbd5c768ac82415df71a21bd87433b22eea14cc943e92d6f3540220e0a",
+      "size": 68401,
+      "lfs": true,
+      "group": "semantic_bases"
+    },
+    {
+      "path": "DataProcessor/VisualProcessor/core/model_process/core_identity/brand_semantics/known_brands_auto/car/chevrolet/11.jpg",
+      "sha256": "980095211b4246aa29d952521f9b27457aa015253529b2f02fb37aafc227c1e7",
+      "size": 141005,
+      "lfs": true,
+      "group": "semantic_bases"
+    },
+    {
+      "path": "DataProcessor/VisualProcessor/core/model_process/core_identity/brand_semantics/known_brands_auto/car/chevrolet/12.jpg",
+      "sha256": "22b03f29a26e6d36923d3ea32746223d55ea5d32aff3090b40b5111ed254ae36",
+      "size": 68446,
+      "lfs": true,
+      "group": "semantic_bases"
+    },
+    {
+      "path": "DataProcessor/VisualProcessor/core/model_process/core_identity/brand_semantics/known_brands_auto/car/chevrolet/13.jpg",
+      "sha256": "8b604417b765d6ac9f2730970a0b44df75297c8ffd1a823c5d89432943dbde51",
+      "size": 127438,
+      "lfs": true,
+      "group": "semantic_bases"
+    },
+    {
+      "path": "DataProcessor/VisualProcessor/core/model_process/core_identity/brand_semantics/known_brands_auto/car/chevrolet/14.jpg",
+      "sha256": "ce4a74b56e5d48fae0cb8f5b6e3644df00e17e025dff86b0887b9ef604df8061",
+      "size": 106413,
+      "lfs": true,
+      "group": "semantic_bases"
+    },
+    {
+      "path": "DataProcessor/VisualProcessor/core/model_process/core_identity/brand_semantics/known_brands_auto/car/chevrolet/15.jpg",
+      "sha256": "5f722ba2d50ca655ed3b45a93d155059b5f60d0e2056e50989751edb60891b24",
+      "size": 111837,
+      "lfs": true,
+      "group": "semantic_bases"
+    },
+    {
+      "path": "DataProcessor/VisualProcessor/core/model_process/core_identity/brand_semantics/known_brands_auto/car/chevrolet/16.jpg",
+      "sha256": "c7722bb47cb04be127c55640164d3528a3035df9884b7746b771cf09755ca1c5",
+      "size": 135301,
+      "lfs": true,
+      "group": "semantic_bases"
+    },
+    {
+      "path": "DataProcessor/VisualProcessor/core/model_process/core_identity/brand_semantics/known_brands_auto/car/chevrolet/17.jpg",
+      "sha256": "89ed410bd99bc6e1d295e350288f7f937e4516b364979bf3a2b1de436d674ecb",
+      "size": 267705,
+      "lfs": true,
+      "group": "semantic_bases"
+    },
+    {
+      "path": "DataProcessor/VisualProcessor/core/model_process/core_identity/brand_semantics/known_brands_auto/car/chevrolet/18.jpg",
+      "sha256": "f5cabbcf5d0027fcbba7d3ccb9baf765fb488ef0afb38f71b79389917a82b2d6",
+      "size": 240329,
+      "lfs": true,
+      "group": "semantic_bases"
+    },
+    {
+      "path": "DataProcessor/VisualProcessor/core/model_process/core_identity/brand_semantics/known_brands_auto/car/chevrolet/19.jpg",
+      "sha256": "15a99a38eff281e531fcf2de983ca2af23c1943ff915ccdb0fc96659c75aa4b2",
+      "size": 160598,
+      "lfs": true,
+      "group": "semantic_bases"
+    },
+    {
+      "path": "DataProcessor/VisualProcessor/core/model_process/core_identity/brand_semantics/known_brands_auto/car/chevrolet/2.jpg",
+      "sha256": "69b81ebefb912d2112694e2fe93143a28401a127cfdf3cb862f7411cfb4986ec",
+      "size": 178398,
+      "lfs": true,
+      "group": "semantic_bases"
+    },
+    {
+      "path": "DataProcessor/VisualProcessor/core/model_process/core_identity/brand_semantics/known_brands_auto/car/chevrolet/20.jpg",
+      "sha256": "0542e8e3782bee0bdb33680248ca4f9c84afb857e448d7e14691700d7deda8ef",
+      "size": 274506,
+      "lfs": true,
+      "group": "semantic_bases"
+    },
+    {
+      "path": "DataProcessor/VisualProcessor/core/model_process/core_identity/brand_semantics/known_brands_auto/car/chevrolet/21.jpg",
+      "sha256": "b06efd1b307929198f3d880da0bd025b9b75fa836ac8b4bdfe466c107763bf64",
+      "size": 192685,
+      "lfs": true,
+      "group": "semantic_bases"
+    },
+    {
+      "path": "DataProcessor/VisualProcessor/core/model_process/core_identity/brand_semantics/known_brands_auto/car/chevrolet/22.jpg",
+      "sha256": "bd5696f7fbcb30c51ae05af0d4f4edf8d010597e9790dacc3129e295ce039f60",
+      "size": 142488,
+      "lfs": true,
+      "group": "semantic_bases"
+    },
+    {
+      "path": "DataProcessor/VisualProcessor/core/model_process/core_identity/brand_semantics/known_brands_auto/car/chevrolet/23.jpg",
+      "sha256": "f2275872dd0105952db6e6711fbe371900006871a364beafe64378a295f140d0",
+      "size": 219121,
+      "lfs": true,
+      "group": "semantic_bases"
+    },
+    {
+      "path": "DataProcessor/VisualProcessor/core/model_process/core_identity/brand_semantics/known_brands_auto/car/chevrolet/24.jpg",
+      "sha256": "9582d9f7410e9f3cae007d042c456ce40640f29c0cfe676499ef6ab5200d3e8a",
+      "size": 62346,
+      "lfs": true,
+      "group": "semantic_bases"
+    },
+    {
+      "path": "DataProcessor/VisualProcessor/core/model_process/core_identity/brand_semantics/known_brands_auto/car/chevrolet/25.jpg",
+      "sha256": "4541992b3bd5f461501fd3c03a3d6f8ca52d0bc415588e5b83e0c086f9633d8f",
+      "size": 151358,
+      "lfs": true,
+      "group": "semantic_bases"
+    },
+    {
+      "path": "DataProcessor/VisualProcessor/core/model_process/core_identity/brand_semantics/known_brands_auto/car/chevrolet/27.jpg",
+      "sha256": "689c3a5d1d7549e1b20be174282c9d74dac285e177af4ef41996949c9dede1d1",
+      "size": 313062,
+      "lfs": true,
+      "group": "semantic_bases"
+    },
+    {
+      "path": "DataProcessor/VisualProcessor/core/model_process/core_identity/brand_semantics/known_brands_auto/car/chevrolet/3.jpg",
+      "sha256": "56333bada410bc68a8349f4e56df1151ec4bbf780d7cf1b4205352821f8481f4",
+      "size": 101687,
+      "lfs": true,
+      "group": "semantic_bases"
+    },
+    {
+      "path": "DataProcessor/VisualProcessor/core/model_process/core_identity/brand_semantics/known_brands_auto/car/chevrolet/4.jpg",
+      "sha256": "82043adc3cd920561af59b116da44007072e7c9a0054a9c9d6caf50b49417bfd",
+      "size": 255870,
+      "lfs": true,
+      "group": "semantic_bases"
+    },
+    {
+      "path": "DataProcessor/VisualProcessor/core/model_process/core_identity/brand_semantics/known_brands_auto/car/chevrolet/5.jpg",
+      "sha256": "f555f9fa7df23247658127d524e6b6b962f8bfefe56b47d65b7c5a8f2221a544",
+      "size": 168777,
+      "lfs": true,
+      "group": "semantic_bases"
+    },
+    {
+      "path": "DataProcessor/VisualProcessor/core/model_process/core_identity/brand_semantics/known_brands_auto/car/chevrolet/6.jpg",
+      "sha256": "8723f023ea88c872b14de882b0c69d8ee97b86f994c5078b40e3e01b4d0ca9ad",
+      "size": 143568,
+      "lfs": true,
+      "group": "semantic_bases"
+    },
+    {
+      "path": "DataProcessor/VisualProcessor/core/model_process/core_identity/brand_semantics/known_brands_auto/car/chevrolet/7.jpg",
+      "sha256": "d777d03b77747b81d609f8b642b47989b771a5ea157737384bec0c346b142855",
+      "size": 153128,
+      "lfs": true,
+      "group": "semantic_bases"
+    },
+    {
+      "path": "DataProcessor/VisualProcessor/core/model_process/core_identity/brand_semantics/known_brands_auto/car/chevrolet/8.png",
+      "sha256": "37c3b1136c435e62009cc4e21b321cf9221c324a5f86cbae258e77d04e2183e1",
+      "size": 64786,
+      "lfs": true,
+      "group": "semantic_bases"
+    },
+    {
+      "path": "DataProcessor/VisualProcessor/core/model_process/core_identity/brand_semantics/known_brands_auto/car/chevrolet/9.jpg",
+      "sha256": "4bfbfe97aedcb8dc4f00f14ff5206592e3b9b3288d3e783f59e872514428e0ac",
+      "size": 77327,
+      "lfs": true,
+      "group": "semantic_bases"
+    },
+    {
+      "path": "DataProcessor/VisualProcessor/core/model_process/core_identity/brand_semantics/known_brands_auto/car/ferrari/10.png",
+      "sha256": "863d04eeb42d7b4716430ec9d140ab3abb057e2b5975a6868fd55dcb4282aefe",
+      "size": 118283,
+      "lfs": true,
+      "group": "semantic_bases"
+    },
+    {
+      "path": "DataProcessor/VisualProcessor/core/model_process/core_identity/brand_semantics/known_brands_auto/car/ferrari/11.jpg",
+      "sha256": "207f3157ce16ab046dba253a28e6452964c87a27154bcbaec0bfe78bb32316ab",
+      "size": 101220,
+      "lfs": true,
+      "group": "semantic_bases"
+    },
+    {
+      "path": "DataProcessor/VisualProcessor/core/model_process/core_identity/brand_semantics/known_brands_auto/car/ferrari/12.jpg",
+      "sha256": "8297a48744a023af1bdf4676496ea4fa6b5656c4c5a9f5a6ddc7c3a08a76ba03",
+      "size": 152020,
+      "lfs": true,
+      "group": "semantic_bases"
+    },
+    {
+      "path": "DataProcessor/VisualProcessor/core/model_process/core_identity/brand_semantics/known_brands_auto/car/ferrari/13.jpg",
+      "sha256": "ea1ca450cd7dcd9ef351121c64f49ecc7870c63f6c56150d38540067e220ff0e",
+      "size": 104214,
+      "lfs": true,
+      "group": "semantic_bases"
+    },
+    {
+      "path": "DataProcessor/VisualProcessor/core/model_process/core_identity/brand_semantics/known_brands_auto/car/ferrari/15.jpg",
+      "sha256": "c14b9faab8631cc016df3c5b70e544ced2c127e8874a68ee7b7c39805680277b",
+      "size": 284176,
+      "lfs": true,
+      "group": "semantic_bases"
+    },
+    {
+      "path": "DataProcessor/VisualProcessor/core/model_process/core_identity/brand_semantics/known_brands_auto/car/ferrari/17.jpg",
+      "sha256": "9fac7802871888f8b5fe952e6fbc8111ca7c77e81c2776fbd7d6ecda2344d91d",
+      "size": 141897,
+      "lfs": true,
+      "group": "semantic_bases"
+    },
+    {
+      "path": "DataProcessor/VisualProcessor/core/model_process/core_identity/brand_semantics/known_brands_auto/car/ferrari/18.jpg",
+      "sha256": "2c301fcc35b98ec94223a77738fc1ea35eef8eb57a4125222e4ed1c0dedec3cc",
+      "size": 400516,
+      "lfs": true,
+      "group": "semantic_bases"
+    },
+    {
+      "path": "DataProcessor/VisualProcessor/core/model_process/core_identity/brand_semantics/known_brands_auto/car/ferrari/19.jpg",
+      "sha256": "cbef49287d4dfb57ad3efe9af68825da6462a11eb3cbeeee5758576b50a046d8",
+      "size": 337240,
+      "lfs": true,
+      "group": "semantic_bases"
+    },
+    {
+      "path": "DataProcessor/VisualProcessor/core/model_process/core_identity/brand_semantics/known_brands_auto/car/ferrari/2.jpg",
+      "sha256": "fa5932d52188fd60cd428a7b64d4d8225b0fed3ed4d0e798731c3269e729589f",
+      "size": 191827,
+      "lfs": true,
+      "group": "semantic_bases"
+    },
+    {
+      "path": "DataProcessor/VisualProcessor/core/model_process/core_identity/brand_semantics/known_brands_auto/car/ferrari/20.jpg",
+      "sha256": "af73485f4b2d1ef4425cef92e74331d4788bd6d02730bf74d7122b28e0a5d64e",
+      "size": 256702,
+      "lfs": true,
+      "group": "semantic_bases"
+    },
+    {
+      "path": "DataProcessor/VisualProcessor/core/model_process/core_identity/brand_semantics/known_brands_auto/car/ferrari/21.jpg",
+      "sha256": "0fbc53bc219d208993c4e14ccbfbb27bb14f4d94b208246668a7314bb8ba1efa",
+      "size": 311488,
+      "lfs": true,
+      "group": "semantic_bases"
+    },
+    {
+      "path": "DataProcessor/VisualProcessor/core/model_process/core_identity/brand_semantics/known_brands_auto/car/ferrari/22.jpg",
+      "sha256": "f215699339fff72da38f0dda3eeb0a88e90521a39be738a6a181e9e9af693201",
+      "size": 148955,
+      "lfs": true,
+      "group": "semantic_bases"
+    },
+    {
+      "path": "DataProcessor/VisualProcessor/core/model_process/core_identity/brand_semantics/known_brands_auto/car/ferrari/23.jpg",
+      "sha256": "d4d9940836fcf825e2dabcf7fbabd282538947fea43982683082820efafffb19",
+      "size": 212861,
+      "lfs": true,
+      "group": "semantic_bases"
+    },
+    {
+      "path": "DataProcessor/VisualProcessor/core/model_process/core_identity/brand_semantics/known_brands_auto/car/ferrari/24.jpg",
+      "sha256": "0ad9c02f756e81c9f81244b6a9b49a259e87c9b0ef30059a9c86d4769ea29ad4",
+      "size": 196126,
+      "lfs": true,
+      "group": "semantic_bases"
+    },
+    {
+      "path": "DataProcessor/VisualProcessor/core/model_process/core_identity/brand_semantics/known_brands_auto/car/ferrari/25.jpg",
+      "sha256": "4e1c7c5604d840d57b703e64b0eb55d01b3c789bcce5180a9d733270269b4f41",
+      "size": 188727,
+      "lfs": true,
+      "group": "semantic_bases"
+    },
+    {
+      "path": "DataProcessor/VisualProcessor/core/model_process/core_identity/brand_semantics/known_brands_auto/car/ferrari/27.jpg",
+      "sha256": "cece6d44a4f96758ba81faeb2d9e96308a233f7b93cc0a74801a9133976ab242",
+      "size": 91584,
+      "lfs": true,
+      "group": "semantic_bases"
+    },
+    {
+      "path": "DataProcessor/VisualProcessor/core/model_process/core_identity/brand_semantics/known_brands_auto/car/ferrari/29.jpg",
+      "sha256": "907456c6d808a8b39721053fce0961413f543155fc099003b45917ab63088596",
+      "size": 90436,
+      "lfs": true,
+      "group": "semantic_bases"
+    },
+    {
+      "path": "DataProcessor/VisualProcessor/core/model_process/core_identity/brand_semantics/known_brands_auto/car/ferrari/3.jpg",
+      "sha256": "9d8b4667548ddfc9400899a85fb28b2f6ba074b7c6ab6476e4a9fe30191344a5",
+      "size": 303991,
+      "lfs": true,
+      "group": "semantic_bases"
+    },
+    {
+      "path": "DataProcessor/VisualProcessor/core/model_process/core_identity/brand_semantics/known_brands_auto/car/ferrari/30.png",
+      "sha256": "3d2d7a31330b3e9c0f0eb2cd6bd91f282529b433a55129bb74462a1404542f4f",
+      "size": 1461379,
+      "lfs": true,
+      "group": "semantic_bases"
+    },
+    {
+      "path": "DataProcessor/VisualProcessor/core/model_process/core_identity/brand_semantics/known_brands_auto/car/ferrari/31.jpg",
+      "sha256": "403d3de4523bbfaf21ba1191fa4181aa58a20d35bb6fbf20f00dc9cbbc7b4802",
+      "size": 124693,
+      "lfs": true,
+      "group": "semantic_bases"
+    },
+    {
+      "path": "DataProcessor/VisualProcessor/core/model_process/core_identity/brand_semantics/known_brands_auto/car/ferrari/32.jpg",
+      "sha256": "8e5af89266e7704ba1ade4aa2908a36506d5c4cf1951319b1256f06300e1390e",
+      "size": 144028,
+      "lfs": true,
+      "group": "semantic_bases"
+    },
+    {
+      "path": "DataProcessor/VisualProcessor/core/model_process/core_identity/brand_semantics/known_brands_auto/car/ferrari/5.jpg",
+      "sha256": "f702633bab70511ac25b49fe7e0034beaa83e4a51aaa8010b6e917b55febf869",
+      "size": 163228,
+      "lfs": true,
+      "group": "semantic_bases"
+    },
+    {
+      "path": "DataProcessor/VisualProcessor/core/model_process/core_identity/brand_semantics/known_brands_auto/car/ferrari/6.jpg",
+      "sha256": "098adb3f45fd39dd53978cd27dd29eb4f9acaf92dbd6f3adebec3bc7f9c8d793",
+      "size": 83208,
+      "lfs": true,
+      "group": "semantic_bases"
+    },
+    {
+      "path": "DataProcessor/VisualProcessor/core/model_process/core_identity/brand_semantics/known_brands_auto/car/ferrari/7.jpg",
+      "sha256": "d3e8de11d367e90a20d4eeb7085a945d109eb36201a113dccf08e49ca07cf116",
+      "size": 91151,
+      "lfs": true,
+      "group": "semantic_bases"
+    },
+    {
+      "path": "DataProcessor/VisualProcessor/core/model_process/core_identity/brand_semantics/known_brands_auto/car/ferrari/8.jpg",
+      "sha256": "4441088c112bd4649d91879168b8e47fc3f3f7c3666bd0d44002773533ce63b3",
+      "size": 104531,
+      "lfs": true,
+      "group": "semantic_bases"
+    },
+    {
+      "path": "DataProcessor/VisualProcessor/core/model_process/core_identity/brand_semantics/known_brands_auto/car/ford/1.jpg",
+      "sha256": "9441a2820557335ef3e6b4dd073a80d6baa2b5a323b668ffaee762ca50f75822",
+      "size": 115409,
+      "lfs": true,
+      "group": "semantic_bases"
+    },
+    {
+      "path": "DataProcessor/VisualProcessor/core/model_process/core_identity/brand_semantics/known_brands_auto/car/ford/10.png",
+      "sha256": "9eb9a8f570b62f08673a21516860b3561f4929e1b2de82ad838a64f13b9a128b",
+      "size": 22728,
+      "lfs": true,
+      "group": "semantic_bases"
+    },
+    {
+      "path": "DataProcessor/VisualProcessor/core/model_process/core_identity/brand_semantics/known_brands_auto/car/ford/11.png",
+      "sha256": "4f190917412faa9b8a52f26e142f32f939f5327eaab6842391758c1a2a3a3500",
+      "size": 37282,
+      "lfs": true,
+      "group": "semantic_bases"
+    },
+    {
+      "path": "DataProcessor/VisualProcessor/core/model_process/core_identity/brand_semantics/known_brands_auto/car/ford/12.jpg",
+      "sha256": "2912393cb15af495e57f303664e65d247d3dd14bf855effafb80a1185f46b870",
+      "size": 117253,
+      "lfs": true,
+      "group": "semantic_bases"
+    },
+    {
+      "path": "DataProcessor/VisualProcessor/core/model_process/core_identity/brand_semantics/known_brands_auto/car/ford/14.jpg",
+      "sha256": "c31d934cf6f522a50c8ac31f06c0050c3f444f56522059105af02f2957806c33",
+      "size": 87335,
+      "lfs": true,
+      "group": "semantic_bases"
+    },
+    {
+      "path": "DataProcessor/VisualProcessor/core/model_process/core_identity/brand_semantics/known_brands_auto/car/ford/19.png",
+      "sha256": "6efb455ffbdb250279c19bae7c65a9116b12aa931f0a3049657e56b84c85fbf8",
+      "size": 131616,
+      "lfs": true,
+      "group": "semantic_bases"
+    },
+    {
+      "path": "DataProcessor/VisualProcessor/core/model_process/core_identity/brand_semantics/known_brands_auto/car/ford/2.png",
+      "sha256": "dfe83050f127228f96777db6ba8c50cc276d1fa816f258ad8246d194ce96216d",
+      "size": 35874,
+      "lfs": true,
+      "group": "semantic_bases"
+    },
+    {
+      "path": "DataProcessor/VisualProcessor/core/model_process/core_identity/brand_semantics/known_brands_auto/car/ford/21.jpg",
+      "sha256": "63e75ef45c61ebf14bfdd34576adcc00ebcb97b5d8080c83217bfa0148618bcf",
+      "size": 122648,
+      "lfs": true,
+      "group": "semantic_bases"
+    },
+    {
+      "path": "DataProcessor/VisualProcessor/core/model_process/core_identity/brand_semantics/known_brands_auto/car/ford/22.png",
+      "sha256": "3ad2908e7ca927fae0f723096cec21aec7f0870633f1a8469f4a581d72caac8b",
+      "size": 24011,
+      "lfs": true,
+      "group": "semantic_bases"
+    },
+    {
+      "path": "DataProcessor/VisualProcessor/core/model_process/core_identity/brand_semantics/known_brands_auto/car/ford/23.png",
+      "sha256": "b4b8cf0d3f2a3306f0cab7a0695710280aad0d2f6644b2194bd4e075aba4a347",
+      "size": 10823,
+      "lfs": true,
+      "group": "semantic_bases"
+    },
+    {
+      "path": "DataProcessor/VisualProcessor/core/model_process/core_identity/brand_semantics/known_brands_auto/car/ford/24.jpg",
+      "sha256": "a98fa722bc1cdd50904f34fea1cf94fa7c9e5858464935cfdca75eaaf44ae525",
+      "size": 21310,
+      "lfs": true,
+      "group": "semantic_bases"
+    },
+    {
+      "path": "DataProcessor/VisualProcessor/core/model_process/core_identity/brand_semantics/known_brands_auto/car/ford/25.png",
+      "sha256": "e53f0fa14b1e70a1ef22233edaba29a33f264cc62613900d3d893cce9ee6de65",
+      "size": 10310,
+      "lfs": true,
+      "group": "semantic_bases"
+    },
+    {
+      "path": "DataProcessor/VisualProcessor/core/model_process/core_identity/brand_semantics/known_brands_auto/car/ford/28.png",
+      "sha256": "4a36ab5c14b010d78107564bd823510657c5db522fe9dbc4f6829630d3256377",
+      "size": 35846,
+      "lfs": true,
+      "group": "semantic_bases"
+    },
+    {
+      "path": "DataProcessor/VisualProcessor/core/model_process/core_identity/brand_semantics/known_brands_auto/car/ford/29.jpg",
+      "sha256": "48dbecd161ef447cae3b88c54c9de1a2f382ebb6e476a82a1bd475230b284b28",
+      "size": 164244,
+      "lfs": true,
+      "group": "semantic_bases"
+    },
+    {
+      "path": "DataProcessor/VisualProcessor/core/model_process/core_identity/brand_semantics/known_brands_auto/car/ford/3.png",
+      "sha256": "01336ec79b8a7531f34360ba451669303e7ea65c045e522573d72be2957f50aa",
+      "size": 67920,
+      "lfs": true,
+      "group": "semantic_bases"
+    },
+    {
+      "path": "DataProcessor/VisualProcessor/core/model_process/core_identity/brand_semantics/known_brands_auto/car/ford/31.jpg",
+      "sha256": "ab1c068235c3b4007ab13a96c90426eef15f18b0913ddcf72bf6659292adf29b",
+      "size": 67595,
+      "lfs": true,
+      "group": "semantic_bases"
+    },
+    {
+      "path": "DataProcessor/VisualProcessor/core/model_process/core_identity/brand_semantics/known_brands_auto/car/ford/32.png",
+      "sha256": "f4c786c6d34dabc9627cebbe1efc03c9f7740210690afa7db58a0ddbbcc90ea5",
+      "size": 66359,
+      "lfs": true,
+      "group": "semantic_bases"
+    },
+    {
+      "path": "DataProcessor/VisualProcessor/core/model_process/core_identity/brand_semantics/known_brands_auto/car/ford/33.jpg",
+      "sha256": "9601758dd0baaab1782c423e8efe320b8c226c59979b3b28ae2104d4ab3bdf27",
+      "size": 97775,
+      "lfs": true,
+      "group": "semantic_bases"
+    },
+    {
+      "path": "DataProcessor/VisualProcessor/core/model_process/core_identity/brand_semantics/known_brands_auto/car/ford/34.jpg",
+      "sha256": "ac40ee0bee98cfebe1210445a51a399e669b55718b3830acc44a85b0a3804bc0",
+      "size": 105828,
+      "lfs": true,
+      "group": "semantic_bases"
+    },
+    {
+      "path": "DataProcessor/VisualProcessor/core/model_process/core_identity/brand_semantics/known_brands_auto/car/ford/4.png",
+      "sha256": "222c1a22808d5754c7f2e0f24b8efb459a1889ce913ffd345554856b698bc3e1",
+      "size": 27830,
+      "lfs": true,
+      "group": "semantic_bases"
+    },
+    {
+      "path": "DataProcessor/VisualProcessor/core/model_process/core_identity/brand_semantics/known_brands_auto/car/ford/5.png",
+      "sha256": "e6ca06b5936bf24c8c4e7a588e1a0116c95d77de6cda5ad0939bf7f44e977e43",
+      "size": 39431,
+      "lfs": true,
+      "group": "semantic_bases"
+    },
+    {
+      "path": "DataProcessor/VisualProcessor/core/model_process/core_identity/brand_semantics/known_brands_auto/car/ford/6.png",
+      "sha256": "417b135c6e06adcc9be85e0164afb22c67d63e17b053cab06c5319e9720834fb",
+      "size": 156990,
+      "lfs": true,
+      "group": "semantic_bases"
+    },
+    {
+      "path": "DataProcessor/VisualProcessor/core/model_process/core_identity/brand_semantics/known_brands_auto/car/ford/7.png",
+      "sha256": "e829151720fb1f3124248f30012ff479f45be58c658caa16299ca7dbebc0bf31",
+      "size": 27325,
+      "lfs": true,
+      "group": "semantic_bases"
+    },
+    {
+      "path": "DataProcessor/VisualProcessor/core/model_process/core_identity/brand_semantics/known_brands_auto/car/ford/8.png",
+      "sha256": "553316b662cde1a97643913cba92d1d33020b68b021f6843fa8e4b44a1786cf2",
+      "size": 20816,
+      "lfs": true,
+      "group": "semantic_bases"
+    },
+    {
+      "path": "DataProcessor/VisualProcessor/core/model_process/core_identity/brand_semantics/known_brands_auto/car/ford/9.png",
+      "sha256": "065de173565ec2182f329597215f6d56de639bf6b40918f5044ab68e7570353b",
+      "size": 155365,
+      "lfs": true,
+      "group": "semantic_bases"
+    },
+    {
+      "path": "DataProcessor/VisualProcessor/core/model_process/core_identity/brand_semantics/known_brands_auto/car/honda/1.jpg",
+      "sha256": "8fa469ba9d106f8d55c82775fa469850513d26f79c49c62e3d3b7aff22fbe01f",
+      "size": 171460,
+      "lfs": true,
+      "group": "semantic_bases"
+    },
+    {
+      "path": "DataProcessor/VisualProcessor/core/model_process/core_identity/brand_semantics/known_brands_auto/car/honda/10.jpg",
+      "sha256": "23d437265894491eb001c76769816dd6452652625b50e0e4342a0e56d8c9abf2",
+      "size": 195087,
+      "lfs": true,
+      "group": "semantic_bases"
+    },
+    {
+      "path": "DataProcessor/VisualProcessor/core/model_process/core_identity/brand_semantics/known_brands_auto/car/honda/11.jpg",
+      "sha256": "b7931807a7dd1b8dc684ef1567792977336ab623175fa9b8a342bf0dee08d71b",
+      "size": 214914,
+      "lfs": true,
+      "group": "semantic_bases"
+    },
+    {
+      "path": "DataProcessor/VisualProcessor/core/model_process/core_identity/brand_semantics/known_brands_auto/car/honda/12.jpg",
+      "sha256": "2407e571cef1112e2fe63857fa7f34d1b5831f4e49333a29d650102c04b2f915",
+      "size": 253334,
+      "lfs": true,
+      "group": "semantic_bases"
+    },
+    {
+      "path": "DataProcessor/VisualProcessor/core/model_process/core_identity/brand_semantics/known_brands_auto/car/honda/13.jpg",
+      "sha256": "2370de910881954ed766fd65f94f56dd603867a726927471a172b58fb98c72f2",
+      "size": 182902,
+      "lfs": true,
+      "group": "semantic_bases"
+    },
+    {
+      "path": "DataProcessor/VisualProcessor/core/model_process/core_identity/brand_semantics/known_brands_auto/car/honda/14.jpg",
+      "sha256": "ee231cea9718ab261ccd1d453f4d3ca08826c9309fed6901323993d7b10b386f",
+      "size": 176280,
+      "lfs": true,
+      "group": "semantic_bases"
+    },
+    {
+      "path": "DataProcessor/VisualProcessor/core/model_process/core_identity/brand_semantics/known_brands_auto/car/honda/15.jpg",
+      "sha256": "62c22b7146487e3aaa041a86c6495861f239d1eb754ebe7092762351d555d6e0",
+      "size": 217243,
+      "lfs": true,
+      "group": "semantic_bases"
+    },
+    {
+      "path": "DataProcessor/VisualProcessor/core/model_process/core_identity/brand_semantics/known_brands_auto/car/honda/16.jpg",
+      "sha256": "9e36a49a935515c495278ea029f9be175993b0a019ac72a0aebf8e2ebcbc19c8",
+      "size": 210702,
+      "lfs": true,
+      "group": "semantic_bases"
+    },
+    {
+      "path": "DataProcessor/dp_models/audio/emotion_diarization/wavlm_large/config.json",
+      "sha256": "e45c09f21dce569682074ea4f3441222c57f6dd564012cdaccd70e3763ce78ca",
+      "size": 59,
+      "lfs": false,
+      "group": "audio"
+    },
+    {
+      "path": "DataProcessor/dp_models/audio/emotion_diarization/wavlm_large/input_norm.ckpt",
+      "sha256": "eddbd59b97a6456c5a81880065b785f731ca3b959abfa2c965658a591e53d31f",
+      "size": 1075,
+      "lfs": true,
+      "group": "audio"
+    },
+    {
+      "path": "DataProcessor/dp_models/audio/emotion_diarization/wavlm_large/model.ckpt",
+      "sha256": "23c5832103c64cb628e8e56ce5fc7061be323e435a294d34060172c10015208d",
+      "size": 17189,
+      "lfs": true,
+      "group": "audio"
+    },
+    {
+      "path": "DataProcessor/dp_models/audio/emotion_diarization/wavlm_large/wav2vec2.ckpt",
+      "sha256": "60d8746058853c9ad8976c5630d8584959b74428f6bbe7458fe3d8bdf15d54b3",
+      "size": 1262005979,
+      "lfs": true,
+      "group": "audio"
+    },
+    {
+      "path": "DataProcessor/dp_models/audio/emotion_recognition/wav2vec2/label_encoder.txt",
+      "sha256": "30afecda60619b67b50375bac880df4edc3862c14fb724c86701200b13e080ca",
+      "size": 83,
+      "lfs": false,
+      "group": "audio"
+    },
+    {
+      "path": "DataProcessor/dp_models/audio/emotion_recognition/wav2vec2/model.ckpt",
+      "sha256": "e351bafc8c0a2699f174e2f43f13e732836731621a8e595b53ddaf5334abcefb",
+      "size": 13176,
+      "lfs": true,
+      "group": "audio"
+    },
+    {
+      "path": "DataProcessor/dp_models/audio/emotion_recognition/wav2vec2/wav2vec2.ckpt",
+      "sha256": "b6db170a487b2912cfe10359fad40dbb7563120656f26f47c521b1c7e578bdd0",
+      "size": 377575130,
+      "lfs": true,
+      "group": "audio"
+    },
+    {
+      "path": "DataProcessor/dp_models/audio/whisper/whisper_small_hf/config.json",
+      "sha256": "e6a2b489da1b5aed65a8eb8d1e7466fa867ad5643a8bc138ba708bd56b2875c4",
+      "size": 1967,
+      "lfs": false,
+      "group": "audio"
+    },
+    {
+      "path": "DataProcessor/dp_models/audio/whisper/whisper_small_hf/merges.txt",
+      "sha256": "2df2990a395e35e8dfbc7511e08c12d56018d8d04691e0133e5d63b21e154dc6",
+      "size": 493869,
+      "lfs": false,
+      "group": "audio"
+    },
+    {
+      "path": "DataProcessor/dp_models/audio/whisper/whisper_small_hf/model.bin",
+      "sha256": "ea40d8f6c99cada3695b9ddec20d5ee228a58292650b79c94d8600f567bf9b37",
+      "size": 967092419,
+      "lfs": true,
+      "group": "audio"
+    },
+    {
+      "path": "DataProcessor/dp_models/audio/whisper/whisper_small_hf/tokenizer.json",
+      "sha256": "27fc476bfe7f17299480be2273fc0608e4d5a99aba2ab5dec5374b4482d1a566",
+      "size": 2480466,
+      "lfs": false,
+      "group": "audio"
+    },
+    {
+      "path": "DataProcessor/dp_models/audio/whisper/whisper_small_hf/vocab.json",
+      "sha256": "8f680bba319e01a653d2e8a5dbc17a9157179e0576e6ce74ce0c06356c6e24f9",
+      "size": 835550,
+      "lfs": false,
+      "group": "audio"
+    },
+    {
+      "path": "DataProcessor/dp_models/bundled_models/visual/emonet/emonet_5.pth",
+      "sha256": "1d8fac689dc04fc65a8a25c050bd5888e1fc794fcf71c2b20a1f2e6b78d933dd",
+      "size": 56085615,
+      "lfs": true,
+      "group": "visual"
+    },
+    {
+      "path": "DataProcessor/dp_models/bundled_models/visual/emonet/emonet_8.pth",
+      "sha256": "52918cffba56f31886e6959f6837266a5f7ef5c0a552baf4c6dabe1e8fa9bc97",
+      "size": 56087163,
+      "lfs": true,
+      "group": "visual"
+    },
+    {
+      "path": "DataProcessor/dp_models/visual/action_recognition/videomae_kinetics400/config.json",
+      "sha256": "6d3c7afb3d1430fa478757425cc9be2fcc50a17bfbf58921e8a9e65bb3b5c568",
+      "size": 22865,
+      "lfs": false,
+      "group": "visual"
+    },
+    {
+      "path": "DataProcessor/dp_models/visual/action_recognition/videomae_kinetics400/model.safetensors",
+      "sha256": "065cfde56f97671da4d196e1a3a6d3cf9304dcad92eb671e3632a6c6cdd04f73",
+      "size": 346161616,
+      "lfs": true,
+      "group": "visual"
+    },
+    {
+      "path": "DataProcessor/dp_models/visual/action_recognition/videomae_kinetics400/preprocessor_config.json",
+      "sha256": "c3aa722f22a7ff0d234d407862025fe47672f74f46f92c91f757f7a7354107c2",
+      "size": 271,
+      "lfs": false,
+      "group": "visual"
+    },
+    {
+      "path": "DataProcessor/dp_models/visual/object_detection/yolo11l/yolo11l.onnx",
+      "sha256": "3bd3b0dfa2127f2792285184ce7acd4d4cec8de34213a36a12007bc0b10a5474",
+      "size": 101664026,
+      "lfs": true,
+      "group": "visual"
+    },
+    {
+      "path": "DataProcessor/dp_models/visual/object_detection/yolo11l/yolo11l.pt",
+      "sha256": "9ebd0e09d59811db4b1d61e2bc6730649608b1ac47f8dd01e2da6bca7c20023f",
+      "size": 51387343,
+      "lfs": true,
+      "group": "visual"
+    },
+    {
+      "path": "DataProcessor/dp_models/visual/pose/yolo11l_pose/yolo11l-pose.onnx",
+      "sha256": "b510c210f6a755486a525b4a09ee661c23f48ea49ffa9eec0ad7609cdcb57961",
+      "size": 104961345,
+      "lfs": true,
+      "group": "visual"
+    },
+    {
+      "path": "DataProcessor/dp_models/visual/pose/yolo11l_pose/yolo11l-pose.pt",
+      "sha256": "61921abe1f2ed930bf28328a16b3162278cdb239a1e8280b6ac827119f13cee0",
+      "size": 53164402,
+      "lfs": true,
+      "group": "visual"
+    },
+    {
+      "path": "DataProcessor/triton/models/README.md",
+      "sha256": null,
+      "size": 1478,
+      "lfs": false,
+      "group": "triton",
+      "repo": "Ilialebedev/trendflow_artifact_0_1",
+      "repo_type": "dataset"
+    },
+    {
+      "path": "DataProcessor/triton/models/clip_image_224/config.pbtxt",
+      "sha256": null,
+      "size": 629,
+      "lfs": false,
+      "group": "triton",
+      "repo": "Ilialebedev/trendflow_artifact_0_1",
+      "repo_type": "dataset"
+    },
+    {
+      "path": "DataProcessor/triton/models/clip_image_224_onnx/1/openai_clip_ViT-B_32_image_224.onnx",
+      "sha256": "52c7d8c58854695982f950532fb56a1b9356958a88e53760d26cd8a896c12f35",
+      "size": 351825557,
+      "lfs": true,
+      "group": "triton",
+      "repo": "Ilialebedev/trendflow_artifact_0_1",
+      "repo_type": "dataset"
+    },
+    {
+      "path": "DataProcessor/triton/models/clip_image_224_onnx/1/openai_clip_ViT-B_32_image_224.onnx.data",
+      "sha256": "ea42aa1612b4e7ec194b2c1ce9a70b532c78b20e2c6a36ed1fb21169595ee584",
+      "size": 351404032,
+      "lfs": true,
+      "group": "triton",
+      "repo": "Ilialebedev/trendflow_artifact_0_1",
+      "repo_type": "dataset"
+    },
+    {
+      "path": "DataProcessor/triton/models/clip_image_224_onnx/config.pbtxt",
+      "sha256": null,
+      "size": 348,
+      "lfs": false,
+      "group": "triton",
+      "repo": "Ilialebedev/trendflow_artifact_0_1",
+      "repo_type": "dataset"
+    },
+    {
+      "path": "DataProcessor/triton/models/clip_image_336/config.pbtxt",
+      "sha256": null,
+      "size": 629,
+      "lfs": false,
+      "group": "triton",
+      "repo": "Ilialebedev/trendflow_artifact_0_1",
+      "repo_type": "dataset"
+    },
+    {
+      "path": "DataProcessor/triton/models/clip_image_336_onnx/1/openai_clip_ViT-B_32_image_336.onnx",
+      "sha256": "99703bd342252fae8ac637c2c051d7a41b68f791c8d473c7b4f16034b2ca0111",
+      "size": 351982229,
+      "lfs": true,
+      "group": "triton",
+      "repo": "Ilialebedev/trendflow_artifact_0_1",
+      "repo_type": "dataset"
+    },
+    {
+      "path": "DataProcessor/triton/models/clip_image_336_onnx/1/openai_clip_ViT-B_32_image_336.onnx.data",
+      "sha256": "595a660448a7354b1a0efeea74877f71e07fa9f1598f638b0031d5d19a98db3f",
+      "size": 351600640,
+      "lfs": true,
+      "group": "triton",
+      "repo": "Ilialebedev/trendflow_artifact_0_1",
+      "repo_type": "dataset"
+    },
+    {
+      "path": "DataProcessor/triton/models/clip_image_336_onnx/config.pbtxt",
+      "sha256": null,
+      "size": 348,
+      "lfs": false,
+      "group": "triton",
+      "repo": "Ilialebedev/trendflow_artifact_0_1",
+      "repo_type": "dataset"
+    },
+    {
+      "path": "DataProcessor/triton/models/clip_image_448/config.pbtxt",
+      "sha256": null,
+      "size": 629,
+      "lfs": false,
+      "group": "triton",
+      "repo": "Ilialebedev/trendflow_artifact_0_1",
+      "repo_type": "dataset"
+    },
+    {
+      "path": "DataProcessor/triton/models/clip_image_448_onnx/1/openai_clip_ViT-B_32_image_448.onnx",
+      "sha256": "2ef87f17f13a4c4c822d9621725b1eb9258855928b9e65f29cf9f1d32d944fa4",
+      "size": 352277142,
+      "lfs": true,
+      "group": "triton",
+      "repo": "Ilialebedev/trendflow_artifact_0_1",
+      "repo_type": "dataset"
+    },
+    {
+      "path": "DataProcessor/triton/models/clip_image_448_onnx/1/openai_clip_ViT-B_32_image_448.onnx.data",
+      "sha256": "138251e9af044587f73530193f019d31f3fc3e99086c51b42a4552532ad48369",
+      "size": 351862784,
+      "lfs": true,
+      "group": "triton",
+      "repo": "Ilialebedev/trendflow_artifact_0_1",
+      "repo_type": "dataset"
+    },
+    {
+      "path": "DataProcessor/triton/models/clip_image_448_onnx/config.pbtxt",
+      "sha256": null,
+      "size": 348,
+      "lfs": false,
+      "group": "triton",
+      "repo": "Ilialebedev/trendflow_artifact_0_1",
+      "repo_type": "dataset"
+    },
+    {
+      "path": "DataProcessor/triton/models/clip_text/config.pbtxt",
+      "sha256": null,
+      "size": 448,
+      "lfs": false,
+      "group": "triton",
+      "repo": "Ilialebedev/trendflow_artifact_0_1",
+      "repo_type": "dataset"
+    },
+    {
+      "path": "DataProcessor/triton/models/clip_text_onnx/1/openai_clip_ViT-B_32_text_77.onnx",
+      "sha256": "d434a58f23cd90f627f81805cc5c42e651d8c3efc2d06dd39eb77dea5c5a2908",
+      "size": 254388205,
+      "lfs": true,
+      "group": "triton",
+      "repo": "Ilialebedev/trendflow_artifact_0_1",
+      "repo_type": "dataset"
+    },
+    {
+      "path": "DataProcessor/triton/models/clip_text_onnx/1/openai_clip_ViT-B_32_text_77.onnx.data",
+      "sha256": "a653f448d5706922978597f7727bf98c797c8983e4348ddde33e8a5f28cde196",
+      "size": 254017536,
+      "lfs": true,
+      "group": "triton",
+      "repo": "Ilialebedev/trendflow_artifact_0_1",
+      "repo_type": "dataset"
+    },
+    {
+      "path": "DataProcessor/triton/models/clip_text_onnx/config.pbtxt",
+      "sha256": null,
+      "size": 499,
+      "lfs": false,
+      "group": "triton",
+      "repo": "Ilialebedev/trendflow_artifact_0_1",
+      "repo_type": "dataset"
+    },
+    {
+      "path": "DataProcessor/triton/models/midas_256/config.pbtxt",
+      "sha256": null,
+      "size": 619,
+      "lfs": false,
+      "group": "triton",
+      "repo": "Ilialebedev/trendflow_artifact_0_1",
+      "repo_type": "dataset"
+    },
+    {
+      "path": "DataProcessor/triton/models/midas_256_onnx/1/midas_small_256.onnx",
+      "sha256": "131e53b31c42af5fccc89c72a642095edc89ba91916acdcc3b3bfafca5573ecd",
+      "size": 66405769,
+      "lfs": true,
+      "group": "triton",
+      "repo": "Ilialebedev/trendflow_artifact_0_1",
+      "repo_type": "dataset"
+    },
+    {
+      "path": "DataProcessor/triton/models/midas_256_onnx/1/midas_small_256.onnx.data",
+      "sha256": "3081195042ce4af5a4691d06a02ee55345fd5289c43371369e3675451604b69c",
+      "size": 66584576,
+      "lfs": true,
+      "group": "triton",
+      "repo": "Ilialebedev/trendflow_artifact_0_1",
+      "repo_type": "dataset"
+    },
+    {
+      "path": "DataProcessor/triton/models/midas_256_onnx/config.pbtxt",
+      "sha256": null,
+      "size": 421,
+      "lfs": false,
+      "group": "triton",
+      "repo": "Ilialebedev/trendflow_artifact_0_1",
+      "repo_type": "dataset"
+    },
+    {
+      "path": "DataProcessor/triton/models/midas_384/config.pbtxt",
+      "sha256": null,
+      "size": 619,
+      "lfs": false,
+      "group": "triton",
+      "repo": "Ilialebedev/trendflow_artifact_0_1",
+      "repo_type": "dataset"
+    },
+    {
+      "path": "DataProcessor/triton/models/midas_384_onnx/1/dpt_hybrid_384.onnx",
+      "sha256": "fd2f6cf51507e2233d2b9d00e4183df1d5ad12c69816d8372737db3642cca96a",
+      "size": 488690157,
+      "lfs": true,
+      "group": "triton",
+      "repo": "Ilialebedev/trendflow_artifact_0_1",
+      "repo_type": "dataset"
+    },
+    {
+      "path": "DataProcessor/triton/models/midas_384_onnx/1/dpt_hybrid_384.onnx.data",
+      "sha256": "b35c26ac0e73de3c4d49e923e89d73f9757f886c27d465d6e8018d2c5e9a355f",
+      "size": 484900864,
+      "lfs": true,
+      "group": "triton",
+      "repo": "Ilialebedev/trendflow_artifact_0_1",
+      "repo_type": "dataset"
+    },
+    {
+      "path": "DataProcessor/triton/models/midas_384_onnx/1/midas_small_384.onnx",
+      "sha256": "f92ff89a61e46a30cd85661f78a2d6052175da08a99f8bd8e51d253a2e5321bb",
+      "size": 66405761,
+      "lfs": true,
+      "group": "triton",
+      "repo": "Ilialebedev/trendflow_artifact_0_1",
+      "repo_type": "dataset"
+    },
+    {
+      "path": "DataProcessor/triton/models/midas_384_onnx/config.pbtxt",
+      "sha256": null,
+      "size": 333,
+      "lfs": false,
+      "group": "triton",
+      "repo": "Ilialebedev/trendflow_artifact_0_1",
+      "repo_type": "dataset"
+    },
+    {
+      "path": "DataProcessor/triton/models/midas_512/config.pbtxt",
+      "sha256": null,
+      "size": 619,
+      "lfs": false,
+      "group": "triton",
+      "repo": "Ilialebedev/trendflow_artifact_0_1",
+      "repo_type": "dataset"
+    },
+    {
+      "path": "DataProcessor/triton/models/midas_512_onnx/1/dpt_hybrid_512.onnx",
+      "sha256": "f9b4a94306af36b83b8a21ab899871fc697db7af1c2b4e0183f81b3a921126db",
+      "size": 488690181,
+      "lfs": true,
+      "group": "triton",
+      "repo": "Ilialebedev/trendflow_artifact_0_1",
+      "repo_type": "dataset"
+    },
+    {
+      "path": "DataProcessor/triton/models/midas_512_onnx/1/dpt_hybrid_512.onnx.data",
+      "sha256": "b35c26ac0e73de3c4d49e923e89d73f9757f886c27d465d6e8018d2c5e9a355f",
+      "size": 484900864,
+      "lfs": true,
+      "group": "triton",
+      "repo": "Ilialebedev/trendflow_artifact_0_1",
+      "repo_type": "dataset"
+    },
+    {
+      "path": "DataProcessor/triton/models/midas_512_onnx/1/midas_small_512.onnx",
+      "sha256": "5905ee29bbc3c3c7d637eede05812f384ba974356dde445c50e0a50c9402c0b6",
+      "size": 66405761,
+      "lfs": true,
+      "group": "triton",
+      "repo": "Ilialebedev/trendflow_artifact_0_1",
+      "repo_type": "dataset"
+    },
+    {
+      "path": "DataProcessor/triton/models/midas_512_onnx/config.pbtxt",
+      "sha256": null,
+      "size": 333,
+      "lfs": false,
+      "group": "triton",
+      "repo": "Ilialebedev/trendflow_artifact_0_1",
+      "repo_type": "dataset"
+    },
+    {
+      "path": "DataProcessor/triton/models/places365_resnet50_224/1/.keep",
+      "sha256": null,
+      "size": 63,
+      "lfs": false,
+      "group": "triton",
+      "repo": "Ilialebedev/trendflow_artifact_0_1",
+      "repo_type": "dataset"
+    },
+    {
+      "path": "DataProcessor/triton/models/places365_resnet50_224/config.pbtxt",
+      "sha256": null,
+      "size": 652,
+      "lfs": false,
+      "group": "triton",
+      "repo": "Ilialebedev/trendflow_artifact_0_1",
+      "repo_type": "dataset"
+    },
+    {
+      "path": "DataProcessor/triton/models/places365_resnet50_224_onnx/1/places365_resnet50_224.onnx",
+      "sha256": "870257d59cbdcc808359f85020bacd7f082ca3c0c89960e29d6421af51300626",
+      "size": 261079,
+      "lfs": true,
+      "group": "triton",
+      "repo": "Ilialebedev/trendflow_artifact_0_1",
+      "repo_type": "dataset"
+    },
+    {
+      "path": "DataProcessor/triton/models/places365_resnet50_224_onnx/1/places365_resnet50_224.onnx.data",
+      "sha256": "a49a5580ffc466e11079b5b2b8c411bbb6e4836f631d4ed8d354b04545f4d7d5",
+      "size": 96993280,
+      "lfs": true,
+      "group": "triton",
+      "repo": "Ilialebedev/trendflow_artifact_0_1",
+      "repo_type": "dataset"
+    },
+    {
+      "path": "DataProcessor/triton/models/places365_resnet50_224_onnx/config.pbtxt",
+      "sha256": null,
+      "size": 356,
+      "lfs": false,
+      "group": "triton",
+      "repo": "Ilialebedev/trendflow_artifact_0_1",
+      "repo_type": "dataset"
+    },
+    {
+      "path": "DataProcessor/triton/models/places365_resnet50_336/1/.keep",
+      "sha256": null,
+      "size": 63,
+      "lfs": false,
+      "group": "triton",
+      "repo": "Ilialebedev/trendflow_artifact_0_1",
+      "repo_type": "dataset"
+    },
+    {
+      "path": "DataProcessor/triton/models/places365_resnet50_336/config.pbtxt",
+      "sha256": null,
+      "size": 652,
+      "lfs": false,
+      "group": "triton",
+      "repo": "Ilialebedev/trendflow_artifact_0_1",
+      "repo_type": "dataset"
+    },
+    {
+      "path": "DataProcessor/triton/models/places365_resnet50_336_onnx/1/places365_resnet50_336.onnx",
+      "sha256": "814eca6fa6221b7da695109e1da53263b347ea3ae9eed07e697b61bda7385c9d",
+      "size": 261083,
+      "lfs": true,
+      "group": "triton",
+      "repo": "Ilialebedev/trendflow_artifact_0_1",
+      "repo_type": "dataset"
+    },
+    {
+      "path": "DataProcessor/triton/models/places365_resnet50_336_onnx/1/places365_resnet50_336.onnx.data",
+      "sha256": "a49a5580ffc466e11079b5b2b8c411bbb6e4836f631d4ed8d354b04545f4d7d5",
+      "size": 96993280,
+      "lfs": true,
+      "group": "triton",
+      "repo": "Ilialebedev/trendflow_artifact_0_1",
+      "repo_type": "dataset"
+    },
+    {
+      "path": "DataProcessor/triton/models/places365_resnet50_336_onnx/config.pbtxt",
+      "sha256": null,
+      "size": 356,
+      "lfs": false,
+      "group": "triton",
+      "repo": "Ilialebedev/trendflow_artifact_0_1",
+      "repo_type": "dataset"
+    },
+    {
+      "path": "DataProcessor/triton/models/places365_resnet50_448/1/.keep",
+      "sha256": null,
+      "size": 63,
+      "lfs": false,
+      "group": "triton",
+      "repo": "Ilialebedev/trendflow_artifact_0_1",
+      "repo_type": "dataset"
+    },
+    {
+      "path": "DataProcessor/triton/models/places365_resnet50_448/config.pbtxt",
+      "sha256": null,
+      "size": 652,
+      "lfs": false,
+      "group": "triton",
+      "repo": "Ilialebedev/trendflow_artifact_0_1",
+      "repo_type": "dataset"
+    },
+    {
+      "path": "DataProcessor/triton/models/places365_resnet50_448_onnx/1/places365_resnet50_448.onnx",
+      "sha256": "008cfc179af8815e944750c8ce005ea4e9fd4f918fad093214cc335106b12c25",
+      "size": 261083,
+      "lfs": true,
+      "group": "triton",
+      "repo": "Ilialebedev/trendflow_artifact_0_1",
+      "repo_type": "dataset"
+    },
+    {
+      "path": "DataProcessor/triton/models/places365_resnet50_448_onnx/1/places365_resnet50_448.onnx.data",
+      "sha256": "a49a5580ffc466e11079b5b2b8c411bbb6e4836f631d4ed8d354b04545f4d7d5",
+      "size": 96993280,
+      "lfs": true,
+      "group": "triton",
+      "repo": "Ilialebedev/trendflow_artifact_0_1",
+      "repo_type": "dataset"
+    },
+    {
+      "path": "DataProcessor/triton/models/places365_resnet50_448_onnx/config.pbtxt",
+      "sha256": null,
+      "size": 356,
+      "lfs": false,
+      "group": "triton",
+      "repo": "Ilialebedev/trendflow_artifact_0_1",
+      "repo_type": "dataset"
+    },
+    {
+      "path": "DataProcessor/triton/models/preprocess_clip_image_224/1/model.py",
+      "sha256": null,
+      "size": 876,
+      "lfs": false,
+      "group": "triton",
+      "repo": "Ilialebedev/trendflow_artifact_0_1",
+      "repo_type": "dataset"
+    },
+    {
+      "path": "DataProcessor/triton/models/preprocess_clip_image_224/config.pbtxt",
+      "sha256": null,
+      "size": 367,
+      "lfs": false,
+      "group": "triton",
+      "repo": "Ilialebedev/trendflow_artifact_0_1",
+      "repo_type": "dataset"
+    },
+    {
+      "path": "DataProcessor/triton/models/preprocess_clip_image_336/1/model.py",
+      "sha256": null,
+      "size": 872,
+      "lfs": false,
+      "group": "triton",
+      "repo": "Ilialebedev/trendflow_artifact_0_1",
+      "repo_type": "dataset"
+    },
+    {
+      "path": "DataProcessor/triton/models/preprocess_clip_image_336/config.pbtxt",
+      "sha256": null,
+      "size": 367,
+      "lfs": false,
+      "group": "triton",
+      "repo": "Ilialebedev/trendflow_artifact_0_1",
+      "repo_type": "dataset"
+    },
+    {
+      "path": "DataProcessor/triton/models/preprocess_clip_image_448/1/model.py",
+      "sha256": null,
+      "size": 872,
+      "lfs": false,
+      "group": "triton",
+      "repo": "Ilialebedev/trendflow_artifact_0_1",
+      "repo_type": "dataset"
+    },
+    {
+      "path": "DataProcessor/triton/models/preprocess_clip_image_448/config.pbtxt",
+      "sha256": null,
+      "size": 367,
+      "lfs": false,
+      "group": "triton",
+      "repo": "Ilialebedev/trendflow_artifact_0_1",
+      "repo_type": "dataset"
+    },
+    {
+      "path": "DataProcessor/triton/models/preprocess_midas_256/1/model.py",
+      "sha256": null,
+      "size": 671,
+      "lfs": false,
+      "group": "triton",
+      "repo": "Ilialebedev/trendflow_artifact_0_1",
+      "repo_type": "dataset"
+    },
+    {
+      "path": "DataProcessor/triton/models/preprocess_midas_256/config.pbtxt",
+      "sha256": null,
+      "size": 302,
+      "lfs": false,
+      "group": "triton",
+      "repo": "Ilialebedev/trendflow_artifact_0_1",
+      "repo_type": "dataset"
+    },
+    {
+      "path": "DataProcessor/triton/models/preprocess_midas_384/1/model.py",
+      "sha256": null,
+      "size": 623,
+      "lfs": false,
+      "group": "triton",
+      "repo": "Ilialebedev/trendflow_artifact_0_1",
+      "repo_type": "dataset"
+    },
+    {
+      "path": "DataProcessor/triton/models/preprocess_midas_384/config.pbtxt",
+      "sha256": null,
+      "size": 302,
+      "lfs": false,
+      "group": "triton",
+      "repo": "Ilialebedev/trendflow_artifact_0_1",
+      "repo_type": "dataset"
+    },
+    {
+      "path": "DataProcessor/triton/models/preprocess_midas_512/1/model.py",
+      "sha256": null,
+      "size": 623,
+      "lfs": false,
+      "group": "triton",
+      "repo": "Ilialebedev/trendflow_artifact_0_1",
+      "repo_type": "dataset"
+    },
+    {
+      "path": "DataProcessor/triton/models/preprocess_midas_512/config.pbtxt",
+      "sha256": null,
+      "size": 302,
+      "lfs": false,
+      "group": "triton",
+      "repo": "Ilialebedev/trendflow_artifact_0_1",
+      "repo_type": "dataset"
+    },
+    {
+      "path": "DataProcessor/triton/models/preprocess_places365_224/1/model.py",
+      "sha256": null,
+      "size": 921,
+      "lfs": false,
+      "group": "triton",
+      "repo": "Ilialebedev/trendflow_artifact_0_1",
+      "repo_type": "dataset"
+    },
+    {
+      "path": "DataProcessor/triton/models/preprocess_places365_224/config.pbtxt",
+      "sha256": null,
+      "size": 316,
+      "lfs": false,
+      "group": "triton",
+      "repo": "Ilialebedev/trendflow_artifact_0_1",
+      "repo_type": "dataset"
+    },
+    {
+      "path": "DataProcessor/triton/models/preprocess_places365_336/1/model.py",
+      "sha256": null,
+      "size": 847,
+      "lfs": false,
+      "group": "triton",
+      "repo": "Ilialebedev/trendflow_artifact_0_1",
+      "repo_type": "dataset"
+    },
+    {
+      "path": "DataProcessor/triton/models/preprocess_places365_336/config.pbtxt",
+      "sha256": null,
+      "size": 316,
+      "lfs": false,
+      "group": "triton",
+      "repo": "Ilialebedev/trendflow_artifact_0_1",
+      "repo_type": "dataset"
+    },
+    {
+      "path": "DataProcessor/triton/models/preprocess_places365_448/1/model.py",
+      "sha256": null,
+      "size": 847,
+      "lfs": false,
+      "group": "triton",
+      "repo": "Ilialebedev/trendflow_artifact_0_1",
+      "repo_type": "dataset"
+    },
+    {
+      "path": "DataProcessor/triton/models/preprocess_places365_448/config.pbtxt",
+      "sha256": null,
+      "size": 316,
+      "lfs": false,
+      "group": "triton",
+      "repo": "Ilialebedev/trendflow_artifact_0_1",
+      "repo_type": "dataset"
+    },
+    {
+      "path": "DataProcessor/triton/models/preprocess_raft_256/1/model.py",
+      "sha256": null,
+      "size": 907,
+      "lfs": false,
+      "group": "triton",
+      "repo": "Ilialebedev/trendflow_artifact_0_1",
+      "repo_type": "dataset"
+    },
+    {
+      "path": "DataProcessor/triton/models/preprocess_raft_256/config.pbtxt",
+      "sha256": null,
+      "size": 477,
+      "lfs": false,
+      "group": "triton",
+      "repo": "Ilialebedev/trendflow_artifact_0_1",
+      "repo_type": "dataset"
+    },
+    {
+      "path": "DataProcessor/triton/models/preprocess_raft_384/1/model.py",
+      "sha256": null,
+      "size": 907,
+      "lfs": false,
+      "group": "triton",
+      "repo": "Ilialebedev/trendflow_artifact_0_1",
+      "repo_type": "dataset"
+    },
+    {
+      "path": "DataProcessor/triton/models/preprocess_raft_384/config.pbtxt",
+      "sha256": null,
+      "size": 477,
+      "lfs": false,
+      "group": "triton",
+      "repo": "Ilialebedev/trendflow_artifact_0_1",
+      "repo_type": "dataset"
+    },
+    {
+      "path": "DataProcessor/triton/models/preprocess_raft_512/1/model.py",
+      "sha256": null,
+      "size": 907,
+      "lfs": false,
+      "group": "triton",
+      "repo": "Ilialebedev/trendflow_artifact_0_1",
+      "repo_type": "dataset"
+    },
+    {
+      "path": "DataProcessor/triton/models/preprocess_raft_512/config.pbtxt",
+      "sha256": null,
+      "size": 477,
+      "lfs": false,
+      "group": "triton",
+      "repo": "Ilialebedev/trendflow_artifact_0_1",
+      "repo_type": "dataset"
+    },
+    {
+      "path": "DataProcessor/triton/models/raft_256/config.pbtxt",
+      "sha256": null,
+      "size": 854,
+      "lfs": false,
+      "group": "triton",
+      "repo": "Ilialebedev/trendflow_artifact_0_1",
+      "repo_type": "dataset"
+    },
+    {
+      "path": "DataProcessor/triton/models/raft_256_onnx/1/raft_small_256.onnx",
+      "sha256": "2f8979ddda010f586ae53bcfdfb8a79577884a792e3a8e633b42ff6d0055a987",
+      "size": 4296323,
+      "lfs": true,
+      "group": "triton",
+      "repo": "Ilialebedev/trendflow_artifact_0_1",
+      "repo_type": "dataset"
+    },
+    {
+      "path": "DataProcessor/triton/models/raft_256_onnx/1/raft_small_256.onnx.data",
+      "sha256": "e72d42ff10d1f7160822b4a026e68c6251e6df1c4846eb2fb45388e269d9ff43",
+      "size": 5849928,
+      "lfs": true,
+      "group": "triton",
+      "repo": "Ilialebedev/trendflow_artifact_0_1",
+      "repo_type": "dataset"
+    },
+    {
+      "path": "DataProcessor/triton/models/raft_256_onnx/config.pbtxt",
+      "sha256": null,
+      "size": 571,
+      "lfs": false,
+      "group": "triton",
+      "repo": "Ilialebedev/trendflow_artifact_0_1",
+      "repo_type": "dataset"
+    },
+    {
+      "path": "DataProcessor/triton/models/raft_384/config.pbtxt",
+      "sha256": null,
+      "size": 854,
+      "lfs": false,
+      "group": "triton",
+      "repo": "Ilialebedev/trendflow_artifact_0_1",
+      "repo_type": "dataset"
+    },
+    {
+      "path": "DataProcessor/triton/models/raft_384_onnx/1/raft_small_384.onnx",
+      "sha256": "5213401b8373c73c2b939104b005618345cc094dd70372c5f1efe57ce5ba4c4e",
+      "size": 4296323,
+      "lfs": true,
+      "group": "triton",
+      "repo": "Ilialebedev/trendflow_artifact_0_1",
+      "repo_type": "dataset"
+    },
+    {
+      "path": "DataProcessor/triton/models/raft_384_onnx/1/raft_small_384.onnx.data",
+      "sha256": "309ab90880cd2e1b7c2ce30c39fc084621bd29e6b244aa59e325ff290ca7db14",
+      "size": 8215368,
+      "lfs": true,
+      "group": "triton",
+      "repo": "Ilialebedev/trendflow_artifact_0_1",
+      "repo_type": "dataset"
+    },
+    {
+      "path": "DataProcessor/triton/models/raft_384_onnx/config.pbtxt",
+      "sha256": null,
+      "size": 414,
+      "lfs": false,
+      "group": "triton",
+      "repo": "Ilialebedev/trendflow_artifact_0_1",
+      "repo_type": "dataset"
+    },
+    {
+      "path": "DataProcessor/triton/models/raft_512/config.pbtxt",
+      "sha256": null,
+      "size": 854,
+      "lfs": false,
+      "group": "triton",
+      "repo": "Ilialebedev/trendflow_artifact_0_1",
+      "repo_type": "dataset"
+    },
+    {
+      "path": "DataProcessor/triton/models/raft_512_onnx/1/raft_small_512.onnx",
+      "sha256": "06a9285bdfcaa9d7c117503ca64e84362aa1a3073443d318ea4cb8ba1ab77b8f",
+      "size": 4296323,
+      "lfs": true,
+      "group": "triton",
+      "repo": "Ilialebedev/trendflow_artifact_0_1",
+      "repo_type": "dataset"
+    },
+    {
+      "path": "DataProcessor/triton/models/raft_512_onnx/1/raft_small_512.onnx.data",
+      "sha256": "ec439dfa79dab9c2409be03a4a301891606249b9bf92a5f3f3b0ed276475ff27",
+      "size": 5235528,
+      "lfs": true,
+      "group": "triton",
+      "repo": "Ilialebedev/trendflow_artifact_0_1",
+      "repo_type": "dataset"
+    },
+    {
+      "path": "DataProcessor/triton/models/raft_512_onnx/config.pbtxt",
+      "sha256": null,
+      "size": 414,
+      "lfs": false,
+      "group": "triton",
+      "repo": "Ilialebedev/trendflow_artifact_0_1",
+      "repo_type": "dataset"
+    }
+  ],
+  "public_base_models": [
+    {
+      "id": "microsoft/wavlm-large",
+      "source": "hf_hub",
+      "note": "base for speechbrain emotion_diarization; fetch at bootstrap if needed"
+    },
+    {
+      "id": "facebook/wav2vec2-base",
+      "source": "hf_hub",
+      "note": "optional audio base"
+    },
+    {
+      "id": "intfloat/multilingual-e5-large",
+      "source": "hf_hub",
+      "note": "TextProcessor embeddings; use scripts/save_sentence_transformer_model.py"
+    },
+    {
+      "id": "LAION CLAP 630k-audioset-best.pt",
+      "source": "url",
+      "note": "only .tmp partial existed in old repo; must be re-fetched"
+    },
+    {
+      "id": "places365 resnet18/50",
+      "source": "url",
+      "note": "scene_classification weights + categories"
+    },
+    {
+      "id": "slowfast_r50",
+      "source": "url",
+      "note": "spec slowfast_r50; repo currently ships VideoMAE instead"
+    },
+    {
+      "id": "pyannote/speaker-diarization-community-1",
+      "source": "hf_hub_gated",
+      "note": "speaker_diarization; HF_TOKEN + save_pyannote_community_bundle.py → bundled_models/audio/pyannote_speaker_diarization"
+    },
+    {
+      "id": "monkt/paddleocr-onnx",
+      "source": "hf_hub",
+      "note": "ocr_extractor rec; save_ppocr_rec_onnx_bundle.py (lang eslav)"
+    },
+    {
+      "id": "MCG-NJU/videomae-base-finetuned-kinetics",
+      "source": "hf_hub",
+      "note": "action_recognition --backbone videomae (K400); provision via bootstrap --with-action-backbones"
+    },
+    {
+      "id": "OpenGVLab/VideoMAEv2-Base",
+      "source": "hf_hub",
+      "note": "action_recognition --backbone videomaev2 (может требовать trust_remote_code)"
+    },
+    {
+      "id": "facebook/hiera-base-224-in1k-hf",
+      "source": "hf_hub",
+      "note": "action_recognition --backbone hiera (нужен video-K400 чекпоинт; уточнить model_id)"
+    },
+    {
+      "id": "osnet_x1_0_market1501",
+      "source": "torchreid",
+      "note": "трекер --track-embedder osnet; torchreid авто-скачивает, offline — --track-osnet-weights"
+    }
+  ],
+  "summary": {
+    "file_count": 512,
+    "total_bytes": 8576629918,
+    "by_group": {
+      "semantic_bases": 409,
+      "audio": 12,
+      "visual": 9,
+      "triton": 82
+    }
+  },
+  "sources": {
+    "default": "Ilialebedev/trendflow_models",
+    "triton": "Ilialebedev/trendflow_artifact_0_1 (DataProcessor/triton/models, ~5.16GB ONNX; private -> needs HF_TOKEN)"
+  }
+}

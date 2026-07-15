@@ -1,0 +1,23 @@
+{
+  "schema_version": "state_processor_v1",
+  "processor": {
+    "name": "text",
+    "status": "error",
+    "started_at": "2026-07-01T04:27:46Z",
+    "finished_at": "2026-07-01T04:28:26Z",
+    "duration_ms": 39519,
+    "error": "exit=2: Error: name 'feature_names' is not defined · Type: NameError · Traceback: · Traceback (most recent call last): · File \"/home/ilya/Рабочий стол/TrendFlowML/DataProcessor/TextProcessor/run_cli.py\", line 907, in main · render = render_text_processor(out_path, comp_dir) · File \"/home/ilya/Рабочий стол/TrendFlowML/DataProcessor/TextProcessor/src/core/renderer.py\", line 218, in render_text_processor · \"total_features\": len(feature_names), · ^^^^^^^^^^^^^ · NameError: name 'feature_names' is not defined · 2026-07-01 14:28:24,510 [INFO] TextProcessor.run_cli: TextProcessor | wall timing breakdown (ms): {\"load_document_ms\": 0, \"main_processor_run_ms\": 37773, \"post_run_npz_validate_render_ms\": 82, \"sum_extractor_timings_ms\": 0, \"main_processor_orchestration_overhead_ms\": 37773, \"text_processor_internal_wall_ms\": 37855, \"note\": \"duration_ms on text_processor manifest row is full wall from internal t0 through NPZ/render; extractors only cover MainProcessor.run phase.\", \"text_subprocess_wall_ms\": 37985, \"subprocess_residual_ms\": 130}",
+    "error_code": "non_zero_exit"
+  },
+  "run": {
+    "platform_id": "youtube",
+    "video_id": "-Q6fnPIybEI",
+    "run_id": "beabcf7e-d033-443c-b53c-57abf76af000",
+    "config_hash": "bebd328c14016008",
+    "sampling_policy_version": "v1",
+    "dataprocessor_version": "unknown",
+    "created_at": "2026-07-01T04:27:42Z"
+  },
+  "components": {},
+  "updated_at": "2026-07-01T04:28:26Z"
+}

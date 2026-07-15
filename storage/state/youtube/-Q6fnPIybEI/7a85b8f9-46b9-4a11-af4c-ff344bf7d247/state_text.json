@@ -1,0 +1,23 @@
+{
+  "schema_version": "state_processor_v1",
+  "processor": {
+    "name": "text",
+    "status": "success",
+    "started_at": "2026-07-01T07:50:02Z",
+    "finished_at": "2026-07-01T07:50:54Z",
+    "duration_ms": 51688,
+    "error": null,
+    "error_code": null
+  },
+  "run": {
+    "platform_id": "youtube",
+    "video_id": "-Q6fnPIybEI",
+    "run_id": "7a85b8f9-46b9-4a11-af4c-ff344bf7d247",
+    "config_hash": "b0e1adc08cc80bf5",
+    "sampling_policy_version": "v1",
+    "dataprocessor_version": "unknown",
+    "created_at": "2026-07-01T07:48:46Z"
+  },
+  "components": {},
+  "updated_at": "2026-07-01T07:50:54Z"
+}

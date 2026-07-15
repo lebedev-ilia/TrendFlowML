@@ -1,0 +1,218 @@
+{
+  "builds": {},
+  "runs": {
+    "A_r0": {
+      "rc": 0,
+      "npz": "/workspace/ocr_synth/vidA/rs/ocr_extractor/ocr.npz",
+      "sec": 10.6,
+      "stderr_tail": ""
+    },
+    "A_r0b": {
+      "rc": 0,
+      "npz": "/workspace/ocr_synth/vidA/rs_golden2/ocr_extractor/ocr.npz",
+      "sec": 9.4,
+      "stderr_tail": ""
+    },
+    "A_r1": {
+      "rc": 0,
+      "npz": "/workspace/ocr_synth/vidA/rs_retain/ocr_extractor/ocr.npz",
+      "sec": 9.2,
+      "stderr_tail": ""
+    },
+    "B": {
+      "rc": 0,
+      "npz": "/workspace/ocr_synth/vidB/rs/ocr_extractor/ocr.npz",
+      "sec": 8.6,
+      "stderr_tail": ""
+    },
+    "Cblank": {
+      "rc": 0,
+      "npz": "/workspace/ocr_synth/vidCblank/rs/ocr_extractor/ocr.npz",
+      "sec": 9.6,
+      "stderr_tail": ""
+    },
+    "Dnobox": {
+      "rc": 0,
+      "npz": "/workspace/ocr_synth/vidDnobox/rs/ocr_extractor/ocr.npz",
+      "sec": 8.1,
+      "stderr_tail": ""
+    },
+    "E": {
+      "rc": 0,
+      "npz": "/workspace/ocr_synth/vidElong/rs/ocr_extractor/ocr.npz",
+      "sec": 9.1,
+      "stderr_tail": ""
+    },
+    "F": {
+      "rc": 0,
+      "npz": "/workspace/ocr_synth/vidFshort/rs/ocr_extractor/ocr.npz",
+      "sec": 8.6,
+      "stderr_tail": ""
+    }
+  },
+  "criteria": {
+    "U1_validator": {
+      "all_main_rc0": true,
+      "validate_ocr": {
+        "A_r0": {
+          "rc": 0,
+          "tail": [
+            "✅ VALID schema"
+          ]
+        },
+        "B": {
+          "rc": 0,
+          "tail": [
+            "✅ VALID schema"
+          ]
+        },
+        "Cblank": {
+          "rc": 0,
+          "tail": [
+            "✅ VALID schema"
+          ]
+        },
+        "Dnobox": {
+          "rc": 0,
+          "tail": [
+            "✅ VALID schema"
+          ]
+        },
+        "E": {
+          "rc": 0,
+          "tail": [
+            "✅ VALID schema"
+          ]
+        },
+        "F": {
+          "rc": 0,
+          "tail": [
+            "✅ VALID schema"
+          ]
+        }
+      }
+    },
+    "U2_time_axis": {
+      "A": {
+        "axis_match": true,
+        "monotonic": true,
+        "nan_pct": 0.0
+      },
+      "E": {
+        "axis_match": true,
+        "monotonic": true,
+        "nan_pct": 0.0
+      },
+      "F": {
+        "axis_match": true,
+        "monotonic": true,
+        "nan_pct": 0.0
+      }
+    },
+    "U3_health": {
+      "A": {
+        "times_finite": true,
+        "fi_in_range": true,
+        "fi_dtype": "int64"
+      },
+      "E": {
+        "times_finite": true,
+        "fi_in_range": true,
+        "fi_dtype": "int64"
+      }
+    },
+    "U4_empty": {
+      "Cblank_status": "ok",
+      "Cblank_reason": null,
+      "Cblank_rows": 6,
+      "Cblank_rc": 0,
+      "Dnobox_status": "empty",
+      "Dnobox_reason": "proposal_class_not_in_taxonomy",
+      "Dnobox_rows": 0,
+      "Dnobox_rc": 0
+    },
+    "U5_C4_golden": {
+      "key_identical": true,
+      "n_rows_r0": 4,
+      "n_rows_r0b": 4,
+      "max_abs_dconf": 0.0
+    },
+    "U6_lengths": {
+      "F": {
+        "rc": 0,
+        "n": 1,
+        "sec": 8.6
+      },
+      "A": {
+        "rc": 0,
+        "n": 4,
+        "sec": 10.6
+      },
+      "E": {
+        "rc": 0,
+        "n": 3,
+        "sec": 9.1
+      }
+    },
+    "C1_frame_binding": {
+      "A": {
+        "rows": 4,
+        "inside": 4,
+        "pct": 100.0
+      },
+      "B": {
+        "rows": 2,
+        "inside": 2,
+        "pct": 100.0
+      },
+      "E": {
+        "rows": 3,
+        "inside": 3,
+        "pct": 100.0
+      }
+    },
+    "C2_privacy": {
+      "retain_false_has_raw": false,
+      "retain_false_all_sha": true,
+      "retain_false_meta": false,
+      "retain_true_has_raw": true,
+      "retain_true_meta": true
+    },
+    "C3_discrimination": {
+      "R_per_video": {
+        "A": 4,
+        "B": 2,
+        "E": 3,
+        "Cblank": 6,
+        "Dnobox": 0
+      },
+      "R_varies": true,
+      "conf_in_0_1": true,
+      "conf_min": 0.003394172585103661,
+      "conf_max": 0.005217128782533109,
+      "n_conf": 9
+    },
+    "_recognized_sample_A_retain": [
+      {
+        "frame": 2,
+        "text": "TRENDFLOW",
+        "conf": 0.005213682384540637
+      },
+      {
+        "frame": 5,
+        "text": "HELLO2026",
+        "conf": 0.005169834527704451
+      },
+      {
+        "frame": 8,
+        "text": "OCRTEST",
+        "conf": 0.005189712425427777
+      },
+      {
+        "frame": 8,
+        "text": "LINE",
+        "conf": 0.003918425703886896
+      }
+    ]
+  }
+}

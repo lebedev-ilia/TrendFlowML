@@ -1,0 +1,515 @@
+{
+  "schema_version": "run_state_v1",
+  "run": {
+    "platform_id": "youtube",
+    "video_id": "-Q6fnPIybEI",
+    "run_id": "5cb1e994-ef11-46d7-8903-f6dfc346fb32",
+    "config_hash": "700df590097a0ee6",
+    "sampling_policy_version": "v1",
+    "dataprocessor_version": "unknown",
+    "created_at": "2026-07-01T05:03:07Z"
+  },
+  "processors": {
+    "segmenter": {
+      "name": "segmenter",
+      "status": "success",
+      "started_at": "2026-07-01T05:03:07Z",
+      "finished_at": "2026-07-01T05:03:08Z",
+      "duration_ms": 653,
+      "error": null,
+      "error_code": null,
+      "components": {}
+    },
+    "audio": {
+      "name": "audio",
+      "status": "error",
+      "started_at": "2026-07-01T05:03:08Z",
+      "finished_at": "2026-07-01T05:03:39Z",
+      "duration_ms": 30488,
+      "error": "exit=1: ^ · File \"/home/ilya/Рабочий стол/TrendFlowML/DataProcessor/AudioProcessor/src/core/extractor_runner.py\", line 915, in run_extractors · raise RuntimeError(f\"AudioProcessor | extractor '{key}' initialization failed: {init_error}\") from init_error · RuntimeError: AudioProcessor | extractor 'emotion_diarization' initialization failed: emotion_diarization | failed to resolve/load model via ModelManager: weights_missing: Required model directory is missing | details={'model_name': 'emotion_diarization_large_inprocess', 'path': 'audio/emotion_diarization/wavlm_large', 'resolved': '/home/ilya/Рабочий стол/TrendFlowML/DataProcessor/dp_models/bundled_models/audio/emotion_diarization/wavlm_large'}",
+      "error_code": "non_zero_exit",
+      "components": {}
+    },
+    "text": {
+      "name": "text",
+      "status": "error",
+      "started_at": "2026-07-01T05:03:40Z",
+      "finished_at": "2026-07-01T05:04:20Z",
+      "duration_ms": 39744,
+      "error": "exit=2: ) · File \"/home/ilya/Рабочий стол/TrendFlowML/DataProcessor/TextProcessor/src/core/main_processor.py\", line 501, in _instantiate_extractor_by_name_with_params · raise RuntimeError(f\"Failed to instantiate {name}: {e}\") from e · RuntimeError: Failed to instantiate SemanticClusterExtractor: semantic_cluster_extractor: invalid clusters.jsonl: clusters.jsonl must have integer cluster_id · 2026-07-01 15:04:19,086 [INFO] TextProcessor.run_cli: TextProcessor: wrote NPZ to /home/ilya/Рабочий стол/TrendFlowML/storage/result_store/youtube/-Q6fnPIybEI/5cb1e994-ef11-46d7-8903-f6dfc346fb32/text_processor/text_features.npz · 2026-07-01 15:04:19,090 [INFO] src.core.renderer: Render-context saved to /home/ilya/Рабочий стол/TrendFlowML/storage/result_store/youtube/-Q6fnPIybEI/5cb1e994-ef11-46d7-8903-f6dfc346fb32/text_processor/_render/render_context.json · 2026-07-01 15:04:19,090 [INFO] TextProcessor.run_cli: TextProcessor | wall timing breakdown (ms): {\"load_document_ms\": 0, \"main_processor_run_ms\": 38147, \"post_run_npz_validate_render_ms\": 83, \"sum_extractor_timings_ms\": 0, \"main_processor_orchestration_overhead_ms\": 38147, \"text_processor_internal_wall_ms\": 38230, \"note\": \"duration_ms on text_processor manifest row is full wall from internal t0 through NPZ/render; extractors only cover MainProcessor.run phase.\", \"text_subprocess_wall_ms\": 38362, \"subprocess_residual_ms\": 132}",
+      "error_code": "non_zero_exit",
+      "components": {}
+    },
+    "visual": {
+      "name": "visual",
+      "status": "success",
+      "started_at": "2026-07-01T05:04:20Z",
+      "finished_at": "2026-07-01T05:06:26Z",
+      "duration_ms": 125884,
+      "error": null,
+      "error_code": null,
+      "components": {
+        "brand_semantics": {
+          "name": "brand_semantics",
+          "status": "empty",
+          "artifacts": [
+            {
+              "path": "brand_semantics/brand_semantics.npz",
+              "type": "npz"
+            }
+          ],
+          "error": null,
+          "error_code": null,
+          "notes": null,
+          "device_used": "cpu",
+          "started_at": "2026-07-01T05:05:42Z",
+          "finished_at": "2026-07-01T05:05:43Z",
+          "duration_ms": 388,
+          "updated_at": "2026-07-01T05:06:26Z"
+        },
+        "car_semantics": {
+          "name": "car_semantics",
+          "status": "empty",
+          "artifacts": [
+            {
+              "path": "car_semantics/car_semantics.npz",
+              "type": "npz"
+            }
+          ],
+          "error": null,
+          "error_code": null,
+          "notes": null,
+          "device_used": "cpu",
+          "started_at": "2026-07-01T05:05:43Z",
+          "finished_at": "2026-07-01T05:05:43Z",
+          "duration_ms": 375,
+          "updated_at": "2026-07-01T05:06:26Z"
+        },
+        "content_domain": {
+          "name": "content_domain",
+          "status": "error",
+          "artifacts": [],
+          "error": "subprocess exit 1 (python): File \"/home/ilya/Рабочий стол/TrendFlowML/DataProcessor/VisualProcessor/core/model_process/core_identity/content_domain/main.py\", line 606, in main · label_ids, label_names, prompts_per_label, db_meta, threshold_per_label = _load_domain_db( · ~~~~~~~~~~~~~~~^ · db_dir=domain_db_dir, · ^^^^^^^^^^^^^^^^^^^^^ · threshold_global=float(confidence_threshold_top1), · ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^ · thresholds_json=str(args.thresholds_json) if args.thresholds_json else None, · ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^ · ) · ^ · File \"/home/ilya/Рабочий стол/TrendFlowML/DataProcessor/VisualProcessor/core/model_process/core_identity/content_domain/main.py\", line 318, in _load_domain_db · raise RuntimeError(f\"{NAME} | domain db dir not found: {pkg}\") · RuntimeError: content_domain | domain db dir not found: /home/ilya/Рабочий стол/TrendFlowML/DataProcessor/dp_models/bundled_models/semantics/content_domain/v1",
+          "error_code": "component_failed",
+          "notes": null,
+          "device_used": "cuda",
+          "started_at": "2026-07-01T05:05:06Z",
+          "finished_at": "2026-07-01T05:05:06Z",
+          "duration_ms": 227,
+          "updated_at": "2026-07-01T05:06:26Z"
+        },
+        "core_clip": {
+          "name": "core_clip",
+          "status": "success",
+          "artifacts": [
+            {
+              "path": "core_clip/embeddings.npz",
+              "type": "npz"
+            }
+          ],
+          "error": null,
+          "error_code": null,
+          "notes": null,
+          "device_used": "cuda",
+          "started_at": "2026-07-01T05:04:22Z",
+          "finished_at": "2026-07-01T05:05:06Z",
+          "duration_ms": 44069,
+          "updated_at": "2026-07-01T05:06:26Z"
+        },
+        "core_depth_midas": {
+          "name": "core_depth_midas",
+          "status": "success",
+          "artifacts": [
+            {
+              "path": "core_depth_midas/depth.npz",
+              "type": "npz"
+            }
+          ],
+          "error": null,
+          "error_code": null,
+          "notes": null,
+          "device_used": "cuda",
+          "started_at": "2026-07-01T05:05:06Z",
+          "finished_at": "2026-07-01T05:05:16Z",
+          "duration_ms": 9801,
+          "updated_at": "2026-07-01T05:06:26Z"
+        },
+        "core_face_landmarks": {
+          "name": "core_face_landmarks",
+          "status": "empty",
+          "artifacts": [
+            {
+              "path": "core_face_landmarks/landmarks.npz",
+              "type": "npz"
+            }
+          ],
+          "error": null,
+          "error_code": null,
+          "notes": null,
+          "device_used": "cpu",
+          "started_at": "2026-07-01T05:05:43Z",
+          "finished_at": "2026-07-01T05:05:49Z",
+          "duration_ms": 5965,
+          "updated_at": "2026-07-01T05:06:26Z"
+        },
+        "core_object_detections": {
+          "name": "core_object_detections",
+          "status": "empty",
+          "artifacts": [
+            {
+              "path": "core_object_detections/detections.npz",
+              "type": "npz"
+            }
+          ],
+          "error": null,
+          "error_code": null,
+          "notes": null,
+          "device_used": "cuda",
+          "started_at": "2026-07-01T05:05:17Z",
+          "finished_at": "2026-07-01T05:05:36Z",
+          "duration_ms": 19779,
+          "updated_at": "2026-07-01T05:06:26Z"
+        },
+        "core_optical_flow": {
+          "name": "core_optical_flow",
+          "status": "success",
+          "artifacts": [
+            {
+              "path": "core_optical_flow/flow.npz",
+              "type": "npz"
+            }
+          ],
+          "error": null,
+          "error_code": null,
+          "notes": null,
+          "device_used": "cuda",
+          "started_at": "2026-07-01T05:05:50Z",
+          "finished_at": "2026-07-01T05:05:57Z",
+          "duration_ms": 7458,
+          "updated_at": "2026-07-01T05:06:26Z"
+        },
+        "face_identity": {
+          "name": "face_identity",
+          "status": "success",
+          "artifacts": [],
+          "error": null,
+          "error_code": null,
+          "notes": null,
+          "device_used": "cpu",
+          "started_at": "2026-07-01T05:06:09Z",
+          "finished_at": "2026-07-01T05:06:10Z",
+          "duration_ms": 392,
+          "updated_at": "2026-07-01T05:06:26Z"
+        },
+        "franchise_recognition": {
+          "name": "franchise_recognition",
+          "status": "success",
+          "artifacts": [
+            {
+              "path": "franchise_recognition/franchise_recognition.npz",
+              "type": "npz"
+            }
+          ],
+          "error": null,
+          "error_code": null,
+          "notes": null,
+          "device_used": "cuda",
+          "started_at": "2026-07-01T05:06:10Z",
+          "finished_at": "2026-07-01T05:06:11Z",
+          "duration_ms": 1348,
+          "updated_at": "2026-07-01T05:06:26Z"
+        },
+        "place_semantics": {
+          "name": "place_semantics",
+          "status": "empty",
+          "artifacts": [
+            {
+              "path": "place_semantics/place_semantics.npz",
+              "type": "npz"
+            }
+          ],
+          "error": null,
+          "error_code": null,
+          "notes": "artifact validation failed: schema[place_semantics_npz_v2] meta_json: dtype mismatch: got object, expected str (dir=/home/ilya/Рабочий стол/TrendFlowML/DataProcessor/VisualProcessor/schemas)",
+          "device_used": "cpu",
+          "started_at": "2026-07-01T05:06:14Z",
+          "finished_at": "2026-07-01T05:06:16Z",
+          "duration_ms": 2176,
+          "updated_at": "2026-07-01T05:06:26Z"
+        },
+        "action_recognition": {
+          "name": "action_recognition",
+          "status": "error",
+          "artifacts": [],
+          "error": "subprocess exit 1 (python): Traceback (most recent call last): · File \"/home/ilya/Рабочий стол/TrendFlowML/DataProcessor/VisualProcessor/modules/action_recognition/main.py\", line 67, in <module> · _spec.loader.exec_module(_ar_mod) · ~~~~~~~~~~~~~~~~~~~~~~~~^^^^^^^^^ · File \"<frozen importlib._bootstrap_external>\", line 759, in exec_module · File \"<frozen importlib._bootstrap>\", line 491, in _call_with_frames_removed · File \"/home/ilya/Рабочий стол/TrendFlowML/DataProcessor/VisualProcessor/modules/action_recognition/utils/action_recognition_slowfast.py\", line 49, in <module> · from sklearn.decomposition import PCA · ModuleNotFoundError: No module named 'sklearn'",
+          "error_code": "component_failed",
+          "notes": null,
+          "device_used": "cuda",
+          "started_at": "2026-07-01T05:05:36Z",
+          "finished_at": "2026-07-01T05:05:42Z",
+          "duration_ms": 5926,
+          "updated_at": "2026-07-01T05:06:26Z"
+        },
+        "behavioral": {
+          "name": "behavioral",
+          "status": "empty",
+          "artifacts": [
+            {
+              "path": "behavioral/behavioral_features.npz",
+              "type": "npz"
+            }
+          ],
+          "error": null,
+          "error_code": null,
+          "notes": null,
+          "device_used": "cpu",
+          "started_at": "2026-07-01T05:05:49Z",
+          "finished_at": "2026-07-01T05:05:50Z",
+          "duration_ms": 543,
+          "updated_at": "2026-07-01T05:06:26Z"
+        },
+        "color_light": {
+          "name": "color_light",
+          "status": "error",
+          "artifacts": [],
+          "error": "subprocess exit 2 (python): 2026-07-01 15:06:21,393 \u001b[92mINFO\u001b[0m: color_light | Начало обработки 12 кадров · 2026-07-01 15:06:21,393 \u001b[91mERROR\u001b[0m: Файл не найден: color_light | Обязательная зависимость 'scene_classification' не найдена в /home/ilya/Рабочий стол/TrendFlowML/storage/result_store/youtube/-Q6fnPIybEI/5cb1e994-ef11-46d7-8903-f6dfc346fb32/scene_classification",
+          "error_code": "component_failed",
+          "notes": null,
+          "device_used": "cpu",
+          "started_at": "2026-07-01T05:06:20Z",
+          "finished_at": "2026-07-01T05:06:21Z",
+          "duration_ms": 1658,
+          "updated_at": "2026-07-01T05:06:26Z"
+        },
+        "cut_detection": {
+          "name": "cut_detection",
+          "status": "error",
+          "artifacts": [],
+          "error": "subprocess exit 4 (python): frame_manager=frame_manager, · frame_indices=frame_indices, · config=config · ) · File \"/home/ilya/Рабочий стол/TrendFlowML/DataProcessor/VisualProcessor/modules/cut_detection/utils/cut_detection.py\", line 2168, in process · return self._process_video_frames(frame_manager, frame_indices, audio_path=audio_path) · ~~~~~~~~~~~~~~~~~~~~~~~~~~^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^ · File \"/home/ilya/Рабочий стол/TrendFlowML/DataProcessor/VisualProcessor/modules/cut_detection/utils/cut_detection.py\", line 2588, in _process_video_frames · onset_env, onset_times, rms, loudness = audio_onset_strength(audio_path, use_multiband=True) · ~~~~~~~~~~~~~~~~~~~~^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^ · File \"/home/ilya/Рабочий стол/TrendFlowML/DataProcessor/VisualProcessor/modules/cut_detection/utils/cut_detection.py\", line 1437, in audio_onset_strength · y, sr = librosa.load(audio_path, sr=sr) · ^^^^^^^^^^^^ · AttributeError: 'NoneType' object has no attribute 'load'",
+          "error_code": "component_failed",
+          "notes": null,
+          "device_used": "auto",
+          "started_at": "2026-07-01T05:05:57Z",
+          "finished_at": "2026-07-01T05:06:04Z",
+          "duration_ms": 6741,
+          "updated_at": "2026-07-01T05:06:26Z"
+        },
+        "detalize_face": {
+          "name": "detalize_face",
+          "status": "empty",
+          "artifacts": [
+            {
+              "path": "detalize_face/detalize_face.npz",
+              "type": "npz"
+            }
+          ],
+          "error": null,
+          "error_code": null,
+          "notes": null,
+          "device_used": "cpu",
+          "started_at": "2026-07-01T05:06:04Z",
+          "finished_at": "2026-07-01T05:06:05Z",
+          "duration_ms": 1704,
+          "updated_at": "2026-07-01T05:06:26Z"
+        },
+        "emotion_face": {
+          "name": "emotion_face",
+          "status": "empty",
+          "artifacts": [
+            {
+              "path": "emotion_face/emotion_face.npz",
+              "type": "npz"
+            }
+          ],
+          "error": null,
+          "error_code": null,
+          "notes": null,
+          "device_used": "cuda",
+          "started_at": "2026-07-01T05:06:05Z",
+          "finished_at": "2026-07-01T05:06:09Z",
+          "duration_ms": 3783,
+          "updated_at": "2026-07-01T05:06:26Z"
+        },
+        "frames_composition": {
+          "name": "frames_composition",
+          "status": "empty",
+          "artifacts": [
+            {
+              "path": "frames_composition/frames_composition.npz",
+              "type": "npz"
+            }
+          ],
+          "error": null,
+          "error_code": null,
+          "notes": null,
+          "device_used": "cpu",
+          "started_at": "2026-07-01T05:06:10Z",
+          "finished_at": "2026-07-01T05:06:10Z",
+          "duration_ms": 326,
+          "updated_at": "2026-07-01T05:06:26Z"
+        },
+        "high_level_semantic": {
+          "name": "high_level_semantic",
+          "status": "error",
+          "artifacts": [],
+          "error": "subprocess exit 4 (python): File \"/home/ilya/Рабочий стол/TrendFlowML/DataProcessor/VisualProcessor/modules/high_level_semantic/utils/hl_semantic.py\", line 577, in process · cut_npz = fut_cut.result() · File \"/usr/lib/python3.14/concurrent/futures/_base.py\", line 443, in result · return self.__get_result() · ~~~~~~~~~~~~~~~~~^^ · File \"/usr/lib/python3.14/concurrent/futures/_base.py\", line 395, in __get_result · raise self._exception · File \"/usr/lib/python3.14/concurrent/futures/thread.py\", line 86, in run · result = ctx.run(self.task) · File \"/usr/lib/python3.14/concurrent/futures/thread.py\", line 73, in run · return fn(*args, **kwargs) · File \"/home/ilya/Рабочий стол/TrendFlowML/DataProcessor/VisualProcessor/modules/high_level_semantic/utils/hl_semantic.py\", line 522, in _load_cut_detection_features · raise RuntimeError(\"high_level_semantic | missing cut_detection NPZ\") · RuntimeError: high_level_semantic | missing cut_detection NPZ",
+          "error_code": "component_failed",
+          "notes": null,
+          "device_used": "cpu",
+          "started_at": "2026-07-01T05:06:11Z",
+          "finished_at": "2026-07-01T05:06:12Z",
+          "duration_ms": 199,
+          "updated_at": "2026-07-01T05:06:26Z"
+        },
+        "micro_emotion": {
+          "name": "micro_emotion",
+          "status": "empty",
+          "artifacts": [
+            {
+              "path": "micro_emotion/micro_emotion.npz",
+              "type": "npz"
+            }
+          ],
+          "error": null,
+          "error_code": null,
+          "notes": null,
+          "device_used": "cuda",
+          "started_at": "2026-07-01T05:06:12Z",
+          "finished_at": "2026-07-01T05:06:13Z",
+          "duration_ms": 1747,
+          "updated_at": "2026-07-01T05:06:26Z"
+        },
+        "optical_flow": {
+          "name": "optical_flow",
+          "status": "success",
+          "artifacts": [
+            {
+              "path": "optical_flow/optical_flow.npz",
+              "type": "npz"
+            }
+          ],
+          "error": null,
+          "error_code": null,
+          "notes": null,
+          "device_used": "cpu",
+          "started_at": "2026-07-01T05:06:13Z",
+          "finished_at": "2026-07-01T05:06:14Z",
+          "duration_ms": 219,
+          "updated_at": "2026-07-01T05:06:26Z"
+        },
+        "scene_classification": {
+          "name": "scene_classification",
+          "status": "error",
+          "artifacts": [],
+          "error": "subprocess exit 2 (python): 2026-07-01 15:06:19,180 \u001b[91mERROR\u001b[0m: Файл не найден: scene_classification | Обязательная зависимость 'cut_detection' не найдена в /home/ilya/Рабочий стол/TrendFlowML/storage/result_store/youtube/-Q6fnPIybEI/5cb1e994-ef11-46d7-8903-f6dfc346fb32/cut_detection",
+          "error_code": "component_failed",
+          "notes": null,
+          "device_used": "cuda",
+          "started_at": "2026-07-01T05:06:16Z",
+          "finished_at": "2026-07-01T05:06:20Z",
+          "duration_ms": 3804,
+          "updated_at": "2026-07-01T05:06:26Z"
+        },
+        "shot_quality": {
+          "name": "shot_quality",
+          "status": "error",
+          "artifacts": [],
+          "error": "subprocess exit 2 (python): 2026-07-01 15:06:21,868 \u001b[92mINFO\u001b[0m: shot_quality | device=cuda requested, but implementation is numpy-only (CPU). · 2026-07-01 15:06:21,868 \u001b[92mINFO\u001b[0m: shot_quality | process | Начало обработки: frames=12, device=cuda · 2026-07-01 15:06:21,965 \u001b[91mERROR\u001b[0m: shot_quality | shot_quality | Обязательная зависимость 'cut_detection' не найдена в /home/ilya/Рабочий стол/TrendFlowML/storage/result_store/youtube/-Q6fnPIybEI/5cb1e994-ef11-46d7-8903-f6dfc346fb32/cut_detection · 2026-07-01 15:06:21,965 \u001b[91mERROR\u001b[0m: Файл не найден: shot_quality | Обязательная зависимость 'cut_detection' не найдена в /home/ilya/Рабочий стол/TrendFlowML/storage/result_store/youtube/-Q6fnPIybEI/5cb1e994-ef11-46d7-8903-f6dfc346fb32/cut_detection",
+          "error_code": "component_failed",
+          "notes": null,
+          "device_used": "cpu",
+          "started_at": "2026-07-01T05:06:21Z",
+          "finished_at": "2026-07-01T05:06:22Z",
+          "duration_ms": 300,
+          "updated_at": "2026-07-01T05:06:26Z"
+        },
+        "similarity_metrics": {
+          "name": "similarity_metrics",
+          "status": "success",
+          "artifacts": [
+            {
+              "path": "similarity_metrics/results.npz",
+              "type": "npz"
+            }
+          ],
+          "error": null,
+          "error_code": null,
+          "notes": null,
+          "device_used": "cpu",
+          "started_at": "2026-07-01T05:06:22Z",
+          "finished_at": "2026-07-01T05:06:22Z",
+          "duration_ms": 238,
+          "updated_at": "2026-07-01T05:06:26Z"
+        },
+        "story_structure": {
+          "name": "story_structure",
+          "status": "success",
+          "artifacts": [
+            {
+              "path": "story_structure/story_structure.npz",
+              "type": "npz"
+            }
+          ],
+          "error": null,
+          "error_code": null,
+          "notes": null,
+          "device_used": "cpu",
+          "started_at": "2026-07-01T05:06:22Z",
+          "finished_at": "2026-07-01T05:06:23Z",
+          "duration_ms": 1071,
+          "updated_at": "2026-07-01T05:06:26Z"
+        },
+        "text_scoring": {
+          "name": "text_scoring",
+          "status": "empty",
+          "artifacts": [
+            {
+              "path": "text_scoring/text_scoring.npz",
+              "type": "npz"
+            }
+          ],
+          "error": null,
+          "error_code": null,
+          "notes": null,
+          "device_used": "cpu",
+          "started_at": "2026-07-01T05:06:23Z",
+          "finished_at": "2026-07-01T05:06:24Z",
+          "duration_ms": 1144,
+          "updated_at": "2026-07-01T05:06:26Z"
+        },
+        "uniqueness": {
+          "name": "uniqueness",
+          "status": "success",
+          "artifacts": [
+            {
+              "path": "uniqueness/uniqueness.npz",
+              "type": "npz"
+            }
+          ],
+          "error": null,
+          "error_code": null,
+          "notes": null,
+          "device_used": "cpu",
+          "started_at": "2026-07-01T05:06:24Z",
+          "finished_at": "2026-07-01T05:06:24Z",
+          "duration_ms": 193,
+          "updated_at": "2026-07-01T05:06:26Z"
+        },
+        "video_pacing": {
+          "name": "video_pacing",
+          "status": "error",
+          "artifacts": [],
+          "error": "subprocess exit 2 (python): 2026-07-01 15:06:25,633 \u001b[91mERROR\u001b[0m: Файл не найден: video_pacing | Обязательная зависимость 'cut_detection' не найдена в /home/ilya/Рабочий стол/TrendFlowML/storage/result_store/youtube/-Q6fnPIybEI/5cb1e994-ef11-46d7-8903-f6dfc346fb32/cut_detection",
+          "error_code": "component_failed",
+          "notes": null,
+          "device_used": "cpu",
+          "started_at": "2026-07-01T05:06:24Z",
+          "finished_at": "2026-07-01T05:06:25Z",
+          "duration_ms": 1114,
+          "updated_at": "2026-07-01T05:06:26Z"
+        }
+      }
+    }
+  },
+  "updated_at": "2026-07-01T05:06:26Z"
+}

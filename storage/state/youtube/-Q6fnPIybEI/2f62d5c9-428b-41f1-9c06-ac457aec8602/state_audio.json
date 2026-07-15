@@ -1,0 +1,23 @@
+{
+  "schema_version": "state_processor_v1",
+  "processor": {
+    "name": "audio",
+    "status": "success",
+    "started_at": "2026-07-01T05:37:49Z",
+    "finished_at": "2026-07-01T05:38:09Z",
+    "duration_ms": 19765,
+    "error": null,
+    "error_code": null
+  },
+  "run": {
+    "platform_id": "youtube",
+    "video_id": "-Q6fnPIybEI",
+    "run_id": "2f62d5c9-428b-41f1-9c06-ac457aec8602",
+    "config_hash": "51647bb404748a61",
+    "sampling_policy_version": "v1",
+    "dataprocessor_version": "unknown",
+    "created_at": "2026-07-01T05:37:48Z"
+  },
+  "components": {},
+  "updated_at": "2026-07-01T05:38:09Z"
+}

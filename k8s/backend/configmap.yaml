@@ -1,0 +1,12 @@
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: backend-config
+  namespace: trendflow
+data:
+  TF_BACKEND_LOG_LEVEL: "INFO"
+  # Internal service URLs (cluster DNS)
+  TF_BACKEND_FETCHER_API_URL: "http://fetcher-orchestrator:8000"
+  TF_BACKEND_DATAPROCESSOR_API_URL: "http://dataprocessor:8002"
+  # Schema is created via the alembic migration Job; don't auto-create at runtime.
+  TF_BACKEND_DB_AUTO_CREATE: "false"

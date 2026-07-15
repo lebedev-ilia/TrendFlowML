@@ -457,7 +457,9 @@ class HighLevelSemanticModule(BaseModule):
 
     def required_dependencies(self) -> List[str]:
         # Note: AudioProcessor/TextProcessor are outside VisualProcessor, but their artifacts still live in rs_path.
-        deps = ["core_clip", "cut_detection", "emotion_face"]
+        # emotion_face — мягкая зависимость: при отсутствии NPZ модуль продолжает работу,
+        # emo_* признаки остаются NaN (graceful fallback, аналогично audio-deps).
+        deps = ["core_clip", "cut_detection"]
         if self.require_text_processor:
             deps.append("text_processor")
         if self.require_audio_loudness:
@@ -531,12 +533,26 @@ class HighLevelSemanticModule(BaseModule):
                 return None
             return _load_npz(p)
 
-        def _load_emotion_face() -> Dict[str, Any]:
+        def _load_emotion_face() -> Optional[Dict[str, Any]]:
             d = os.path.join(self.rs_path, "emotion_face")
             p = os.path.join(d, "emotion_face.npz")
             if not os.path.isfile(p):
-                raise RuntimeError("high_level_semantic | missing emotion_face/emotion_face.npz (no-fallback)")
-            return _load_npz(p)
+                LOGGER.info(
+                    "high_level_semantic | emotion_face/emotion_face.npz not found; "
+                    "emo_* features will be NaN (graceful fallback)"
+                )
+                return None
+            data = _load_npz(p)
+            meta = data.get("meta")
+            if isinstance(meta, np.ndarray) and meta.dtype == object:
+                meta = meta.item()
+            if isinstance(meta, dict) and str(meta.get("status", "")) == "empty":
+                LOGGER.info(
+                    "high_level_semantic | emotion_face status=empty; "
+                    "emo_* features will be NaN (graceful fallback)"
+                )
+                return None
+            return data
 
         def _load_text_processor() -> Optional[Dict[str, Any]]:
             if "text" not in self.feature_groups and "events" not in self.feature_groups:
@@ -668,7 +684,7 @@ class HighLevelSemanticModule(BaseModule):
         emo_arousal = np.full((N,), np.nan, dtype=np.float32)
         emo_intensity = np.full((N,), np.nan, dtype=np.float32)
 
-        if "emotion" in self.feature_groups:
+        if "emotion" in self.feature_groups and emo_npz is not None:
             # Audit v3: emotion_face canonical output is top-level arrays (valence/arousal/intensity/...).
             # Use times_s if present, else compute from union via emotion_face.frame_indices.
             et = emo_npz.get("times_s")
@@ -806,8 +822,8 @@ class HighLevelSemanticModule(BaseModule):
                         ev_strength.append(float(cand[int(pp)]))
                         ev_pos.append(int(pp))
 
-            # emotion keyframes (best-effort)
-            keyframes = emo_npz.get("keyframes")
+            # emotion keyframes (best-effort; пропускаем если emotion_face недоступна)
+            keyframes = emo_npz.get("keyframes") if emo_npz is not None else None
             if isinstance(keyframes, np.ndarray) and keyframes.dtype == object:
                 keyframes = keyframes.tolist()
             if isinstance(keyframes, list) and keyframes:
@@ -927,6 +943,7 @@ class HighLevelSemanticModule(BaseModule):
                 "feature_groups": sorted(self.feature_groups),
                 "upstream": {
                     "cut_detection_model_facing_present": bool(cut_mf is not None),
+                    "emotion_face_present": bool(emo_npz is not None),
                     "text_processor_present": bool(text_npz is not None),
                     "loudness_present": bool(loud_npz is not None),
                     "tempo_present": bool(tempo_npz is not None),

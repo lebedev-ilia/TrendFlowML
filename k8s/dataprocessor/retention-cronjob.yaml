@@ -1,0 +1,33 @@
+# Daily retention cleanup of old result_store / frames (task 5 / P8).
+# Replaces the in-container cron from docker-compose with a native k8s CronJob.
+apiVersion: batch/v1
+kind: CronJob
+metadata:
+  name: dataprocessor-retention-cleanup
+  namespace: trendflow
+  labels: { app: dataprocessor, component: retention }
+spec:
+  schedule: "0 2 * * *"            # daily at 02:00 UTC
+  concurrencyPolicy: Forbid
+  successfulJobsHistoryLimit: 3
+  failedJobsHistoryLimit: 3
+  jobTemplate:
+    spec:
+      backoffLimit: 2
+      template:
+        spec:
+          restartPolicy: OnFailure
+          containers:
+          - name: retention
+            image: trendflow-dataprocessor:latest
+            imagePullPolicy: IfNotPresent
+            command: ["python", "-m", "api.retention_cleanup"]
+            envFrom:
+            - configMapRef: { name: dataprocessor-config }
+            env:
+            - { name: REDIS_URL, valueFrom: { secretKeyRef: { name: app-secrets, key: redis-url } } }
+            - { name: AWS_ACCESS_KEY_ID,     valueFrom: { secretKeyRef: { name: app-secrets, key: minio-access-key } } }
+            - { name: AWS_SECRET_ACCESS_KEY, valueFrom: { secretKeyRef: { name: app-secrets, key: minio-secret-key } } }
+            resources:
+              requests: { cpu: "100m", memory: "256Mi" }
+              limits:   { cpu: "1", memory: "1Gi" }

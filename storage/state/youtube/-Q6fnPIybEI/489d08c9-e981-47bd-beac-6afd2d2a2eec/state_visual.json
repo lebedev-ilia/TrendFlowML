@@ -1,0 +1,545 @@
+{
+  "schema_version": "state_processor_v1",
+  "processor": {
+    "name": "visual",
+    "status": "success",
+    "started_at": "2026-07-01T08:54:59Z",
+    "finished_at": "2026-07-01T08:56:39Z",
+    "duration_ms": 100056,
+    "error": null,
+    "error_code": null
+  },
+  "run": {
+    "platform_id": "youtube",
+    "video_id": "-Q6fnPIybEI",
+    "run_id": "489d08c9-e981-47bd-beac-6afd2d2a2eec",
+    "config_hash": "58520a1689e203b4",
+    "sampling_policy_version": "v1",
+    "dataprocessor_version": "unknown",
+    "created_at": "2026-07-01T08:52:42Z"
+  },
+  "components": {
+    "brand_semantics": {
+      "name": "brand_semantics",
+      "status": "empty",
+      "artifacts": [
+        {
+          "path": "brand_semantics/brand_semantics.npz",
+          "type": "npz"
+        }
+      ],
+      "error": null,
+      "error_code": null,
+      "notes": null,
+      "device_used": "cpu",
+      "started_at": "2026-07-01T08:55:42Z",
+      "finished_at": "2026-07-01T08:55:42Z",
+      "duration_ms": 557,
+      "updated_at": "2026-07-01T08:56:39Z"
+    },
+    "car_semantics": {
+      "name": "car_semantics",
+      "status": "empty",
+      "artifacts": [
+        {
+          "path": "car_semantics/car_semantics.npz",
+          "type": "npz"
+        }
+      ],
+      "error": null,
+      "error_code": null,
+      "notes": null,
+      "device_used": "cpu",
+      "started_at": "2026-07-01T08:55:42Z",
+      "finished_at": "2026-07-01T08:55:43Z",
+      "duration_ms": 393,
+      "updated_at": "2026-07-01T08:56:39Z"
+    },
+    "content_domain": {
+      "name": "content_domain",
+      "status": "success",
+      "artifacts": [
+        {
+          "path": "content_domain/content_domain.npz",
+          "type": "npz"
+        }
+      ],
+      "error": null,
+      "error_code": null,
+      "notes": null,
+      "device_used": "cuda",
+      "started_at": "2026-07-01T08:55:11Z",
+      "finished_at": "2026-07-01T08:55:16Z",
+      "duration_ms": 4820,
+      "updated_at": "2026-07-01T08:56:39Z"
+    },
+    "core_clip": {
+      "name": "core_clip",
+      "status": "success",
+      "artifacts": [
+        {
+          "path": "core_clip/embeddings.npz",
+          "type": "npz"
+        }
+      ],
+      "error": null,
+      "error_code": null,
+      "notes": null,
+      "device_used": "cuda",
+      "started_at": "2026-07-01T08:55:03Z",
+      "finished_at": "2026-07-01T08:55:11Z",
+      "duration_ms": 7290,
+      "updated_at": "2026-07-01T08:56:39Z"
+    },
+    "core_depth_midas": {
+      "name": "core_depth_midas",
+      "status": "success",
+      "artifacts": [
+        {
+          "path": "core_depth_midas/depth.npz",
+          "type": "npz"
+        }
+      ],
+      "error": null,
+      "error_code": null,
+      "notes": null,
+      "device_used": "cuda",
+      "started_at": "2026-07-01T08:55:16Z",
+      "finished_at": "2026-07-01T08:55:24Z",
+      "duration_ms": 8917,
+      "updated_at": "2026-07-01T08:56:39Z"
+    },
+    "core_face_landmarks": {
+      "name": "core_face_landmarks",
+      "status": "empty",
+      "artifacts": [
+        {
+          "path": "core_face_landmarks/landmarks.npz",
+          "type": "npz"
+        }
+      ],
+      "error": null,
+      "error_code": null,
+      "notes": null,
+      "device_used": "cpu",
+      "started_at": "2026-07-01T08:55:43Z",
+      "finished_at": "2026-07-01T08:55:47Z",
+      "duration_ms": 3889,
+      "updated_at": "2026-07-01T08:56:39Z"
+    },
+    "core_object_detections": {
+      "name": "core_object_detections",
+      "status": "empty",
+      "artifacts": [
+        {
+          "path": "core_object_detections/detections.npz",
+          "type": "npz"
+        }
+      ],
+      "error": null,
+      "error_code": null,
+      "notes": null,
+      "device_used": "cuda",
+      "started_at": "2026-07-01T08:55:25Z",
+      "finished_at": "2026-07-01T08:55:31Z",
+      "duration_ms": 5819,
+      "updated_at": "2026-07-01T08:56:39Z"
+    },
+    "core_optical_flow": {
+      "name": "core_optical_flow",
+      "status": "success",
+      "artifacts": [
+        {
+          "path": "core_optical_flow/flow.npz",
+          "type": "npz"
+        }
+      ],
+      "error": null,
+      "error_code": null,
+      "notes": null,
+      "device_used": "cuda",
+      "started_at": "2026-07-01T08:55:47Z",
+      "finished_at": "2026-07-01T08:55:55Z",
+      "duration_ms": 7727,
+      "updated_at": "2026-07-01T08:56:39Z"
+    },
+    "face_identity": {
+      "name": "face_identity",
+      "status": "success",
+      "artifacts": [],
+      "error": null,
+      "error_code": null,
+      "notes": null,
+      "device_used": "cpu",
+      "started_at": "2026-07-01T08:56:10Z",
+      "finished_at": "2026-07-01T08:56:11Z",
+      "duration_ms": 382,
+      "updated_at": "2026-07-01T08:56:39Z"
+    },
+    "franchise_recognition": {
+      "name": "franchise_recognition",
+      "status": "success",
+      "artifacts": [
+        {
+          "path": "franchise_recognition/franchise_recognition.npz",
+          "type": "npz"
+        }
+      ],
+      "error": null,
+      "error_code": null,
+      "notes": null,
+      "device_used": "cuda",
+      "started_at": "2026-07-01T08:56:11Z",
+      "finished_at": "2026-07-01T08:56:12Z",
+      "duration_ms": 1058,
+      "updated_at": "2026-07-01T08:56:39Z"
+    },
+    "ocr_extractor": {
+      "name": "ocr_extractor",
+      "status": "empty",
+      "artifacts": [
+        {
+          "path": "ocr_extractor/ocr.npz",
+          "type": "npz"
+        }
+      ],
+      "error": null,
+      "error_code": null,
+      "notes": null,
+      "device_used": "cpu",
+      "started_at": "2026-07-01T08:56:14Z",
+      "finished_at": "2026-07-01T08:56:17Z",
+      "duration_ms": 2695,
+      "updated_at": "2026-07-01T08:56:39Z"
+    },
+    "place_semantics": {
+      "name": "place_semantics",
+      "status": "empty",
+      "artifacts": [
+        {
+          "path": "place_semantics/place_semantics.npz",
+          "type": "npz"
+        }
+      ],
+      "error": null,
+      "error_code": null,
+      "notes": "artifact validation failed: schema[place_semantics_npz_v2] meta_json: dtype mismatch: got object, expected str (dir=/home/ilya/Рабочий стол/TrendFlowML/DataProcessor/VisualProcessor/schemas)",
+      "device_used": "cpu",
+      "started_at": "2026-07-01T08:56:17Z",
+      "finished_at": "2026-07-01T08:56:19Z",
+      "duration_ms": 2181,
+      "updated_at": "2026-07-01T08:56:39Z"
+    },
+    "action_recognition": {
+      "name": "action_recognition",
+      "status": "empty",
+      "artifacts": [
+        {
+          "path": "action_recognition/action_recognition_features.npz",
+          "type": "npz"
+        }
+      ],
+      "error": null,
+      "error_code": null,
+      "notes": null,
+      "device_used": "cuda",
+      "started_at": "2026-07-01T08:55:31Z",
+      "finished_at": "2026-07-01T08:55:42Z",
+      "duration_ms": 11217,
+      "updated_at": "2026-07-01T08:56:39Z"
+    },
+    "behavioral": {
+      "name": "behavioral",
+      "status": "empty",
+      "artifacts": [
+        {
+          "path": "behavioral/behavioral_features.npz",
+          "type": "npz"
+        }
+      ],
+      "error": null,
+      "error_code": null,
+      "notes": null,
+      "device_used": "cpu",
+      "started_at": "2026-07-01T08:55:47Z",
+      "finished_at": "2026-07-01T08:55:47Z",
+      "duration_ms": 366,
+      "updated_at": "2026-07-01T08:56:39Z"
+    },
+    "color_light": {
+      "name": "color_light",
+      "status": "success",
+      "artifacts": [
+        {
+          "path": "color_light/color_light_features.npz",
+          "type": "npz"
+        }
+      ],
+      "error": null,
+      "error_code": null,
+      "notes": null,
+      "device_used": "cpu",
+      "started_at": "2026-07-01T08:56:25Z",
+      "finished_at": "2026-07-01T08:56:28Z",
+      "duration_ms": 3278,
+      "updated_at": "2026-07-01T08:56:39Z"
+    },
+    "cut_detection": {
+      "name": "cut_detection",
+      "status": "success",
+      "artifacts": [
+        {
+          "path": "cut_detection/cut_detection_features_2026-07-01_08-56-04-038020_1aa76f87.npz",
+          "type": "npz"
+        },
+        {
+          "path": "cut_detection/cut_detection_model_facing_2026-07-01_08-56-04-021729_733548dc.npz",
+          "type": "npz"
+        }
+      ],
+      "error": null,
+      "error_code": null,
+      "notes": null,
+      "device_used": "auto",
+      "started_at": "2026-07-01T08:55:55Z",
+      "finished_at": "2026-07-01T08:56:05Z",
+      "duration_ms": 10101,
+      "updated_at": "2026-07-01T08:56:39Z"
+    },
+    "detalize_face": {
+      "name": "detalize_face",
+      "status": "empty",
+      "artifacts": [
+        {
+          "path": "detalize_face/detalize_face.npz",
+          "type": "npz"
+        }
+      ],
+      "error": null,
+      "error_code": null,
+      "notes": null,
+      "device_used": "cpu",
+      "started_at": "2026-07-01T08:56:05Z",
+      "finished_at": "2026-07-01T08:56:07Z",
+      "duration_ms": 1599,
+      "updated_at": "2026-07-01T08:56:39Z"
+    },
+    "emotion_face": {
+      "name": "emotion_face",
+      "status": "empty",
+      "artifacts": [
+        {
+          "path": "emotion_face/emotion_face.npz",
+          "type": "npz"
+        }
+      ],
+      "error": null,
+      "error_code": null,
+      "notes": null,
+      "device_used": "cuda",
+      "started_at": "2026-07-01T08:56:07Z",
+      "finished_at": "2026-07-01T08:56:10Z",
+      "duration_ms": 3879,
+      "updated_at": "2026-07-01T08:56:39Z"
+    },
+    "frames_composition": {
+      "name": "frames_composition",
+      "status": "empty",
+      "artifacts": [
+        {
+          "path": "frames_composition/frames_composition.npz",
+          "type": "npz"
+        }
+      ],
+      "error": null,
+      "error_code": null,
+      "notes": null,
+      "device_used": "cpu",
+      "started_at": "2026-07-01T08:56:11Z",
+      "finished_at": "2026-07-01T08:56:11Z",
+      "duration_ms": 344,
+      "updated_at": "2026-07-01T08:56:39Z"
+    },
+    "high_level_semantic": {
+      "name": "high_level_semantic",
+      "status": "success",
+      "artifacts": [
+        {
+          "path": "high_level_semantic/high_level_semantic.npz",
+          "type": "npz"
+        }
+      ],
+      "error": null,
+      "error_code": null,
+      "notes": null,
+      "device_used": "cpu",
+      "started_at": "2026-07-01T08:56:12Z",
+      "finished_at": "2026-07-01T08:56:12Z",
+      "duration_ms": 230,
+      "updated_at": "2026-07-01T08:56:39Z"
+    },
+    "micro_emotion": {
+      "name": "micro_emotion",
+      "status": "empty",
+      "artifacts": [
+        {
+          "path": "micro_emotion/micro_emotion.npz",
+          "type": "npz"
+        }
+      ],
+      "error": null,
+      "error_code": null,
+      "notes": null,
+      "device_used": "cuda",
+      "started_at": "2026-07-01T08:56:12Z",
+      "finished_at": "2026-07-01T08:56:14Z",
+      "duration_ms": 1681,
+      "updated_at": "2026-07-01T08:56:39Z"
+    },
+    "optical_flow": {
+      "name": "optical_flow",
+      "status": "success",
+      "artifacts": [
+        {
+          "path": "optical_flow/optical_flow.npz",
+          "type": "npz"
+        }
+      ],
+      "error": null,
+      "error_code": null,
+      "notes": null,
+      "device_used": "cpu",
+      "started_at": "2026-07-01T08:56:17Z",
+      "finished_at": "2026-07-01T08:56:17Z",
+      "duration_ms": 209,
+      "updated_at": "2026-07-01T08:56:39Z"
+    },
+    "scene_classification": {
+      "name": "scene_classification",
+      "status": "success",
+      "artifacts": [
+        {
+          "path": "scene_classification/scene_classification_features.npz",
+          "type": "npz"
+        }
+      ],
+      "error": null,
+      "error_code": null,
+      "notes": null,
+      "device_used": "cuda",
+      "started_at": "2026-07-01T08:56:19Z",
+      "finished_at": "2026-07-01T08:56:24Z",
+      "duration_ms": 5192,
+      "updated_at": "2026-07-01T08:56:39Z"
+    },
+    "shot_quality": {
+      "name": "shot_quality",
+      "status": "success",
+      "artifacts": [
+        {
+          "path": "shot_quality/shot_quality.npz",
+          "type": "npz"
+        }
+      ],
+      "error": null,
+      "error_code": null,
+      "notes": null,
+      "device_used": "cpu",
+      "started_at": "2026-07-01T08:56:28Z",
+      "finished_at": "2026-07-01T08:56:34Z",
+      "duration_ms": 6486,
+      "updated_at": "2026-07-01T08:56:39Z"
+    },
+    "similarity_metrics": {
+      "name": "similarity_metrics",
+      "status": "success",
+      "artifacts": [
+        {
+          "path": "similarity_metrics/results.npz",
+          "type": "npz"
+        }
+      ],
+      "error": null,
+      "error_code": null,
+      "notes": null,
+      "device_used": "cpu",
+      "started_at": "2026-07-01T08:56:34Z",
+      "finished_at": "2026-07-01T08:56:35Z",
+      "duration_ms": 223,
+      "updated_at": "2026-07-01T08:56:39Z"
+    },
+    "story_structure": {
+      "name": "story_structure",
+      "status": "success",
+      "artifacts": [
+        {
+          "path": "story_structure/story_structure.npz",
+          "type": "npz"
+        }
+      ],
+      "error": null,
+      "error_code": null,
+      "notes": null,
+      "device_used": "cpu",
+      "started_at": "2026-07-01T08:56:35Z",
+      "finished_at": "2026-07-01T08:56:36Z",
+      "duration_ms": 1045,
+      "updated_at": "2026-07-01T08:56:39Z"
+    },
+    "text_scoring": {
+      "name": "text_scoring",
+      "status": "empty",
+      "artifacts": [
+        {
+          "path": "text_scoring/text_scoring.npz",
+          "type": "npz"
+        }
+      ],
+      "error": null,
+      "error_code": null,
+      "notes": null,
+      "device_used": "cpu",
+      "started_at": "2026-07-01T08:56:36Z",
+      "finished_at": "2026-07-01T08:56:37Z",
+      "duration_ms": 1098,
+      "updated_at": "2026-07-01T08:56:39Z"
+    },
+    "uniqueness": {
+      "name": "uniqueness",
+      "status": "success",
+      "artifacts": [
+        {
+          "path": "uniqueness/uniqueness.npz",
+          "type": "npz"
+        }
+      ],
+      "error": null,
+      "error_code": null,
+      "notes": null,
+      "device_used": "cpu",
+      "started_at": "2026-07-01T08:56:37Z",
+      "finished_at": "2026-07-01T08:56:37Z",
+      "duration_ms": 190,
+      "updated_at": "2026-07-01T08:56:39Z"
+    },
+    "video_pacing": {
+      "name": "video_pacing",
+      "status": "success",
+      "artifacts": [
+        {
+          "path": "video_pacing/video_pacing_features.npz",
+          "type": "npz"
+        }
+      ],
+      "error": null,
+      "error_code": null,
+      "notes": null,
+      "device_used": "cpu",
+      "started_at": "2026-07-01T08:56:37Z",
+      "finished_at": "2026-07-01T08:56:38Z",
+      "duration_ms": 1370,
+      "updated_at": "2026-07-01T08:56:39Z"
+    }
+  },
+  "updated_at": "2026-07-01T08:56:39Z"
+}

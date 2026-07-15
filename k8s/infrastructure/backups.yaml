@@ -1,0 +1,86 @@
+# Резервные копии БД и lifecycle/TTL хранилища (задача A5).
+# - pg-backup: ежедневный pg_dump всех БД (trendflow, fetcher_db, embeddings) на
+#   backup-PVC с ротацией по возрасту.
+# - minio-lifecycle: правила истечения для сырых/временных объектов MinIO.
+# result_store (DataProcessor) чистится отдельным CronJob (retention, P8).
+---
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata:
+  name: backup-pvc
+  namespace: trendflow
+spec:
+  accessModes: ["ReadWriteOnce"]
+  resources: { requests: { storage: 20Gi } }
+---
+apiVersion: batch/v1
+kind: CronJob
+metadata:
+  name: pg-backup
+  namespace: trendflow
+  labels: { app: postgres, component: backup }
+spec:
+  schedule: "0 3 * * *"                 # ежедневно 03:00 UTC
+  concurrencyPolicy: Forbid
+  successfulJobsHistoryLimit: 3
+  failedJobsHistoryLimit: 3
+  jobTemplate:
+    spec:
+      backoffLimit: 2
+      template:
+        spec:
+          restartPolicy: OnFailure
+          containers:
+          - name: pg-backup
+            image: postgres:15-alpine
+            env:
+            - { name: PGPASSWORD, valueFrom: { secretKeyRef: { name: app-secrets, key: postgres-password } } }
+            - { name: RETENTION_DAYS, value: "14" }
+            command: ["/bin/sh","-c"]
+            args:
+              - |
+                set -e
+                TS=$(date -u +%Y%m%d-%H%M%S)
+                mkdir -p /backup
+                for db in trendflow fetcher_db embeddings; do
+                  if psql -h postgres -U trendflow -tc "SELECT 1 FROM pg_database WHERE datname='$db'" | grep -q 1; then
+                    echo "dump $db"
+                    pg_dump -h postgres -U trendflow "$db" | gzip > "/backup/${db}-${TS}.sql.gz"
+                  fi
+                done
+                echo "prune > ${RETENTION_DAYS}d"
+                find /backup -name '*.sql.gz' -type f -mtime +${RETENTION_DAYS} -delete || true
+                ls -la /backup
+            volumeMounts:
+            - { name: backup, mountPath: /backup }
+          volumes:
+          - name: backup
+            persistentVolumeClaim: { claimName: backup-pvc }
+---
+# Правила lifecycle MinIO: истечение сырого видео и временных объектов.
+# result_store (bucket trendflow) — source-of-truth, TTL не ставим.
+apiVersion: batch/v1
+kind: Job
+metadata:
+  name: minio-lifecycle
+  namespace: trendflow
+spec:
+  backoffLimit: 5
+  ttlSecondsAfterFinished: 86400
+  template:
+    spec:
+      restartPolicy: OnFailure
+      containers:
+      - name: mc
+        image: minio/mc:latest
+        env:
+        - { name: MINIO_ACCESS_KEY, valueFrom: { secretKeyRef: { name: app-secrets, key: minio-access-key } } }
+        - { name: MINIO_SECRET_KEY, valueFrom: { secretKeyRef: { name: app-secrets, key: minio-secret-key } } }
+        command: ["/bin/sh","-c"]
+        args:
+          - |
+            set -e
+            until mc alias set tf http://minio:9000 "$MINIO_ACCESS_KEY" "$MINIO_SECRET_KEY"; do sleep 3; done
+            # Сырое видео не нужно после обработки — истекает через 30 дней (подстрой).
+            mc ilm rule add tf/video-analytics-raw --expire-days 30 || mc ilm add --expiry-days 30 tf/video-analytics-raw || true
+            echo "lifecycle rules:"; mc ilm rule ls tf/video-analytics-raw || mc ilm ls tf/video-analytics-raw || true

@@ -1,0 +1,9 @@
+{"ts": "2026-07-01T04:03:08Z", "scope": "run", "event": "init"}
+{"ts": "2026-07-01T04:03:08Z", "scope": "processor", "processor": "segmenter", "status": "running", "error_code": null}
+{"ts": "2026-07-01T04:03:08Z", "scope": "processor", "processor": "segmenter", "status": "success", "error_code": null}
+{"ts": "2026-07-01T04:03:08Z", "scope": "processor", "processor": "audio", "status": "running", "error_code": null}
+{"ts": "2026-07-01T04:03:13Z", "scope": "processor", "processor": "audio", "status": "error", "error_code": "non_zero_exit"}
+{"ts": "2026-07-01T04:03:14Z", "scope": "processor", "processor": "text", "status": "running", "error_code": null}
+{"ts": "2026-07-01T04:03:17Z", "scope": "processor", "processor": "text", "status": "error", "error_code": "non_zero_exit"}
+{"ts": "2026-07-01T04:03:17Z", "scope": "processor", "processor": "visual", "status": "running", "error_code": null}
+{"ts": "2026-07-01T04:03:20Z", "scope": "processor", "processor": "visual", "status": "error", "error_code": "non_zero_exit"}

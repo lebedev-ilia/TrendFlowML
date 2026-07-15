@@ -1,0 +1,15 @@
+# RWX PVC для входных видео и выходных артефактов валидации action_recognition.
+# Заполняется входными клипами перед запуском Job (kubectl cp), читается артефактами после.
+# RWX нужен, чтобы helper-pod и Job видели один том (ReadWriteMany — как models-pvc).
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata:
+  name: ar-validation-io
+  namespace: trendflow
+  labels: { app: action-recognition, component: validation-io }
+spec:
+  accessModes: ["ReadWriteMany"]
+  resources:
+    requests:
+      storage: 50Gi
+  # storageClassName: <ваш RWX class, напр. nfs/cephfs>  # раскомментируйте под кластер

@@ -52,6 +52,7 @@ dp_results/
 _profiles_cache/
 
 *.png
+*.mp4
 
 dataset_runs/
 
@@ -60,3 +61,43 @@ Fetcher/fetcher/dataset_collector/cookies/
 Fetcher/fetcher/dataset_collector/proxies/
 
 Fetcher/tests/full_results/
+Fetcher/tests/day_*/
+
+# --- Веса моделей (тяжёлые, не источник кода) ---
+DataProcessor/dp_models/
+
+# --- Результаты тестов/прогонов компонентов (npz/npy/видео/логи из component_reports) ---
+DataProcessor/docs/component_reports/*/artifacts/
+DataProcessor/docs/component_reports/*/fixtures/
+
+# --- Данные/результаты пайплайна (не код) ---
+storage/frames_dir/
+storage/result_store/
+storage/e2e_full_max/
+storage/__health_check__/
+storage/videos/
+
+# --- Ручная разметка/датасет YOLO (зона владельца, не трогаем) ---
+cvat_yolo/
+
+# --- Рантайм-состояние автоматизации (не источник кода, шумные диффы) ---
+automation/runner/state/
+automation/state/
+automation/queue/
+automation/.session_start
+automation/runner/_archive_pre_merge_*/
+/state/
+
+# --- Celery рантайм-локи ---
+backend/celerybeat-schedule-shm
+backend/celerybeat-schedule-wal
+
+# --- Локальные настройки Obsidian-vault ---
+.obsidian/
+
+# --- SSH-ключи (секреты, НИКОГДА не коммитить) ---
+automation/runpod_ssh/id_ed25519
+automation/runpod_ssh/id_ed25519.pub
+*.pem
+id_rsa
+id_ed25519

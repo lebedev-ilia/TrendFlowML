@@ -1,0 +1,544 @@
+{
+  "schema_version": "run_state_v1",
+  "run": {
+    "platform_id": "youtube",
+    "video_id": "-Q6fnPIybEI",
+    "run_id": "7bfbf07e-5d59-4a2a-b640-98b5464ccddf",
+    "config_hash": "fef55d24f3fa32cb",
+    "sampling_policy_version": "v1",
+    "dataprocessor_version": "unknown",
+    "created_at": "2026-07-01T05:12:06Z"
+  },
+  "processors": {
+    "segmenter": {
+      "name": "segmenter",
+      "status": "success",
+      "started_at": "2026-07-01T05:12:06Z",
+      "finished_at": "2026-07-01T05:12:06Z",
+      "duration_ms": 605,
+      "error": null,
+      "error_code": null,
+      "components": {}
+    },
+    "audio": {
+      "name": "audio",
+      "status": "error",
+      "started_at": "2026-07-01T05:12:06Z",
+      "finished_at": "2026-07-01T05:12:17Z",
+      "duration_ms": 10138,
+      "error": "exit=1: ^ · File \"/home/ilya/Рабочий стол/TrendFlowML/DataProcessor/AudioProcessor/src/core/extractor_runner.py\", line 915, in run_extractors · raise RuntimeError(f\"AudioProcessor | extractor '{key}' initialization failed: {init_error}\") from init_error · RuntimeError: AudioProcessor | extractor 'emotion_diarization' initialization failed: emotion_diarization | failed to resolve/load model via ModelManager: weights_missing: Required model directory is missing | details={'model_name': 'emotion_diarization_large_inprocess', 'path': 'audio/emotion_diarization/wavlm_large', 'resolved': '/home/ilya/Рабочий стол/TrendFlowML/DataProcessor/dp_models/bundled_models/audio/emotion_diarization/wavlm_large'}",
+      "error_code": "non_zero_exit",
+      "components": {}
+    },
+    "text": {
+      "name": "text",
+      "status": "success",
+      "started_at": "2026-07-01T05:12:18Z",
+      "finished_at": "2026-07-01T05:12:56Z",
+      "duration_ms": 38047,
+      "error": null,
+      "error_code": null,
+      "components": {}
+    },
+    "visual": {
+      "name": "visual",
+      "status": "success",
+      "started_at": "2026-07-01T05:12:56Z",
+      "finished_at": "2026-07-01T05:14:32Z",
+      "duration_ms": 96230,
+      "error": null,
+      "error_code": null,
+      "components": {
+        "brand_semantics": {
+          "name": "brand_semantics",
+          "status": "empty",
+          "artifacts": [
+            {
+              "path": "brand_semantics/brand_semantics.npz",
+              "type": "npz"
+            }
+          ],
+          "error": null,
+          "error_code": null,
+          "notes": null,
+          "device_used": "cpu",
+          "started_at": "2026-07-01T05:13:28Z",
+          "finished_at": "2026-07-01T05:13:28Z",
+          "duration_ms": 370,
+          "updated_at": "2026-07-01T05:14:32Z"
+        },
+        "car_semantics": {
+          "name": "car_semantics",
+          "status": "empty",
+          "artifacts": [
+            {
+              "path": "car_semantics/car_semantics.npz",
+              "type": "npz"
+            }
+          ],
+          "error": null,
+          "error_code": null,
+          "notes": null,
+          "device_used": "cpu",
+          "started_at": "2026-07-01T05:13:28Z",
+          "finished_at": "2026-07-01T05:13:29Z",
+          "duration_ms": 371,
+          "updated_at": "2026-07-01T05:14:32Z"
+        },
+        "content_domain": {
+          "name": "content_domain",
+          "status": "success",
+          "artifacts": [
+            {
+              "path": "content_domain/content_domain.npz",
+              "type": "npz"
+            }
+          ],
+          "error": null,
+          "error_code": null,
+          "notes": null,
+          "device_used": "cuda",
+          "started_at": "2026-07-01T05:13:03Z",
+          "finished_at": "2026-07-01T05:13:08Z",
+          "duration_ms": 4332,
+          "updated_at": "2026-07-01T05:14:32Z"
+        },
+        "core_clip": {
+          "name": "core_clip",
+          "status": "success",
+          "artifacts": [
+            {
+              "path": "core_clip/embeddings.npz",
+              "type": "npz"
+            }
+          ],
+          "error": null,
+          "error_code": null,
+          "notes": null,
+          "device_used": "cuda",
+          "started_at": "2026-07-01T05:12:58Z",
+          "finished_at": "2026-07-01T05:13:03Z",
+          "duration_ms": 5184,
+          "updated_at": "2026-07-01T05:14:32Z"
+        },
+        "core_depth_midas": {
+          "name": "core_depth_midas",
+          "status": "success",
+          "artifacts": [
+            {
+              "path": "core_depth_midas/depth.npz",
+              "type": "npz"
+            }
+          ],
+          "error": null,
+          "error_code": null,
+          "notes": null,
+          "device_used": "cuda",
+          "started_at": "2026-07-01T05:13:08Z",
+          "finished_at": "2026-07-01T05:13:16Z",
+          "duration_ms": 8751,
+          "updated_at": "2026-07-01T05:14:32Z"
+        },
+        "core_face_landmarks": {
+          "name": "core_face_landmarks",
+          "status": "empty",
+          "artifacts": [
+            {
+              "path": "core_face_landmarks/landmarks.npz",
+              "type": "npz"
+            }
+          ],
+          "error": null,
+          "error_code": null,
+          "notes": null,
+          "device_used": "cpu",
+          "started_at": "2026-07-01T05:13:29Z",
+          "finished_at": "2026-07-01T05:13:32Z",
+          "duration_ms": 2821,
+          "updated_at": "2026-07-01T05:14:32Z"
+        },
+        "core_object_detections": {
+          "name": "core_object_detections",
+          "status": "empty",
+          "artifacts": [
+            {
+              "path": "core_object_detections/detections.npz",
+              "type": "npz"
+            }
+          ],
+          "error": null,
+          "error_code": null,
+          "notes": null,
+          "device_used": "cuda",
+          "started_at": "2026-07-01T05:13:17Z",
+          "finished_at": "2026-07-01T05:13:21Z",
+          "duration_ms": 4669,
+          "updated_at": "2026-07-01T05:14:32Z"
+        },
+        "core_optical_flow": {
+          "name": "core_optical_flow",
+          "status": "success",
+          "artifacts": [
+            {
+              "path": "core_optical_flow/flow.npz",
+              "type": "npz"
+            }
+          ],
+          "error": null,
+          "error_code": null,
+          "notes": null,
+          "device_used": "cuda",
+          "started_at": "2026-07-01T05:13:32Z",
+          "finished_at": "2026-07-01T05:13:39Z",
+          "duration_ms": 7395,
+          "updated_at": "2026-07-01T05:14:32Z"
+        },
+        "face_identity": {
+          "name": "face_identity",
+          "status": "success",
+          "artifacts": [],
+          "error": null,
+          "error_code": null,
+          "notes": null,
+          "device_used": "cpu",
+          "started_at": "2026-07-01T05:14:09Z",
+          "finished_at": "2026-07-01T05:14:10Z",
+          "duration_ms": 434,
+          "updated_at": "2026-07-01T05:14:32Z"
+        },
+        "franchise_recognition": {
+          "name": "franchise_recognition",
+          "status": "success",
+          "artifacts": [
+            {
+              "path": "franchise_recognition/franchise_recognition.npz",
+              "type": "npz"
+            }
+          ],
+          "error": null,
+          "error_code": null,
+          "notes": null,
+          "device_used": "cuda",
+          "started_at": "2026-07-01T05:14:10Z",
+          "finished_at": "2026-07-01T05:14:11Z",
+          "duration_ms": 1015,
+          "updated_at": "2026-07-01T05:14:32Z"
+        },
+        "place_semantics": {
+          "name": "place_semantics",
+          "status": "empty",
+          "artifacts": [
+            {
+              "path": "place_semantics/place_semantics.npz",
+              "type": "npz"
+            }
+          ],
+          "error": null,
+          "error_code": null,
+          "notes": "artifact validation failed: schema[place_semantics_npz_v2] meta_json: dtype mismatch: got object, expected str (dir=/home/ilya/Рабочий стол/TrendFlowML/DataProcessor/VisualProcessor/schemas)",
+          "device_used": "cpu",
+          "started_at": "2026-07-01T05:14:13Z",
+          "finished_at": "2026-07-01T05:14:15Z",
+          "duration_ms": 2178,
+          "updated_at": "2026-07-01T05:14:32Z"
+        },
+        "action_recognition": {
+          "name": "action_recognition",
+          "status": "error",
+          "artifacts": [],
+          "error": "subprocess exit 4 (python): saved_path = recognizer.run( · frames_dir=args.frames_dir, · config=config, · metadata=None, · ) · File \"/home/ilya/Рабочий стол/TrendFlowML/DataProcessor/VisualProcessor/modules/action_recognition/utils/action_recognition_slowfast.py\", line 1178, in run · self.initialize() # Ensure model is loaded · ~~~~~~~~~~~~~~~^^ · File \"/home/ilya/Рабочий стол/TrendFlowML/DataProcessor/VisualProcessor/modules/base_module.py\", line 134, in initialize · self._do_initialize() · ~~~~~~~~~~~~~~~~~~~^^ · File \"/home/ilya/Рабочий стол/TrendFlowML/DataProcessor/VisualProcessor/modules/action_recognition/utils/action_recognition_slowfast.py\", line 155, in _do_initialize · raise RuntimeError(f\"{self.module_name} | ModelManager resolve failed: {e}\") from e · RuntimeError: action_recognition | ModelManager resolve failed: weights_missing: Required model file is missing | details={'model_name': 'slowfast_r50_action_recognition', 'path': 'visual/action_recognition/slowfast_r50/slowfast_r50.pyth', 'resolved': '/home/ilya/Рабочий стол/TrendFlowML/DataProcessor/dp_models/bundled_models/visual/action_recognition/slowfast_r50/slowfast_r50.pyth'}",
+          "error_code": "component_failed",
+          "notes": null,
+          "device_used": "cuda",
+          "started_at": "2026-07-01T05:13:21Z",
+          "finished_at": "2026-07-01T05:13:28Z",
+          "duration_ms": 6635,
+          "updated_at": "2026-07-01T05:14:32Z"
+        },
+        "behavioral": {
+          "name": "behavioral",
+          "status": "empty",
+          "artifacts": [
+            {
+              "path": "behavioral/behavioral_features.npz",
+              "type": "npz"
+            }
+          ],
+          "error": null,
+          "error_code": null,
+          "notes": null,
+          "device_used": "cpu",
+          "started_at": "2026-07-01T05:13:32Z",
+          "finished_at": "2026-07-01T05:13:32Z",
+          "duration_ms": 284,
+          "updated_at": "2026-07-01T05:14:32Z"
+        },
+        "color_light": {
+          "name": "color_light",
+          "status": "error",
+          "artifacts": [],
+          "error": "subprocess exit 2 (python): 2026-07-01 15:14:21,393 \u001b[92mINFO\u001b[0m: color_light | Начало обработки 12 кадров · 2026-07-01 15:14:21,393 \u001b[91mERROR\u001b[0m: Файл не найден: color_light | Обязательная зависимость 'scene_classification' не найдена в /home/ilya/Рабочий стол/TrendFlowML/storage/result_store/youtube/-Q6fnPIybEI/7bfbf07e-5d59-4a2a-b640-98b5464ccddf/scene_classification",
+          "error_code": "component_failed",
+          "notes": null,
+          "device_used": "cpu",
+          "started_at": "2026-07-01T05:14:20Z",
+          "finished_at": "2026-07-01T05:14:21Z",
+          "duration_ms": 1664,
+          "updated_at": "2026-07-01T05:14:32Z"
+        },
+        "cut_detection": {
+          "name": "cut_detection",
+          "status": "success",
+          "artifacts": [
+            {
+              "path": "cut_detection/cut_detection_features_2026-07-01_05-14-02-530230_4e06be88.npz",
+              "type": "npz"
+            },
+            {
+              "path": "cut_detection/cut_detection_model_facing_2026-07-01_05-14-02-517419_5138b0f9.npz",
+              "type": "npz"
+            }
+          ],
+          "error": null,
+          "error_code": null,
+          "notes": null,
+          "device_used": "auto",
+          "started_at": "2026-07-01T05:13:39Z",
+          "finished_at": "2026-07-01T05:14:04Z",
+          "duration_ms": 24413,
+          "updated_at": "2026-07-01T05:14:32Z"
+        },
+        "detalize_face": {
+          "name": "detalize_face",
+          "status": "empty",
+          "artifacts": [
+            {
+              "path": "detalize_face/detalize_face.npz",
+              "type": "npz"
+            }
+          ],
+          "error": null,
+          "error_code": null,
+          "notes": null,
+          "device_used": "cpu",
+          "started_at": "2026-07-01T05:14:04Z",
+          "finished_at": "2026-07-01T05:14:05Z",
+          "duration_ms": 1590,
+          "updated_at": "2026-07-01T05:14:32Z"
+        },
+        "emotion_face": {
+          "name": "emotion_face",
+          "status": "empty",
+          "artifacts": [
+            {
+              "path": "emotion_face/emotion_face.npz",
+              "type": "npz"
+            }
+          ],
+          "error": null,
+          "error_code": null,
+          "notes": null,
+          "device_used": "cuda",
+          "started_at": "2026-07-01T05:14:05Z",
+          "finished_at": "2026-07-01T05:14:09Z",
+          "duration_ms": 3880,
+          "updated_at": "2026-07-01T05:14:32Z"
+        },
+        "frames_composition": {
+          "name": "frames_composition",
+          "status": "empty",
+          "artifacts": [
+            {
+              "path": "frames_composition/frames_composition.npz",
+              "type": "npz"
+            }
+          ],
+          "error": null,
+          "error_code": null,
+          "notes": null,
+          "device_used": "cpu",
+          "started_at": "2026-07-01T05:14:10Z",
+          "finished_at": "2026-07-01T05:14:10Z",
+          "duration_ms": 343,
+          "updated_at": "2026-07-01T05:14:32Z"
+        },
+        "high_level_semantic": {
+          "name": "high_level_semantic",
+          "status": "success",
+          "artifacts": [
+            {
+              "path": "high_level_semantic/high_level_semantic.npz",
+              "type": "npz"
+            }
+          ],
+          "error": null,
+          "error_code": null,
+          "notes": null,
+          "device_used": "cpu",
+          "started_at": "2026-07-01T05:14:11Z",
+          "finished_at": "2026-07-01T05:14:11Z",
+          "duration_ms": 233,
+          "updated_at": "2026-07-01T05:14:32Z"
+        },
+        "micro_emotion": {
+          "name": "micro_emotion",
+          "status": "empty",
+          "artifacts": [
+            {
+              "path": "micro_emotion/micro_emotion.npz",
+              "type": "npz"
+            }
+          ],
+          "error": null,
+          "error_code": null,
+          "notes": null,
+          "device_used": "cuda",
+          "started_at": "2026-07-01T05:14:11Z",
+          "finished_at": "2026-07-01T05:14:13Z",
+          "duration_ms": 1642,
+          "updated_at": "2026-07-01T05:14:32Z"
+        },
+        "optical_flow": {
+          "name": "optical_flow",
+          "status": "success",
+          "artifacts": [
+            {
+              "path": "optical_flow/optical_flow.npz",
+              "type": "npz"
+            }
+          ],
+          "error": null,
+          "error_code": null,
+          "notes": null,
+          "device_used": "cpu",
+          "started_at": "2026-07-01T05:14:13Z",
+          "finished_at": "2026-07-01T05:14:13Z",
+          "duration_ms": 224,
+          "updated_at": "2026-07-01T05:14:32Z"
+        },
+        "scene_classification": {
+          "name": "scene_classification",
+          "status": "error",
+          "artifacts": [],
+          "error": "subprocess exit 4 (python): results = self.process(frame_manager=fm, frame_indices=frame_indices, config=config or {}) · File \"/home/ilya/Рабочий стол/TrendFlowML/DataProcessor/VisualProcessor/modules/scene_classification/utils/scene_classification.py\", line 529, in process · per_frame = self._infer_per_frame(frame_manager=frame_manager, frame_indices=frame_indices) · File \"/home/ilya/Рабочий стол/TrendFlowML/DataProcessor/VisualProcessor/modules/scene_classification/utils/scene_classification.py\", line 1378, in _infer_per_frame · preds = self.classify(frame_manager, frame_indices) # list aligned with frame_indices · File \"/home/ilya/Рабочий стол/TrendFlowML/DataProcessor/VisualProcessor/modules/scene_classification/utils/scene_classification.py\", line 850, in classify · return self._classify_triton(frame_manager, frame_indices) · ~~~~~~~~~~~~~~~~~~~~~^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^ · File \"/home/ilya/Рабочий стол/TrendFlowML/DataProcessor/VisualProcessor/modules/scene_classification/utils/scene_classification.py\", line 1059, in _classify_triton · flush_batch() · ~~~~~~~~~~~^^ · File \"/home/ilya/Рабочий стол/TrendFlowML/DataProcessor/VisualProcessor/modules/scene_classification/utils/scene_classification.py\", line 995, in flush_batch · raise RuntimeError(f\"scene_classification(triton) | infer failed: {e}\") from e · RuntimeError: scene_classification(triton) | infer failed: HTTP 400 POST http://127.0.0.1…",
+          "error_code": "component_failed",
+          "notes": null,
+          "device_used": "cuda",
+          "started_at": "2026-07-01T05:14:15Z",
+          "finished_at": "2026-07-01T05:14:20Z",
+          "duration_ms": 4119,
+          "updated_at": "2026-07-01T05:14:32Z"
+        },
+        "shot_quality": {
+          "name": "shot_quality",
+          "status": "success",
+          "artifacts": [
+            {
+              "path": "shot_quality/shot_quality.npz",
+              "type": "npz"
+            }
+          ],
+          "error": null,
+          "error_code": null,
+          "notes": null,
+          "device_used": "cpu",
+          "started_at": "2026-07-01T05:14:21Z",
+          "finished_at": "2026-07-01T05:14:28Z",
+          "duration_ms": 6468,
+          "updated_at": "2026-07-01T05:14:32Z"
+        },
+        "similarity_metrics": {
+          "name": "similarity_metrics",
+          "status": "success",
+          "artifacts": [
+            {
+              "path": "similarity_metrics/results.npz",
+              "type": "npz"
+            }
+          ],
+          "error": null,
+          "error_code": null,
+          "notes": null,
+          "device_used": "cpu",
+          "started_at": "2026-07-01T05:14:28Z",
+          "finished_at": "2026-07-01T05:14:28Z",
+          "duration_ms": 220,
+          "updated_at": "2026-07-01T05:14:32Z"
+        },
+        "story_structure": {
+          "name": "story_structure",
+          "status": "success",
+          "artifacts": [
+            {
+              "path": "story_structure/story_structure.npz",
+              "type": "npz"
+            }
+          ],
+          "error": null,
+          "error_code": null,
+          "notes": null,
+          "device_used": "cpu",
+          "started_at": "2026-07-01T05:14:28Z",
+          "finished_at": "2026-07-01T05:14:29Z",
+          "duration_ms": 1105,
+          "updated_at": "2026-07-01T05:14:32Z"
+        },
+        "text_scoring": {
+          "name": "text_scoring",
+          "status": "empty",
+          "artifacts": [
+            {
+              "path": "text_scoring/text_scoring.npz",
+              "type": "npz"
+            }
+          ],
+          "error": null,
+          "error_code": null,
+          "notes": null,
+          "device_used": "cpu",
+          "started_at": "2026-07-01T05:14:29Z",
+          "finished_at": "2026-07-01T05:14:30Z",
+          "duration_ms": 1059,
+          "updated_at": "2026-07-01T05:14:32Z"
+        },
+        "uniqueness": {
+          "name": "uniqueness",
+          "status": "success",
+          "artifacts": [
+            {
+              "path": "uniqueness/uniqueness.npz",
+              "type": "npz"
+            }
+          ],
+          "error": null,
+          "error_code": null,
+          "notes": null,
+          "device_used": "cpu",
+          "started_at": "2026-07-01T05:14:30Z",
+          "finished_at": "2026-07-01T05:14:30Z",
+          "duration_ms": 218,
+          "updated_at": "2026-07-01T05:14:32Z"
+        },
+        "video_pacing": {
+          "name": "video_pacing",
+          "status": "success",
+          "artifacts": [
+            {
+              "path": "video_pacing/video_pacing_features.npz",
+              "type": "npz"
+            }
+          ],
+          "error": null,
+          "error_code": null,
+          "notes": null,
+          "device_used": "cpu",
+          "started_at": "2026-07-01T05:14:30Z",
+          "finished_at": "2026-07-01T05:14:32Z",
+          "duration_ms": 1321,
+          "updated_at": "2026-07-01T05:14:32Z"
+        }
+      }
+    }
+  },
+  "updated_at": "2026-07-01T05:14:32Z"
+}

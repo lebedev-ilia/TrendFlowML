@@ -1,0 +1,130 @@
+#!/usr/bin/env python3
+"""Minimal ffprobe shim for local E2E when system ffprobe is not installed.
+
+Supports the ffprobe CLI subsets used by DataProcessor main.py and Segmenter.
+Uses cv2 (video duration), wave (WAV metadata), imageio-ffmpeg stderr parse (audio stream).
+"""
+from __future__ import annotations
+
+import os
+import subprocess
+import sys
+import wave
+from pathlib import Path
+
+
+def _bootstrap_import_path() -> None:
+    """Prefer DataProcessor .data_venv (imageio-ffmpeg, cv2) when run outside venv."""
+    repo = Path(__file__).resolve().parents[2]
+    for rel in ("DataProcessor/.data_venv/lib/python3.14/site-packages",):
+        sp = repo / rel
+        if sp.is_dir() and str(sp) not in sys.path:
+            sys.path.insert(0, str(sp))
+
+
+def _ffmpeg_exe() -> str:
+    _bootstrap_import_path()
+    try:
+        import imageio_ffmpeg  # type: ignore
+
+        return imageio_ffmpeg.get_ffmpeg_exe()
+    except Exception as exc:  # noqa: BLE001
+        sys.stderr.write(f"ffprobe shim: imageio_ffmpeg unavailable ({exc})\n")
+        sys.exit(127)
+
+
+def _duration_video(path: Path) -> float:
+    _bootstrap_import_path()
+    try:
+        import cv2  # type: ignore
+
+        cap = cv2.VideoCapture(str(path))
+        if not cap.isOpened():
+            raise RuntimeError("cv2 cannot open video")
+        fps = cap.get(cv2.CAP_PROP_FPS) or 0.0
+        frames = cap.get(cv2.CAP_PROP_FRAME_COUNT) or 0.0
+        cap.release()
+        if fps <= 0:
+            raise RuntimeError("invalid fps")
+        return float(frames) / float(fps)
+    except Exception:
+        # fallback: parse Duration from ffmpeg -i stderr
+        p = subprocess.run(
+            [_ffmpeg_exe(), "-hide_banner", "-i", str(path)],
+            capture_output=True,
+            text=True,
+        )
+        import re
+
+        m = re.search(r"Duration:\s*(\d+):(\d+):(\d+(?:\.\d+)?)", p.stderr or "")
+        if not m:
+            raise RuntimeError("cannot determine duration")
+        h, mi, s = m.groups()
+        return int(h) * 3600 + int(mi) * 60 + float(s)
+
+
+def _duration_wav(path: Path) -> float:
+    with wave.open(str(path), "rb") as wf:
+        return wf.getnframes() / float(wf.getframerate())
+
+
+def _sample_rate_wav(path: Path) -> int:
+    with wave.open(str(path), "rb") as wf:
+        return int(wf.getframerate())
+
+
+def _audio_codec_type(path: Path) -> str:
+    p = subprocess.run(
+        [_ffmpeg_exe(), "-hide_banner", "-i", str(path)],
+        capture_output=True,
+        text=True,
+    )
+    if "Audio:" in (p.stderr or ""):
+        return "audio"
+    return ""
+
+
+def main() -> int:
+    args = sys.argv[1:]
+    if "-version" in args or "--version" in args:
+        print("ffprobe-shim 1.0 (TrendFlow E2E)")
+        return 0
+
+    # Expect: -v error -show_entries ... -of ... <path>
+    if not args or args[-1].startswith("-"):
+        sys.stderr.write("ffprobe shim: missing input path\n")
+        return 1
+    path = Path(args[-1])
+    if not path.is_file():
+        sys.stderr.write(f"ffprobe shim: file not found: {path}\n")
+        return 1
+
+    joined = " ".join(args)
+    try:
+        if "stream=codec_type" in joined and "select_streams" in joined:
+            out = _audio_codec_type(path)
+            if out:
+                print(out)
+            return 0
+        if "stream=sample_rate" in joined:
+            if path.suffix.lower() == ".wav":
+                print(_sample_rate_wav(path))
+                return 0
+            sys.stderr.write("ffprobe shim: sample_rate only implemented for WAV\n")
+            return 1
+        if "format=duration" in joined:
+            if path.suffix.lower() == ".wav":
+                print(f"{_duration_wav(path):.6f}")
+            else:
+                print(f"{_duration_video(path):.6f}")
+            return 0
+    except Exception as exc:  # noqa: BLE001
+        sys.stderr.write(f"ffprobe shim error: {exc}\n")
+        return 1
+
+    sys.stderr.write(f"ffprobe shim: unsupported arguments: {args!r}\n")
+    return 1
+
+
+if __name__ == "__main__":
+    raise SystemExit(main())

@@ -1,0 +1,73 @@
+# Namespace governance for scale (task 5 / P7): priorities, quotas, limits,
+# disruption budgets. Tune the numbers to your cluster capacity.
+---
+apiVersion: scheduling.k8s.io/v1
+kind: PriorityClass
+metadata:
+  name: trendflow-gpu-high
+value: 100000
+globalDefault: false
+description: "GPU workloads (DataProcessor worker, Triton) — evict CPU pods first."
+---
+apiVersion: scheduling.k8s.io/v1
+kind: PriorityClass
+metadata:
+  name: trendflow-default
+value: 1000
+globalDefault: false
+description: "Default priority for TrendFlow CPU services."
+---
+apiVersion: v1
+kind: ResourceQuota
+metadata:
+  name: trendflow-quota
+  namespace: trendflow
+spec:
+  hard:
+    requests.cpu: "64"
+    requests.memory: 256Gi
+    limits.cpu: "128"
+    limits.memory: 512Gi
+    requests.nvidia.com/gpu: "16"     # cap total GPUs the namespace may claim
+    pods: "200"
+---
+apiVersion: v1
+kind: LimitRange
+metadata:
+  name: trendflow-limits
+  namespace: trendflow
+spec:
+  limits:
+  - type: Container
+    default:        { cpu: "1",   memory: 1Gi }
+    defaultRequest: { cpu: "250m", memory: 256Mi }
+---
+apiVersion: policy/v1
+kind: PodDisruptionBudget
+metadata:
+  name: backend-pdb
+  namespace: trendflow
+spec:
+  minAvailable: 1
+  selector:
+    matchLabels: { app: backend }
+---
+apiVersion: policy/v1
+kind: PodDisruptionBudget
+metadata:
+  name: dataprocessor-api-pdb
+  namespace: trendflow
+spec:
+  minAvailable: 1
+  selector:
+    matchLabels: { app: dataprocessor, component: api }
+---
+apiVersion: policy/v1
+kind: PodDisruptionBudget
+metadata:
+  name: dataprocessor-worker-pdb
+  namespace: trendflow
+spec:
+  maxUnavailable: 1
+  selector:
+    matchLabels: { app: dataprocessor, component: worker }

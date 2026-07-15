@@ -1,0 +1,166 @@
+[
+  {
+    "name": "person",
+    "attributes": []
+  },
+  {
+    "name": "crowd",
+    "attributes": []
+  },
+  {
+    "name": "car",
+    "attributes": []
+  },
+  {
+    "name": "motorcycle",
+    "attributes": []
+  },
+  {
+    "name": "bicycle",
+    "attributes": []
+  },
+  {
+    "name": "bus",
+    "attributes": []
+  },
+  {
+    "name": "truck",
+    "attributes": []
+  },
+  {
+    "name": "pet",
+    "attributes": []
+  },
+  {
+    "name": "sports_ball",
+    "attributes": []
+  },
+  {
+    "name": "phone",
+    "attributes": []
+  },
+  {
+    "name": "laptop",
+    "attributes": []
+  },
+  {
+    "name": "tablet",
+    "attributes": []
+  },
+  {
+    "name": "smartwatch",
+    "attributes": []
+  },
+  {
+    "name": "watch",
+    "attributes": []
+  },
+  {
+    "name": "headphones",
+    "attributes": []
+  },
+  {
+    "name": "camera",
+    "attributes": []
+  },
+  {
+    "name": "microphone",
+    "attributes": []
+  },
+  {
+    "name": "game_controller",
+    "attributes": []
+  },
+  {
+    "name": "tv_device",
+    "attributes": []
+  },
+  {
+    "name": "monitor_device",
+    "attributes": []
+  },
+  {
+    "name": "clothing_top",
+    "attributes": []
+  },
+  {
+    "name": "clothing_bottom",
+    "attributes": []
+  },
+  {
+    "name": "outerwear",
+    "attributes": []
+  },
+  {
+    "name": "suit",
+    "attributes": []
+  },
+  {
+    "name": "dress",
+    "attributes": []
+  },
+  {
+    "name": "shoes",
+    "attributes": []
+  },
+  {
+    "name": "bag",
+    "attributes": []
+  },
+  {
+    "name": "hat",
+    "attributes": []
+  },
+  {
+    "name": "glasses",
+    "attributes": []
+  },
+  {
+    "name": "ring",
+    "attributes": []
+  },
+  {
+    "name": "bracelet",
+    "attributes": []
+  },
+  {
+    "name": "earrings",
+    "attributes": []
+  },
+  {
+    "name": "pendant",
+    "attributes": []
+  },
+  {
+    "name": "logo_region",
+    "attributes": []
+  },
+  {
+    "name": "text_region",
+    "attributes": []
+  },
+  {
+    "name": "cosmetics_product",
+    "attributes": []
+  },
+  {
+    "name": "screen_phone",
+    "attributes": []
+  },
+  {
+    "name": "screen_laptop",
+    "attributes": []
+  },
+  {
+    "name": "screen_monitor",
+    "attributes": []
+  },
+  {
+    "name": "tv_screen",
+    "attributes": []
+  },
+  {
+    "name": "food_item",
+    "attributes": []
+  }
+]

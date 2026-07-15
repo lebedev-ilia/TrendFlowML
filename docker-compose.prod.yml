@@ -1,0 +1,295 @@
+# Единый стек TrendFlow одним файлом (task 5 / P5).
+#
+# Назначение: воспроизводимый запуск всего пайплайна на ОДНОЙ машине (dev/staging).
+# Прод-таргет — Kubernetes (k8s/). Здесь один общий redis/postgres/minio/сеть.
+#
+# ВАЖНО: перед первым реальным запуском проверь конфиг локально:
+#   docker compose -f docker-compose.prod.yml config      # валидация
+#   docker compose -f docker-compose.prod.yml up -d postgres redis minio
+#   docker compose -f docker-compose.prod.yml run --rm model-download
+#   docker compose -f docker-compose.prod.yml up -d
+#
+# Профиль gpu (Triton + GPU-обработка) включается:  --profile gpu
+#
+# Секреты заданы дефолтами для staging — для прод вынеси в .env / секрет-менеджер.
+
+x-common-env: &common-env
+  TZ: UTC
+
+networks:
+  trendflow:
+    driver: bridge
+
+volumes:
+  pgdata:
+  miniodata:
+  models:            # общий том с весами/семантическими базами (DP + Triton)
+  esfaiss:           # faiss-индексы Embedding Service
+  prometheus-data:
+  grafana-data:
+
+services:
+  # ---------------- infrastructure ----------------
+  postgres:
+    image: postgres:15-alpine
+    environment:
+      POSTGRES_USER: trendflow
+      POSTGRES_PASSWORD: trendflow
+      POSTGRES_DB: trendflow
+    volumes:
+      - pgdata:/var/lib/postgresql/data
+      - ./deploy/postgres-init.sql:/docker-entrypoint-initdb.d/10-init.sql:ro
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U trendflow"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+    networks: [trendflow]
+
+  redis:
+    image: redis:7-alpine
+    command: ["redis-server", "--appendonly", "yes"]
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 10s
+      timeout: 3s
+      retries: 5
+    networks: [trendflow]
+
+  minio:
+    image: minio/minio:latest
+    command: ["server", "/data", "--console-address", ":9001"]
+    environment:
+      MINIO_ROOT_USER: minioadmin
+      MINIO_ROOT_PASSWORD: minioadmin123
+    ports: ["9000:9000", "9001:9001"]
+    volumes: [miniodata:/data]
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:9000/minio/health/ready"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+    networks: [trendflow]
+
+  minio-init:
+    image: minio/mc:latest
+    depends_on:
+      minio: { condition: service_healthy }
+    entrypoint: >
+      /bin/sh -c "
+      until mc alias set tf http://minio:9000 minioadmin minioadmin123; do sleep 3; done;
+      mc mb -p tf/video-analytics-raw || true;
+      mc mb -p tf/trendflow || true;
+      echo done"
+    networks: [trendflow]
+
+  # ---------------- models ----------------
+  model-download:
+    build: { context: ./DataProcessor, dockerfile: docker/api/Dockerfile }
+    image: trendflow-dataprocessor:latest
+    environment:
+      <<: *common-env
+      HF_TOKEN: ${HF_TOKEN:-}
+    volumes: [models:/models]
+    command: >
+      /bin/sh -c "
+      python - <<'PY'
+      import os,urllib.request
+      tok=os.environ.get('HF_TOKEN')
+      url='https://huggingface.co/datasets/Ilialebedev/trendflow_models/resolve/main/models_manifest.json'
+      req=urllib.request.Request(url, headers={'Authorization':f'Bearer {tok}'} if tok else {})
+      open('/tmp/m.json','wb').write(urllib.request.urlopen(req).read())
+      PY
+      python /app/scripts/download_models.py --manifest /tmp/m.json --repo-root /models --jobs 8"
+    networks: [trendflow]
+    restart: "no"
+
+  # ---------------- triton (GPU, optional) ----------------
+  triton:
+    image: nvcr.io/nvidia/tritonserver:24.05-py3
+    profiles: ["gpu"]
+    command: ["tritonserver", "--model-repository=/models/DataProcessor/triton/models", "--model-control-mode=poll", "--repository-poll-secs=30"]
+    volumes: [models:/models:ro]
+    ports: ["8100:8000", "8101:8001", "8102:8002"]
+    deploy:
+      resources:
+        reservations:
+          devices: [{ driver: nvidia, count: 1, capabilities: [gpu] }]
+    networks: [trendflow]
+
+  # ---------------- backend ----------------
+  backend-migrate:
+    build: { context: ./backend }
+    image: trendflow-backend:latest
+    working_dir: /srv/backend
+    depends_on:
+      postgres: { condition: service_healthy }
+    environment:
+      TF_BACKEND_DB_DSN: postgresql+psycopg://trendflow:trendflow@postgres:5432/trendflow
+    command: ["alembic", "upgrade", "head"]
+    networks: [trendflow]
+    restart: "no"
+
+  backend-api:
+    build: { context: ./backend }
+    image: trendflow-backend:latest
+    depends_on:
+      postgres: { condition: service_healthy }
+      redis: { condition: service_healthy }
+      backend-migrate: { condition: service_completed_successfully }
+    environment: &backend-env
+      <<: *common-env
+      TF_BACKEND_DB_DSN: postgresql+psycopg://trendflow:trendflow@postgres:5432/trendflow
+      TF_BACKEND_REDIS_URL: redis://redis:6379/0
+      TF_BACKEND_FETCHER_API_URL: http://fetcher-api:8000
+      TF_BACKEND_DATAPROCESSOR_API_URL: http://dataprocessor-api:8000
+      TF_BACKEND_DB_AUTO_CREATE: "false"
+      LOG_FORMAT: json
+    ports: ["8001:8080"]
+    networks: [trendflow]
+
+  backend-worker:
+    build: { context: ./backend }
+    image: trendflow-backend:latest
+    depends_on:
+      redis: { condition: service_healthy }
+      backend-migrate: { condition: service_completed_successfully }
+    environment: *backend-env
+    command: ["celery", "-A", "app.worker:celery_app", "worker", "-l", "info"]
+    networks: [trendflow]
+
+  backend-beat:
+    build: { context: ./backend }
+    image: trendflow-backend:latest
+    depends_on:
+      redis: { condition: service_healthy }
+    environment: *backend-env
+    command: ["celery", "-A", "app.worker:celery_app", "beat", "-l", "info"]
+    networks: [trendflow]
+
+  # ---------------- fetcher ----------------
+  fetcher-api:
+    build: { context: ./Fetcher }
+    image: trendflow-fetcher:latest
+    depends_on:
+      postgres: { condition: service_healthy }
+      redis: { condition: service_healthy }
+      minio: { condition: service_healthy }
+    environment: &fetcher-env
+      <<: *common-env
+      FETCHER_POSTGRES_DSN: postgresql+psycopg2://fetcher:fetcher_password@postgres:5432/fetcher_db
+      FETCHER_REDIS_URL: redis://redis:6379/0
+      FETCHER_S3_ENDPOINT_URL: http://minio:9000
+      FETCHER_S3_ACCESS_KEY: minioadmin
+      FETCHER_S3_SECRET_KEY: minioadmin123
+      FETCHER_BUCKET_RAW: video-analytics-raw
+      FETCHER_S3_USE_SSL: "false"
+      FETCHER_YOUTUBE_USE_YT_DLP: "false"
+      FETCHER_BACKEND_BASE_URL: http://backend-api:8080
+    ports: ["8000:8000"]
+    networks: [trendflow]
+
+  fetcher-worker:
+    build: { context: ./Fetcher }
+    image: trendflow-fetcher:latest
+    depends_on:
+      redis: { condition: service_healthy }
+    environment: *fetcher-env
+    command: ["celery", "-A", "fetcher.celery_app", "worker", "--loglevel=info", "--concurrency=4", "-Q", "fetcher.high,fetcher.normal,fetcher.low,fetch.metadata,fetch.video,fetch.comments,fetch.finalize,fetch.maintenance"]
+    networks: [trendflow]
+
+  fetcher-beat:
+    build: { context: ./Fetcher }
+    image: trendflow-fetcher:latest
+    depends_on:
+      redis: { condition: service_healthy }
+    environment: *fetcher-env
+    command: ["celery", "-A", "fetcher.celery_app", "beat", "--loglevel=info"]
+    networks: [trendflow]
+
+  # ---------------- dataprocessor ----------------
+  dataprocessor-api:
+    build: { context: ./DataProcessor, dockerfile: docker/api/Dockerfile }
+    image: trendflow-dataprocessor:latest
+    depends_on:
+      redis: { condition: service_healthy }
+      minio: { condition: service_healthy }
+    environment: &dp-env
+      <<: *common-env
+      DP_MODELS_ROOT: /models/DataProcessor/dp_models
+      TREND_STORAGE_BACKEND: s3
+      S3_ENDPOINT: http://minio:9000
+      S3_BUCKET: trendflow
+      S3_PREFIX: trendflowml
+      AWS_ACCESS_KEY_ID: minioadmin
+      AWS_SECRET_ACCESS_KEY: minioadmin123
+      REDIS_URL: redis://redis:6379/0
+      CELERY_BROKER_URL: redis://redis:6379/0
+      S3_BUCKET_RAW: video-analytics-raw
+      TRITON_ENDPOINT: http://triton:8000
+      EMBEDDING_SERVICE_URL: http://embedding-service:8005
+      LOG_FORMAT: json
+    volumes: [models:/models:ro]
+    ports: ["8002:8000"]
+    networks: [trendflow]
+
+  dataprocessor-worker:
+    build: { context: ./DataProcessor, dockerfile: docker/worker/Dockerfile }
+    image: trendflow-dataprocessor-worker:latest
+    depends_on:
+      redis: { condition: service_healthy }
+      minio: { condition: service_healthy }
+    environment:
+      <<: *dp-env
+      MAX_CONCURRENT_RUNS: "2"
+      SUBPROCESS_MEMORY_LIMIT_MB: "8000"
+      DP_WORKER_METRICS_PORT: "8001"
+    volumes: [models:/models:ro]
+    networks: [trendflow]
+
+  # ---------------- embedding service ----------------
+  embedding-service:
+    build: { context: ./DataProcessor, dockerfile: docker/api/Dockerfile }
+    image: trendflow-dataprocessor:latest
+    depends_on:
+      postgres: { condition: service_healthy }
+    working_dir: /app
+    command: ["python", "embedding_service/run_server.py"]
+    environment:
+      <<: *common-env
+      EMBEDDING_SERVICE_HOST: "0.0.0.0"
+      EMBEDDING_SERVICE_PORT: "8005"
+      POSTGRES_HOST: postgres
+      POSTGRES_PORT: "5432"
+      POSTGRES_DB: embeddings
+      POSTGRES_USER: trendflow
+      POSTGRES_PASSWORD: trendflow
+      TRITON_BASE_URL: http://triton:8000
+      FAISS_INDEX_PATH: /faiss
+      STORAGE_TYPE: local
+      STORAGE_LOCAL_PATH: /faiss/storage
+    volumes: [esfaiss:/faiss]
+    ports: ["8005:8005"]
+    networks: [trendflow]
+
+  # ---------------- monitoring ----------------
+  prometheus:
+    image: prom/prometheus:latest
+    volumes:
+      - ./DataProcessor/monitoring/prometheus/prometheus.yml:/etc/prometheus/prometheus.yml:ro
+      - prometheus-data:/prometheus
+    ports: ["9090:9090"]
+    networks: [trendflow]
+
+  grafana:
+    image: grafana/grafana:latest
+    environment:
+      GF_SECURITY_ADMIN_USER: admin
+      GF_SECURITY_ADMIN_PASSWORD: admin
+      GF_USERS_ALLOW_SIGN_UP: "false"
+    volumes:
+      - grafana-data:/var/lib/grafana
+      - ./DataProcessor/monitoring/grafana/provisioning:/etc/grafana/provisioning:ro
+    ports: ["3000:3000"]
+    depends_on: [prometheus]
+    networks: [trendflow]
