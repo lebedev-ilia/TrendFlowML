@@ -43,7 +43,7 @@
 | optical_flow (module) | seq/agg | ✅ | **v2.0.2 (штамп 07-16)** | [REPORT 2026-07-16](component_reports/optical_flow/REPORT_2026-07-16.md): GPU RTX 2000 Ada, 3 видео (N=34/112/250) + expected-empty. **3 бага исправлены**: (1) раннер wrong cfg; (2) empty-путь без frame_feature_names→validate INVALID; (3) неполный feature_names в empty. Все U1–U6 + C1–C4 PASS: validate rc=0, golden True×3 (CPU numpy), missing_ratio=0.0, flow_consistency∈[0,1]. C1 CV=0.40; C2 min_std=0.049 (bg_ratio=0 by-design). Авто-штамп 100% PASS. **Доп.**: фикс RunPod API dataCenterId→dataCenterIds в tools.py |
 | similarity_metrics | agg | 🔁 | — | L4 (NaN policy) |
 | uniqueness | agg | 🔁 | — | L3 (NaN fix) |
-| text_scoring | seq/agg | ⬜ | — | — |
+| text_scoring | seq/agg | ✅ | **v2.0.1 (штамп 07-16)** | [REPORT 2026-07-16](component_reports/text_scoring/REPORT_2026-07-16.md): CPU-only, dep ocr_extractor. 24 реальных NPZ (status=empty, all OK) + синтетические тесты (ok + 3 empty-пути + golden + N=5/30/200). **1 баг исправлен**: fallback motion signal при broken optical_flow.npz (except→pass). Все U1–U6 + C1–C4 PASS: validate rc=0×24, golden diff=0.0, NaN by design (34/35 при empty; 3–10/35 при ok). Авто-штамп при 100% PASS |
 
 ## AudioProcessor — extractors
 

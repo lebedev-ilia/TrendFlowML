@@ -233,7 +233,7 @@ def _load_motion_signal_optional(*, module: "TextScoringModule", fi: np.ndarray)
                 except Exception:
                     pass
     except Exception:
-        return None, "optical_flow_error"
+        pass  # fallback to core_optical_flow below
 
     # 2) core_optical_flow provider (fallback)
     try:
