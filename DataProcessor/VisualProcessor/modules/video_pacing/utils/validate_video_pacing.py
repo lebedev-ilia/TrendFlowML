@@ -150,6 +150,12 @@ def validate_structure(npz_path: str) -> List[str]:
     if st not in ("ok", "empty", "error"):
         out.append(f"meta.status неожидан: {st!r}")
 
+    # При status=empty структурные проверки payload не применяются
+    if st == "empty":
+        if not meta.get("empty_reason"):
+            out.append("meta.empty_reason обязателен при status=empty")
+        return out
+
     fi = np.asarray(d["frame_indices"], dtype=np.int64).ravel()
     ts = np.asarray(d["times_s"], dtype=np.float64).ravel()
     n = int(fi.size)

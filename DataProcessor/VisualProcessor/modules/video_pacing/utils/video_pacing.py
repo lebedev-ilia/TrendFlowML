@@ -752,11 +752,11 @@ class VideoPacingPipelineVisualOptimized:
         """
         core = _load_core_optical_flow_npz(self.rs_path)
         if core is None:
-            raise RuntimeError("video_pacing | core_optical_flow not found (required)")
+            raise RuntimeError("video_pacing | core_optical_flow not found (no-fallback)")
         core_idx = core["frame_indices"]
         core_curve = core["motion_norm_per_sec_mean"]
         if core_curve is None or core_curve.size == 0:
-            raise RuntimeError("video_pacing | core_optical_flow curve is empty")
+            raise RuntimeError("video_pacing | core_optical_flow curve is empty (no-fallback)")
 
         # Align to this module's frame_indices (union-domain). Must be fully covered.
         want = np.asarray(self.frame_indices, dtype=np.int32)
@@ -764,7 +764,7 @@ class VideoPacingPipelineVisualOptimized:
         pos = [mapping.get(int(fi), -1) for fi in want.tolist()]
         if any(p < 0 for p in pos):
             raise RuntimeError(
-                "video_pacing | core_optical_flow.frame_indices does not cover this module's frame_indices. "
+                "video_pacing | core_optical_flow.frame_indices does not cover this module's frame_indices (no-fallback). "
                 "Segmenter must produce consistent sampling for dependent components."
             )
         core_curve = core_curve[np.asarray(pos, dtype=np.int64)]
@@ -843,7 +843,7 @@ class VideoPacingPipelineVisualOptimized:
         # Используем только core_clip - обязательное требование
         core = _load_core_clip_npz(self.rs_path)
         if core is None:
-            raise RuntimeError("video_pacing | core_clip not found (required)")
+            raise RuntimeError("video_pacing | core_clip not found (no-fallback)")
         frame_indices = core["frame_indices"]
         embeddings = core["frame_embeddings"]
 
@@ -853,7 +853,7 @@ class VideoPacingPipelineVisualOptimized:
         pos = [mapping.get(int(fi), -1) for fi in want.tolist()]
         if any(p < 0 for p in pos):
             raise RuntimeError(
-                "video_pacing | core_clip.frame_indices does not cover this module's frame_indices. "
+                "video_pacing | core_clip.frame_indices does not cover this module's frame_indices (no-fallback). "
                 "Segmenter must produce consistent sampling for dependent components."
             )
         embeddings = embeddings[np.asarray(pos, dtype=np.int64)]
@@ -1263,7 +1263,44 @@ class VideoPacingModule(BaseModule):
             t_fm = time.perf_counter()
 
             _emit_progress(rs_path=str(self.rs_path), platform_id=platform_id, video_id=video_id, run_id=run_id, done=0, total=total, stage="process")
-            results = self.process(frame_manager=fm, frame_indices=frame_indices, config=config or {})
+            try:
+                results = self.process(frame_manager=fm, frame_indices=frame_indices, config=config or {})
+            except RuntimeError as _nofb_err:
+                if "no-fallback" in str(_nofb_err):
+                    # Deps отсутствуют или frame_indices не перекрываются → штатный empty-выход
+                    t_nofb = time.perf_counter()
+                    empty_meta = {
+                        "status": "empty",
+                        "empty_reason": str(_nofb_err),
+                        "platform_id": platform_id,
+                        "video_id": video_id,
+                        "run_id": run_id,
+                        "sampling_policy_version": metadata.get("sampling_policy_version"),
+                        "config_hash": metadata.get("config_hash"),
+                        "dataprocessor_version": metadata.get("dataprocessor_version") or "unknown",
+                        "producer_version": VERSION,
+                        "schema_version": SCHEMA_VERSION,
+                        "stage_timings_ms": {
+                            "frame_manager_ms": float((t_fm - t0) * 1000.0),
+                            "process_ms": float((t_nofb - t_fm) * 1000.0),
+                            "total_ms": float((t_nofb - t0) * 1000.0),
+                        },
+                    }
+                    empty_results: Dict[str, Any] = {
+                        "frame_indices": np.asarray([], dtype=np.int32),
+                        "times_s": np.asarray([], dtype=np.float32),
+                        "shot_boundary_frame_indices": np.asarray([], dtype=np.int32),
+                        "motion_norm_per_sec_mean": np.asarray([], dtype=np.float32),
+                        "semantic_change_rate_per_sec": np.asarray([], dtype=np.float32),
+                        "color_change_rate_per_sec": np.asarray([], dtype=np.float32),
+                        "feature_names": np.asarray(list(_FEATURE_NAMES_V1), dtype=object),
+                        "feature_values": np.full(len(_FEATURE_NAMES_V1), np.nan, dtype=np.float32),
+                    }
+                    _emit_progress(rs_path=str(self.rs_path), platform_id=platform_id, video_id=video_id, run_id=run_id, done=0, total=total, stage="save")
+                    out_path = self.save_results(results=empty_results, metadata=empty_meta)
+                    _emit_progress(rs_path=str(self.rs_path), platform_id=platform_id, video_id=video_id, run_id=run_id, done=0, total=total, stage="done")
+                    return out_path
+                raise
             t_proc = time.perf_counter()
 
             ui_payload = None
