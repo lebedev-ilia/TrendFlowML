@@ -60,11 +60,11 @@
 | spectral_extractor | seq | ✅ | **v-07-16 (штамп 07-16)** | [REPORT 2026-07-16](component_reports/spectral_extractor/REPORT_2026-07-16.md): 17 NPZ: ok=15, empty=2. U1–U6+C1–C2 PASS: validate rc=0×17; монотонны; fv_nan=0/46 (все finite!); empty fn=5/fv=[nan×4,0.0]; golden max\|Δ\|=0.0 (12 runs); seg_counts 5–30. Баги не найдены. Авто-штамп |
 | spectral_entropy_extractor | seq | ⬜ | — | — |
 | mel_extractor | seq | ✅ | **v2.1.1 (штамп 07-16)** | [REPORT 2026-07-16](component_reports/mel_extractor/REPORT_2026-07-16.md): 17 NPZ (15 ok, 2 empty). **1 баг исправлен**: validate_mel.py::_n_mels_from_tabular NaN crash при --struct на empty NPZ (n_mels=NaN→ValueError) → добавлена isfinite-проверка. U1–U6+C1–C4 все PASS: validate rc=0×17; N-согласованы; nan=0/inf=0 на ok; config NaN в empty by design; **golden max\|Δ\|=0.0** (10 runs одного видео, torchaudio детерминирован); CV 158.7%/27.9%. mel_stability∈[0.82,0.9999]; mel_stats_vector size=512×15; mel_flatness∈(0,1]. Авто-штамп при 100% PASS |
-| mfcc_extractor | seq | ⬜ | — | — |
-| chroma_extractor | seq | ⬜ | — | — |
-| tempo_extractor | seq/agg | ⬜ | — | — |
+| mfcc_extractor | seq | ✅ | **v2.1.1 (штамп 07-16)** | [REPORT 2026-07-16](component_reports/mfcc_extractor/REPORT_2026-07-16.md): 17 NPZ (15 ok, 2 empty). **1 баг исправлен**: validate_mfcc.py::_n_mfcc_from_tabular NaN crash при --struct на empty NPZ → isfinite guard. U1–U6+C1–C4 все PASS: validate rc=0×17; N-согласованы 15/15; nan=0; NaN by design в empty; **golden max\|Δ\|=0.0** (10 runs). mfcc_energy CV=14.0%, bandwidth CV=11.6%. mfcc_mean≈0/stability≈0.5 by design (enable_audio_normalization→RMS waveform norm→log-power≈0). mfcc_mean_by_segment/delta_mean_by_segment=(N,13) финальные temporal arrays. Авто-штамп при 100% PASS |
+| chroma_extractor | seq | ✅ | **v2.1.1 (штамп 07-16)** | [REPORT 2026-07-16](component_reports/chroma_extractor/REPORT_2026-07-16.md): 17 NPZ (15 ok, 2 empty). **1 баг исправлен**: validate_chroma.py не учитывал status=empty (chroma_mean=[nan] size=1 и dominant_class=-1 → rc=2 → добавлен is_empty guard). После фикса 17/17 rc=0. U1–U6+C1–C4 PASS: nan=0 в ok; **golden max\|Δ\|=0.0** (librosa детерминирован при одном аудио; разница между runs=0.12 — разные yt-dlp скачивания); chroma_entropy CV=30%, contrast CV=158%. chroma_mean_by_segment=(N,12); dominant_class∈[0,11]; tuning∈[-0.24,0.49]. Авто-штамп при 100% PASS |
+| tempo_extractor | seq/agg | ✅ | **v2.1.1 (штамп 07-16)** | [REPORT 2026-07-16](component_reports/tempo_extractor/REPORT_2026-07-16.md): 17 NPZ (15 ok, 2 empty). Баги не найдены. 17/17 rc=0. U1–U6+C1–C4 PASS: nan=0 в ok; empty nan×11 by design; **golden max\|Δ\|=0.0** (10 runs, librosa детерминирован); tempo_bpm_mean CV=10.3%, tempo_bpm_std CV=17.9%. bpm_by_segment NaN при mask=False by design. Авто-штамп при 100% PASS |
 | rhythmic_extractor | seq/agg | ⬜ | — | — |
-| onset_extractor | seq (events) | ⬜ | — | — |
+| onset_extractor | seq (events) | ✅ | **v2.1.1 (штамп 07-16)** | [REPORT 2026-07-16](component_reports/onset_extractor/REPORT_2026-07-16.md): 17 NPZ (15 ok, 2 empty). Баги не найдены. 17/17 rc=0. U1–U6+C1–C4 PASS: nan=0 (кроме onset_tempo_consistency=NaN при tempo_payload=None — by design); **golden max\|Δ\| finite=6e-8**; onset_count CV=67%, density CV=34%. onset_tempo_consistency=NaN допустим — tempo_extractor опциональный dep. Авто-штамп при 100% PASS |
 | key_extractor | agg | ⬜ | — | — |
 | band_energy_extractor | seq | ⬜ | — | — |
 | quality_extractor | agg | ⬜ | — | — |
@@ -75,9 +75,9 @@
 
 | Компонент | Выход | Статус | Версия | Отчёт |
 |---|---|---|---|---|
-| title_embedder | emb | ⬜ | — | — |
-| description_embedder | emb | ⬜ | — | — |
-| hashtag_embedder | emb | ⬜ | — | — |
+| title_embedder | emb | ✅ | v1.2.0 | REPORT_2026-07-16.md |
+| description_embedder | emb | ✅ | v1.x | REPORT_2026-07-16.md |
+| hashtag_embedder | emb | ✅ | v1.x | REPORT_2026-07-16.md |
 | tags_extractor | agg | ⬜ | — | — |
 | transcript_aggregator | agg | ⬜ | — | — |
 | transcript_chunk_embedder | seq (emb) | ⬜ | — | — |

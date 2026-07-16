@@ -77,17 +77,24 @@ def validate_qa_rows(npz_path: str, qa: Any) -> List[str]:
 def validate_structure(npz_path: str) -> List[str]:
     out: List[str] = []
     d = load_npz(npz_path)
+    meta = extract_meta(d)
+    is_empty = meta.get("status") == "empty"  # при empty: chroma_mean=[nan], dominant_class=-1 by design
+
     cm = d.get("chroma_mean")
     if cm is not None:
         a = np.asarray(cm, dtype=np.float64).reshape(-1)
-        if a.size != 12:
+        if is_empty:
+            pass  # chroma_mean=[nan] by design при status=empty (npz_saver scalar→shape (1,))
+        elif a.size != 12:
             out.append(f"chroma_mean: ожидается 12, получено {a.size}")
         elif np.any(~np.isfinite(a)) or np.any(a < 0):
             out.append("chroma_mean: ожидаются неотрицательные конечные значения")
     dc = d.get("chroma_dominant_class")
     if dc is not None:
         v = int(np.asarray(dc).reshape(-1)[0])
-        if v < 0 or v > 11:
+        if is_empty:
+            pass  # dominant_class=-1 by design при status=empty (sentinel)
+        elif v < 0 or v > 11:
             out.append(f"chroma_dominant_class: ожидается 0..11, получено {v}")
     seg_block = ("segment_centers_sec", "segment_durations_sec", "segment_mask", "chroma_mean_by_segment")
     has_any = any(k in d for k in seg_block)
