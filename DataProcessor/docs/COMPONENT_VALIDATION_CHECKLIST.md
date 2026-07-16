@@ -51,7 +51,7 @@
 |---|---|---|---|---|
 | asr_extractor | seq | ✅ | **v2.3.2 (штамп 07-16)** | [REPORT 2026-07-16](component_reports/asr_extractor/REPORT_2026-07-16.md): Whisper small fp16 CUDA, schema npz_v2. 16 NPZ: ok=14, empty=2. U1–U6+C1–C3 все PASS: validate rc=0×16 (schema, нет --struct); golden max\|Δfv\|=0.0 (9 ok-runs одного видео); dur 3–30s без падений; lang ru/en; logprob -1.9..-0.15. Авто-штамп 100% PASS |
 | clap_extractor | seq (emb) | ✅ | **v1.1.1 (штамп 07-16)** | [REPORT 2026-07-16](component_reports/clap_extractor/REPORT_2026-07-16.md): LAION CLAP 512-d эмбеддинги по аудио-сегментам. **2 бага исправлены**: (1) validate_clap rc=2 при empty/error (embedding_present=False не учитывался; фикс: проверка флага); (2) CLAPExtractor PyTorch 2.12 несовместимость с laion_clap checkpoint (weights_only=True → monkey-patch weights_only=False). 16 storage NPZ: ok=12, error=2, empty=2. U1–U6+C1–C3 все PASS: golden max\|Δ\|=0.0, dim=512, norms 0.80-0.98, N=5/30 без падений. Авто-штамп 100% PASS |
-| speaker_diarization_extractor | seq (events) | ⬜ | — | — |
+| speaker_diarization_extractor | seq (events) | ✅ | **v3.1.1 (штамп 07-16)** | [REPORT 2026-07-16](component_reports/speaker_diarization_extractor/REPORT_2026-07-16.md): pyannote.audio 4.0.7, schema npz_v2, F=10. 14 NPZ: ok=11, empty=2, sc=0×3. U1–U6+S1–S4 все PASS: validate rc=0×12; mono 14/14; nan_rate=0×11; golden AGfPggrmw-E ts побайтово идентичны; длины 8.5с/28с/149с rc=0. Авто-штамп 100% PASS |
 | emotion_diarization_extractor | seq | ⬜ | — | — |
 | source_separation_extractor | seq | ⬜ | — | — |
 | speech_analysis_extractor | agg | ⬜ | — | — |
