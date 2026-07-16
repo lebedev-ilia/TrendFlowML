@@ -181,6 +181,9 @@ def _otsu_threshold_and_quality_0_1(x: np.ndarray, bins: int = 128) -> Tuple[flo
     denom = omega * (1.0 - omega)
     denom[denom <= 1e-12] = np.nan
     sigma_b2 = ((mu_t * omega - mu) ** 2) / denom
+    if np.all(np.isnan(sigma_b2)):
+        # All identical values or degenerate distribution — fall back to safe default
+        return 0.97, 0.0
     idx = int(np.nanargmax(sigma_b2))
     thr = float(centers[idx])
     # quality: between-class variance ratio (0..1-ish); 0 if distribution is flat.

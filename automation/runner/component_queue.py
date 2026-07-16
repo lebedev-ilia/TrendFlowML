@@ -16,6 +16,13 @@ _PAREN_SUFFIX = re.compile(r"\s*\([^)]*\)\s*$")
 
 # Приоритет валидации оставшихся компонентов (правь свободно).
 # Сначала — визуальное ядро (Triton-заменяемое), потом модули, потом аудио/текст.
+#
+# ВАЖНО (2026-07-16): этот список — ручной снимок, НЕ генерируется из чеклиста автоматически.
+# Он разошёлся с DataProcessor/docs/COMPONENT_VALIDATION_CHECKLIST.md — там есть ещё ~29
+# компонентов (⬜/🔄/🔁) с готовым кодом/схемами, которых тут не было, из-за чего раннер решал,
+# что очередь пуста, хотя реальной работы оставалось много. Дописаны ниже. Если чеклист снова
+# заведёт новые строки — сверяйся с ним (`grep -c "⬜\|🔄\|🔁" COMPONENT_VALIDATION_CHECKLIST.md`
+# должно совпадать с тем, что НЕ входит в PRIORITY+✅).
 PRIORITY = [
     "core_depth_midas",
     "core_optical_flow",
@@ -37,7 +44,10 @@ PRIORITY = [
     "core_identity/content_domain",
     "core_identity/face_identity",
     "core_identity/franchise_recognition",
-    # аудио
+    # visual, в цикле доработки (🔁) — известные баги L3/L4 в LOGIC_ERRORS_FOR_CLAUDE.md
+    "similarity_metrics",
+    "uniqueness",
+    # аудио — уже валидированные
     "clap_extractor",
     "asr_extractor",
     "speaker_diarization_extractor",
@@ -48,13 +58,42 @@ PRIORITY = [
     "chroma_extractor",
     "tempo_extractor",
     "onset_extractor",
-    # текст
+    # аудио — не начаты (код/схемы есть, добавлены 2026-07-16)
+    "pitch_extractor",
+    "spectral_entropy_extractor",
+    "rhythmic_extractor",
+    "key_extractor",
+    "band_energy_extractor",
+    "quality_extractor",
+    "voice_quality_extractor",
+    "hpss_extractor",
+    "emotion_diarization_extractor",
+    "source_separation_extractor",
+    "speech_analysis_extractor",
+    # текст — уже валидированные
     "title_embedder",
     "description_embedder",
     "hashtag_embedder",
     "transcript_chunk_embedder",
     "comments_embedder",
     "semantic_cluster_extractor",
+    # текст — не начаты (код/схемы есть, добавлены 2026-07-16)
+    "tags_extractor",
+    "transcript_aggregator",
+    "comments_aggregator",
+    "speaker_turn_embeddings_aggregator",
+    "asr_text_proxy_audio_features",
+    "lexico_static_features",
+    "semantics_topics_keyphrases",
+    "cosine_metrics_extractor",
+    "embedding_stats_extractor",
+    "embedding_shift_indicator_extractor",
+    "embedding_source_id_extractor",
+    "embedding_pair_topk_extractor",
+    "qa_embedding_pairs_extractor",
+    "title_embedding_cluster_entropy_extractor",
+    "title_to_hashtag_cosine_extractor",
+    "topk_similar_titles_extractor",
 ]
 
 

@@ -612,10 +612,13 @@ class PitchExtractor(BaseExtractor):
                         features["pitch_octave_distribution"] = {}
                 
                 # Pitch skewness, kurtosis (Q6: pitch_centroid removed, duplicate of f0_mean)
+                # Guard на std=0 (монотонный pitch): scipy возвращает NaN → заменяем на 0.0
                 if f0_arr.size > 2:
                     from scipy import stats
-                    features["pitch_skewness"] = float(stats.skew(f0_arr))
-                    features["pitch_kurtosis"] = float(stats.kurtosis(f0_arr))
+                    sk = stats.skew(f0_arr)
+                    ku = stats.kurtosis(f0_arr)
+                    features["pitch_skewness"] = float(sk) if np.isfinite(sk) else 0.0
+                    features["pitch_kurtosis"] = float(ku) if np.isfinite(ku) else 0.0
                 else:
                     features["pitch_skewness"] = 0.0
                     features["pitch_kurtosis"] = 0.0
