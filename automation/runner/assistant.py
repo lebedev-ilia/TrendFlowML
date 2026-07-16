@@ -100,7 +100,25 @@ HELP = ("Я Второй агент. Команды: /model <имя>, /limits, /
        "/help. Просто пиши вопрос/задачу — отвечу, если не занята ответом Первому агенту.")
 
 
+_CHAT_LOG_MAX_LINES = 400
+
+
+def _log_chat(direction: str, text: str) -> None:
+    """Дописать в state/agent2_chat.log (переписка Второго агента с таймштампами) — чтобы владелец
+    мог смотреть локально, не пересылая вручную из VK. Подрезаем, чтобы не рос бесконечно."""
+    try:
+        line = f"{dt.datetime.now().isoformat(timespec='seconds')} {direction} {text[:1500]}\n"
+        with open(config.AGENT2_CHAT_LOG, "a", encoding="utf-8") as f:
+            f.write(line)
+        if config.AGENT2_CHAT_LOG.stat().st_size > 400_000:
+            lines = config.AGENT2_CHAT_LOG.read_text(encoding="utf-8").splitlines()[-_CHAT_LOG_MAX_LINES:]
+            config.AGENT2_CHAT_LOG.write_text("\n".join(lines) + "\n", encoding="utf-8")
+    except Exception:
+        pass
+
+
 def send(text: str):
+    _log_chat("AGENT2->", text)
     try:
         requests.post(f"{VK}/messages.send", data={
             "user_id": config.VK_OWNER_ID, "random_id": random.randint(1, 2_000_000_000),
@@ -188,6 +206,7 @@ async def _answer(model: str, history: list[str], text: str) -> str:
                 for b in msg.content:
                     if isinstance(b, TextBlock) and b.text.strip():
                         parts.append(b.text.strip())
+                        _log_chat("AGENT2(raw)", b.text.strip()[:300])
             elif isinstance(msg, ResultMessage):
                 cost = float(getattr(msg, "total_cost_usd", 0.0) or 0.0)
                 u = getattr(msg, "usage", None)
@@ -219,6 +238,7 @@ async def _monitor_pass(model: str) -> str:
                     for b in msg.content:
                         if isinstance(b, TextBlock) and b.text.strip():
                             parts.append(b.text.strip())
+                            _log_chat("AGENT2-monitor(raw)", b.text.strip()[:300])
                 elif isinstance(msg, ResultMessage):
                     cost = float(getattr(msg, "total_cost_usd", 0.0) or 0.0)
                     u = getattr(msg, "usage", None)
@@ -289,6 +309,7 @@ async def main():
             msgs = await asyncio.to_thread(lp.poll, 25)
             for t in msgs:
                 print(f"[assistant] < {t[:120]}", flush=True)
+                _log_chat("OWNER->", t)
                 low = t.lower()
                 if low.startswith("/model"):
                     arg = t.split(None, 1)[1].strip() if len(t.split(None, 1)) > 1 else ""

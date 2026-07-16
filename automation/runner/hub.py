@@ -44,6 +44,7 @@ class RuntimeState:
     auto_left: int = 0          # ночной режим: сколько ещё авто-сессий пройти после сброса лимита
     hit_limit: bool = False     # сессия завершилась из-за ЛИМИТА Claude (по тексту)
     session_failed: bool = False  # сессия не сделала работы по ДРУГОЙ причине (ошибка/неверная модель)
+    conn_error: bool = False    # похоже на обрыв соединения к API (текст "Connection closed" и т.п.)
     reset_at: str = ""          # время сброса лимита из сообщения Claude (напр. "12:20am")
     dry_pod: bool = False       # тест без реального управления подами
     stop_kind: str = "save"     # как останавливать текущую сессию: save (стоп пода) | plain (без стопа)

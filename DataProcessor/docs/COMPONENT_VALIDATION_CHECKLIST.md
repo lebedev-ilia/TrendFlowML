@@ -80,14 +80,14 @@
 | hashtag_embedder | emb | ✅ | v1.x | REPORT_2026-07-16.md |
 | tags_extractor | agg | ⬜ | — | — |
 | transcript_aggregator | agg | ⬜ | — | — |
-| transcript_chunk_embedder | seq (emb) | ⬜ | — | — |
+| transcript_chunk_embedder | seq (emb) | ✅ | v1.3.0 | REPORT_2026-07-16.md |
 | comments_aggregator | agg | ⬜ | — | — |
-| comments_embedder | emb | ⬜ | — | — |
+| comments_embedder | emb | ✅ | v1.3.0 | REPORT_2026-07-16.md |
 | speaker_turn_embeddings_aggregator | seq/agg | ⬜ | — | — |
 | asr_text_proxy_audio_features | agg | ⬜ | — | — |
 | lexico_static_features | agg | ⬜ | — | — |
 | semantics_topics_keyphrases | agg | ⬜ | — | — |
-| semantic_cluster_extractor | agg | ⬜ | — | — |
+| semantic_cluster_extractor | agg | ✅ | v1.3.0 | REPORT_2026-07-16.md |
 | cosine_metrics_extractor | agg | ⬜ | — | — |
 | embedding_stats_extractor | agg | ⬜ | — | — |
 | embedding_shift_indicator_extractor | agg | ⬜ | — | — |

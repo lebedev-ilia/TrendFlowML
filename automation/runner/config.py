@@ -33,6 +33,7 @@ SESSIONS_LOG = STATE_DIR / "sessions.csv"        # все сессии: врем
 OPEN_PODS = STATE_DIR / "open_pods.json"         # текущие поднятые поды (для начисления)
 PAUSE_FLAG = STATE_DIR / "PAUSED"                # общий флаг ручной/аварийной паузы (владелец, крэш, агент 2)
 AGENT1_CHAT_LOG = STATE_DIR / "agent1_chat.log"  # исходящие/входящие сообщения чата агента 1 (для агента 2)
+AGENT2_CHAT_LOG = STATE_DIR / "agent2_chat.log"  # исходящие/входящие сообщения чата агента 2 (для владельца/истории)
 AGENT2_BUSY_FLAG = STATE_DIR / "agent2_busy.json"        # агент 2 сейчас отвечает агенту 1 (не владельцу)
 ASSISTANT_STOP_REQUEST = STATE_DIR / "assistant_stop_request.json"   # агент 2 просит аккуратный стоп агента 1
 ASSISTANT_START_REQUEST = STATE_DIR / "assistant_start_request.json"  # агент 2 просит рестарт агента 1

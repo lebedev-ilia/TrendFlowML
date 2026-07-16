@@ -92,6 +92,12 @@ def _accum_usage(msg, final: bool):
         STATE.tokens_out += otok
 
 
+_CONN_ERROR_RE = re.compile(
+    r"connection closed|overloaded_error|internal_server_error|api error.*incomplete|"
+    r"connection reset|timed? ?out|econnreset|bad gateway|gateway timeout|service unavailable",
+    re.I)
+
+
 async def _consume(client, holder):
     async for msg in client.receive_response():
         STATE.last_activity = time.time()
@@ -105,6 +111,10 @@ async def _consume(client, holder):
                         mr = re.search(r"resets?\s+(\d{1,2}:\d{2}\s*[ap]m)", t, re.I)
                         if mr:
                             holder["reset_at"] = mr.group(1).replace(" ", "").lower()
+                    if _CONN_ERROR_RE.search(t):
+                        # Транспортный сбой (обрыв соединения к API) — НЕ повод для ручной паузы,
+                        # это сигнализирует main_service() авто-ретраить компонент (см. ниже).
+                        holder["conn_error"] = True
                     hub.emit_log(STATE.tag(), t[:800])
         elif isinstance(msg, ResultMessage):
             _accum_usage(msg, final=True)
@@ -125,6 +135,7 @@ async def run_session(prompt: str, component: str | None, mode: str = "component
     STATE.tokens_in = STATE.tokens_out = 0
     STATE.hit_limit = False
     STATE.session_failed = False
+    STATE.conn_error = False
     gpu_before = budget.gpu_spent_today()
     if component and mode == "component":
         q.set_claim(component)
@@ -152,6 +163,7 @@ async def run_session(prompt: str, component: str | None, mode: str = "component
     empty = not stopped and holder["cost"] < 0.001 and STATE.tokens_out < 20
     STATE.hit_limit = limited and not stopped
     STATE.reset_at = holder.get("reset_at", "") if limited else ""
+    STATE.conn_error = bool(holder.get("conn_error")) and not stopped
     STATE.session_failed = (empty or bool(holder.get("error"))) and not limited and not stopped
     if component and mode == "component" and not stopped and not STATE.hit_limit and not STATE.session_failed:
         q.clear_claim()
@@ -455,6 +467,30 @@ async def pod_watchdog():
             warned_idle = True
 
 
+_MAX_AUTO_RETRIES = 3
+_fail_counts: dict[str, int] = {}
+
+
+def _retry_or_pause(label: str, reason_text: str) -> bool:
+    """До _MAX_AUTO_RETRIES раз молча ретраим тот же label (компонент остаётся заклейменным,
+    claim не чистится при session_failed/crash) — большинство сбоев тут временные (обрыв связи к
+    API на длинной сессии), а не реальный баг. Только после нескольких подряд неудач — настоящая
+    пауза, требующая /start-session. Возвращает True, если поставили паузу (иначе — будет ретрай)."""
+    fails = _fail_counts.get(label, 0) + 1
+    _fail_counts[label] = fails
+    if fails < _MAX_AUTO_RETRIES:
+        messenger.send(f"⚠️ «{label}»: {reason_text} (попытка {fails}/{_MAX_AUTO_RETRIES}) — похоже на "
+                       f"временный сбой (обрыв соединения к API и т.п.). Автоматически повторяю тот же "
+                       f"компонент через 15с, без ручной паузы.")
+        return False
+    _fail_counts.pop(label, None)
+    STATE.manual_pause = True
+    STATE.pause_reason = "error"
+    messenger.send(f"❗ «{label}»: {reason_text} — не получилось {_MAX_AUTO_RETRIES} раза подряд, похоже "
+                   f"на реальную проблему (не просто сбой сети). Пауза. Проверь /model, затем /start-session.")
+    return True
+
+
 async def main_service(once: bool):
     STATE.model_label = hub.model_label(settings.model())
     agents.heartbeat("component-runner", STATE.model_label)
@@ -475,8 +511,17 @@ async def main_service(once: bool):
                 cost, stopped = await run_session(prompt, component, mode)
             except Exception as e:
                 tb = traceback.format_exc()[-1200:]
-                messenger.send(f"❗ Ошибка на «{label}»: {e}\n{tb}")
                 _safe_stop_pods()
+                if _CONN_ERROR_RE.search(str(e)) or _CONN_ERROR_RE.search(tb):
+                    # Похоже на транспортный сбой (не наш баг) — ретраим, а не сразу паузим.
+                    paused = _retry_or_pause(label, f"обрыв соединения при вызове SDK ({e})")
+                    if paused:
+                        budget.set_pause(f"crash on {label}: {e}")
+                    if once:
+                        break
+                    await asyncio.sleep(15)
+                    continue
+                messenger.send(f"❗ Ошибка на «{label}»: {e}\n{tb}")
                 budget.set_pause(f"crash on {label}: {e}")
                 if once:
                     break
@@ -508,16 +553,20 @@ async def main_service(once: bool):
                 else:
                     STATE.manual_pause = True
             elif STATE.session_failed:
-                # Сессия НЕ сделала работы (ошибка/неверная модель) — НЕ помечаем готовым, встаём на паузу.
-                STATE.manual_pause = True
-                STATE.pause_reason = "error"
+                # Сессия НЕ сделала работы — НЕ помечаем готовым. Обычно это обрыв соединения к API на
+                # длинной сессии, а не реальный баг — поэтому сначала РЕТРАИМ (до 3 раз), а не сразу паузим.
                 _safe_stop_pods()
-                messenger.send(f"❗ Сессия «{label}» не выполнила работу (0 токенов) — вероятно ошибка или "
-                               f"неверная модель (сейчас {settings.model()}). Пауза. Проверь /model, затем /start-session.")
+                if STATE.conn_error:
+                    reason = "обрыв соединения к API ('Connection closed'/таймаут)"
+                else:
+                    reason = f"0 реальной работы (токенов={STATE.tokens_total()}, модель={settings.model()})"
+                if not _retry_or_pause(label, reason):
+                    await asyncio.sleep(15)  # запас перед повтором — вдруг сеть/API ещё не отошли
             else:
                 # Компонент завершён — помечаем закрытым и АВТОМАТИЧЕСКИ идём дальше (не ждём владельца:
                 # непрерывная работа по ВСЕМ компонентам — единственные стопы: лимит Claude, запрос
                 # Второго агента, ручная команда владельца).
+                _fail_counts.pop(label, None)  # успех — сбрасываем счётчик неудач для этого компонента
                 if mode == "component" and component:
                     q.mark_done(component)
                 messenger.send(f"🏁 «{label}» готово (≈${cost:.2f}). Итого сегодня ${budget.total_spent_today():.2f}.")
