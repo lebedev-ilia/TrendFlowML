@@ -77,8 +77,21 @@ def kill_processes(pod_name: str) -> str:
     сессию (`Exit status -1`, код возврата 255) ДО того, как реально убьёт целевые процессы. Фикс —
     классический bracket-trick: `[d]ataset_collector` матчит "dataset_collector" в ЧУЖИХ процессах,
     но не совпадает буквально со своей же командной строкой `pkill -f [d]ataset_collector`. НЕ убирай
-    скобки при правке этой функции — это не опечатка."""
-    cmd = ("pkill -9 -f '[f]etcher.dataset_collector' ; "
+    скобки при правке этой функции — это не опечатка.
+
+    ВАЖНО #2 (баг найден 2026-07-16): раньше сразу слали SIGKILL (-9). download-воркер (yt-dlp/
+    pytubefix) дозаписывает cookie-файл ПОСЛЕ каждого запроса НЕ атомарно — SIGKILL посреди этой
+    записи оставляет cookie-файл обрезанным до 0 байт (реально случилось с bon_cookie.txt на
+    fetcher-worker-b, сломало download на несколько часов, пока не заметили и не перезалили файл).
+    Демоны (_queue_worker_daemon в run_workers.py) уже ловят SIGTERM и штатно завершаются между
+    единицами работы (should_stop()) — даём им на это несколько секунд ПЕРЕД добиванием -9,
+    вместо того чтобы убивать сразу самым грубым способом."""
+    cmd = ("pkill -f '[f]etcher.dataset_collector' ; "
+          "pkill -f '[c]olab_20k_bootstrap' ; "
+          "pkill -f '[l]aunch_role.sh' ; "
+          "pkill -f 'while tr[u]e' ; "
+          "sleep 5; "
+          "pkill -9 -f '[f]etcher.dataset_collector' ; "
           "pkill -9 -f '[c]olab_20k_bootstrap' ; "
           "pkill -9 -f '[l]aunch_role.sh' ; "
           "pkill -9 -f 'while tr[u]e' ; "
