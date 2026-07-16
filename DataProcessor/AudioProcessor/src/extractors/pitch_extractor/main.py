@@ -232,11 +232,13 @@ class PitchExtractor(BaseExtractor):
                     return False, f"pitch | {key} must be float, got {type(value)}"
         
         # Validate consistency: f0_min <= f0_mean <= f0_max
+        # Допуск 1e-3 Hz для float32 rounding при агрегации одинаковых значений
         if all(k in features for k in ["f0_min", "f0_mean", "f0_max"]):
             f0_min = float(features.get("f0_min", 0.0))
             f0_mean = float(features.get("f0_mean", 0.0))
             f0_max = float(features.get("f0_max", 0.0))
-            if not (f0_min <= f0_mean <= f0_max):
+            _eps = 1e-3  # float32 accumulation tolerance
+            if not (f0_min - _eps <= f0_mean <= f0_max + _eps):
                 return False, f"pitch | consistency check failed: f0_min ({f0_min}) <= f0_mean ({f0_mean}) <= f0_max ({f0_max})"
         
         # Validate time series if present
@@ -805,7 +807,9 @@ class PitchExtractor(BaseExtractor):
                 frame_length=self.frame_length,
             )
             
-            f0_pyin_clean = f0_pyin[~np.isnan(f0_pyin)] if f0_pyin is not None else np.array([])
+            # Фильтруем NaN и значения вне [fmin, fmax] — PYIN/YIN могут вернуть out-of-range на тихом сигнале
+            _pyin_valid = (f0_pyin is not None) and (~np.isnan(f0_pyin)) & (f0_pyin >= self.fmin) & (f0_pyin <= self.fmax)
+            f0_pyin_clean = f0_pyin[_pyin_valid] if f0_pyin is not None else np.array([])
             voiced_flag_clean = voiced_flag[~np.isnan(voiced_flag)] if voiced_flag is not None else np.array([])
             voiced_probs_mean = float(np.nanmean(voiced_probs)) if voiced_probs is not None else 0.0
             
@@ -834,8 +838,10 @@ class PitchExtractor(BaseExtractor):
                 frame_length=self.frame_length,
             )
             
-            f0_yin_clean = f0_yin[~np.isnan(f0_yin)] if f0_yin is not None else np.array([])
-            
+            # Фильтруем NaN и значения вне [fmin, fmax] — YIN может вернуть out-of-range на тихом/нулевом сигнале
+            _yin_valid = (f0_yin is not None) and (~np.isnan(f0_yin)) & (f0_yin >= self.fmin) & (f0_yin <= self.fmax)
+            f0_yin_clean = f0_yin[_yin_valid] if f0_yin is not None else np.array([])
+
             if f0_yin_clean.size > 0:
                 if self.enable_method_stats:
                     features.update(self._calc_stats(f0_yin_clean, prefix="yin", feature_gated=True))

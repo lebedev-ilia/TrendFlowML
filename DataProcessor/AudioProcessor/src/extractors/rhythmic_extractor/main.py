@@ -489,6 +489,22 @@ class RhythmicExtractor(BaseExtractor):
         """
         if beat_times.size < BEAT_TIMES_SAVE_THRESHOLD:
             return None
+        if self.artifacts_dir is None:
+            logger.warning("rhythmic | artifacts_dir not set, cannot save beat_times to .npy")
+            return None
+
+        try:
+            os.makedirs(self.artifacts_dir, exist_ok=True)
+            # Deterministic but collision-resistant within a run directory.
+            npy_path = os.path.join(self.artifacts_dir, f"{component_name}_beat_times_sec.npy")
+            np.save(npy_path, beat_times)
+            # Return relative path from component directory
+            rel_path = f"_artifacts/{component_name}_beat_times_sec.npy"
+            logger.info(f"rhythmic | Saved beat_times ({beat_times.size} elements) to {npy_path}")
+            return rel_path
+        except Exception as e:
+            logger.warning(f"rhythmic | Failed to save beat_times to .npy: {e}")
+            return None
 
     def _save_beat_segment_index_npy(self, beat_segment_index: np.ndarray, component_name: str) -> Optional[str]:
         """
@@ -508,23 +524,6 @@ class RhythmicExtractor(BaseExtractor):
             return rel_path
         except Exception as e:
             logger.warning(f"rhythmic | Failed to save beat_segment_index to .npy: {e}")
-            return None
-
-        if self.artifacts_dir is None:
-            logger.warning("rhythmic | artifacts_dir not set, cannot save beat_times to .npy")
-            return None
-
-        try:
-            os.makedirs(self.artifacts_dir, exist_ok=True)
-            # Deterministic but collision-resistant within a run directory.
-            npy_path = os.path.join(self.artifacts_dir, f"{component_name}_beat_times_sec.npy")
-            np.save(npy_path, beat_times)
-            # Return relative path from component directory
-            rel_path = f"_artifacts/{component_name}_beat_times_sec.npy"
-            logger.info(f"rhythmic | Saved beat_times ({beat_times.size} elements) to {npy_path}")
-            return rel_path
-        except Exception as e:
-            logger.warning(f"rhythmic | Failed to save beat_times to .npy: {e}")
             return None
 
     def run(self, input_uri: str, tmp_path: str) -> ExtractorResult:
