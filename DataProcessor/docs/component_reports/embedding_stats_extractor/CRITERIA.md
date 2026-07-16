@@ -19,7 +19,7 @@
 
 | Критерий | Описание |
 |----------|----------|
-| C1 | **NaN by design при present=0**: ровно 13 полей = NaN: `l2_variance`, `n_chunks`, `dim`, `topvar_1..8`, `load_ms`, `compute_ms` (при emit_extra_metrics=False, дефолт). Остальные поля finite. |
+| C1 | **NaN by design при present=0**: зависит от наличия topic_probs. Если topics доступны: 13 NaN (`l2_variance`, `n_chunks`, `dim`, `topvar_1..8`, `load_ms`, `compute_ms`). Если topics тоже отсутствуют: 16 NaN (+ `topic_entropy`, `topic_entropy_norm`, `topic_perplexity`). `emit_extra_metrics=False` (дефолт) → `load_ms`/`compute_ms` всегда NaN. |
 | C2 | **l2_variance > 0** при N≥2 отличных чанках (сигнал различимости вектора дисперсии). |
 | C3 | **emit_extra_metrics=False → load_ms/compute_ms = NaN** (by design, задокументировано в SCHEMA.md). При True — конечные значения. |
 | C4 | **topic_entropy_norm ∈ [0,1], perplexity ≥ 1** при valid topic_probs (present=1, invalid=False). |

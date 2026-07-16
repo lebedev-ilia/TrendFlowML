@@ -89,8 +89,8 @@
 | semantics_topics_keyphrases | agg | ✅ | v2.1.0 (авто-штамп 07-17) | [REPORT_2026-07-17.md](component_reports/semantics_topics_keyphrases/REPORT_2026-07-17.md): 116 tp_topics_* ключей. Баг import torch исправлен. U1 27/27 OK; U3 5 уник. top1_id; U4 disabled+empty ✅; U5 golden 0.0; U6 6 сценариев разных длин ✅. C1–C4 NaN-политика by design. Авто-штамп 100% PASS |
 | semantic_cluster_extractor | agg | ✅ | v1.3.0 | REPORT_2026-07-16.md |
 | cosine_metrics_extractor | agg | ✅ | v1.3.0 (авто-штамп 07-17) | [REPORT_2026-07-17.md](component_reports/cosine_metrics_extractor/REPORT_2026-07-17.md): CPU-only numpy, 39 tp_cos_* ключей. U1 28/28 OK; U3 косинусы ∈[0.73,0.88] при present=1, NaN at absent by design; U4 empty ✅; U5 golden max|Δ|=0; U6 matrix-mode+mismatch+zero-norm ✅. C1 28/28 OK; C2 min=0.73 ≥ 0.6; C3 one-hot sum ∈{0,1}; C4 ровно 5 NaN by design. Авто-штамп 100% PASS |
-| embedding_stats_extractor | agg | ⬜ | — | — |
-| embedding_shift_indicator_extractor | agg | ⬜ | — | — |
+| embedding_stats_extractor | agg | ✅ | v1.2.0 (авто-штамп 07-17) | [REPORT_2026-07-17.md](component_reports/embedding_stats_extractor/REPORT_2026-07-17.md): CPU-only numpy, 39 tp_embstats_* ключей. U1 28/28 OK; U3 l2_var=4.03 (N=5,D=32), entropy_norm=0.77; U4 empty ✅; U5 golden diff=0 (timing excluded); U6 N=1/2/10/100 ✅. C1 13/16 NaN by design; C2 l2_var>0 при N≥2; C3 emit=False→NaN; C4 entropy_norm∈[0,1]. Авто-штамп 100% PASS |
+| embedding_shift_indicator_extractor | agg | ✅ | v1.3.0 (авто-штамп 07-17) | [REPORT_2026-07-17.md](component_reports/embedding_shift_indicator_extractor/REPORT_2026-07-17.md): CPU-only numpy, 27 tp_embshift_* ключей. U1 28/28 OK; U3 cosine=0.79 при present=1, синтетика max|Δ|=0; U4 no_relpath/missing_file/disabled/zero_norm — нет падений; U5 golden sem max|Δ|=0.0 (timing excluded); U6 n_chunks=1,4,5,6 ✅. C1–C6 PASS. Авто-штамп 100% PASS |
 | embedding_source_id_extractor | agg | ⬜ | — | — |
 | embedding_pair_topk_extractor | agg | ⬜ | — | — |
 | qa_embedding_pairs_extractor | agg | ⬜ | — | — |
