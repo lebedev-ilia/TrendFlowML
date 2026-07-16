@@ -81,9 +81,9 @@
 | tags_extractor | agg | ✅ | v1.2.0 | REPORT_2026-07-17.md |
 | transcript_aggregator | agg | ✅ | v1.3.0 | REPORT_2026-07-17.md |
 | transcript_chunk_embedder | seq (emb) | ✅ | v1.3.0 | REPORT_2026-07-16.md |
-| comments_aggregator | agg | ⬜ | — | — |
+| comments_aggregator | agg | ✅ | v1.3.0 | REPORT_2026-07-17.md |
 | comments_embedder | emb | ✅ | v1.3.0 | REPORT_2026-07-16.md |
-| speaker_turn_embeddings_aggregator | seq/agg | ⬜ | — | — |
+| speaker_turn_embeddings_aggregator | seq/agg | ✅ | v1.3.0 | REPORT_2026-07-17.md |
 | asr_text_proxy_audio_features | agg | ⬜ | — | — |
 | lexico_static_features | agg | ⬜ | — | — |
 | semantics_topics_keyphrases | agg | ⬜ | — | — |
