@@ -39,8 +39,17 @@ def _read_json(path: Path) -> dict:
 
 
 def _write_json(path: Path, payload: dict) -> None:
+    """Atomic write (tmp file + os.replace). Без этого конкурентные писатели (discover-процесс и
+    workers-процесс на одном поде оба вызывают build_runtime_config() при старте и пишут в один и
+    тот же runtime_dataset_campaign_20k.json) могут интерлевить свои write()-вызовы на сетевой
+    файловой системе (RunPod Network Volume / MooseFS не даёт тех же гарантий атомарности записи,
+    что локальный ext4) и породить битый JSON ("Extra data" при парсинге — баг воспроизведён и
+    исправлен 2026-07-16). os.replace — атомарный rename в пределах одной директории, гонки быть
+    не может: любой читатель либо видит старую полную версию, либо новую полную, никогда мешанину."""
     path.parent.mkdir(parents=True, exist_ok=True)
-    path.write_text(json.dumps(payload, ensure_ascii=False, indent=2), encoding="utf-8")
+    tmp_path = path.with_suffix(path.suffix + f".tmp{os.getpid()}")
+    tmp_path.write_text(json.dumps(payload, ensure_ascii=False, indent=2), encoding="utf-8")
+    os.replace(tmp_path, path)
 
 
 def _apply_parallel_colab_hf_tuning(config: dict, parallel: int) -> None:

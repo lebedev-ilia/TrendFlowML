@@ -3,6 +3,8 @@ from __future__ import annotations
 import argparse
 import json
 import os
+import time
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from typing import Dict
 
@@ -24,6 +26,7 @@ from fetcher.dataset_collector.discovery.rutube import RutubeDiscoveryAdapter
 from fetcher.dataset_collector.discovery.tiktok import TikTokDiscoveryAdapter
 from fetcher.dataset_collector.discovery.twitch import TwitchDiscoveryAdapter
 from fetcher.dataset_collector.discovery.youtube import YouTubeDiscoveryAdapter, YouTubeKeyPool
+from fetcher.services.youtube_data_client import QuotaExceededError
 from fetcher.dataset_collector.downloads import run_download_queue
 from fetcher.dataset_collector.hf_queues import (
     run_hf_enrich_upload_queue,
@@ -151,6 +154,28 @@ def command_init(args: argparse.Namespace) -> None:
     print(f"Wrote campaign template: {path}")
 
 
+def _sleep_until_quota_reset(min_wait_sec: int = 60) -> None:
+    """Спать до полуночи UTC — та же граница сброса, что использует YouTubeKeyPool._reset_if_new_day
+    (см. discovery/youtube.py). Чанками по ~1ч (не один блокирующий sleep), чтобы в логах было видно,
+    что процесс жив и ждёт, а не завис. Вызывается, когда ВЕСЬ пул API-ключей исчерпан
+    (QuotaExceededError) — раньше это ронятло процесс discover необработанным исключением
+    (см. FETCHER_DATASET_COLLECTOR_HANDOFF.md §6); теперь процесс сам ждёт и продолжает."""
+    now = datetime.now(timezone.utc)
+    reset_at = (now + timedelta(days=1)).replace(hour=0, minute=0, second=5, microsecond=0)
+    remaining = max(min_wait_sec, (reset_at - now).total_seconds())
+    chunk = 3600.0
+    while remaining > 0:
+        wait = min(chunk, remaining)
+        print(
+            f"[discover] Квота YouTube API исчерпана всем пулом ключей. Жду сброса "
+            f"(~{remaining / 3600:.1f}ч, полночь UTC ~{reset_at.isoformat()}) — процесс НЕ падает, "
+            f"продолжит сам после сброса.",
+            flush=True,
+        )
+        time.sleep(wait)
+        remaining -= wait
+
+
 def _youtube_key_pool(state: DatasetState, args: argparse.Namespace):
     config = args._campaign_config
     keys_path = getattr(args, "youtube_keys", None) or (config.youtube_keys_file if config else None)
@@ -201,25 +226,54 @@ def command_discover(args: argparse.Namespace) -> None:
         progress=progress,
     )
     categories = [args.category] if args.category else [category.name for category in config.categories]
-    try:
-        total = collector.discover_campaign(categories, limit=args.limit)
-    except Exception as exc:
-        state.flush_all_pending(shard_size=config.shard_size)
-        if config.hf_upload_enabled:
-            scan_shards_for_hf_upload(state, category=args.category)
-            run_hf_shard_upload_queue(state, config, category=args.category)
-        checkpoint = state.load_checkpoint()
-        _push_hf_progress(state, config, args)
-        print(
-            json.dumps(
-                {
-                    "error": str(exc),
-                    "checkpoint": jsonable(checkpoint.dict()) if checkpoint else None,
-                },
-                ensure_ascii=False,
+    total = None
+    while total is None:
+        try:
+            total = collector.discover_campaign(categories, limit=args.limit)
+        except QuotaExceededError as exc:
+            # Весь пул API-ключей исчерпан на сегодня — это ОЖИДАЕМО при непрерывной работе (не баг),
+            # раньше ронятло процесс необработанным исключением (см. handoff §6). Сохраняем прогресс,
+            # ждём сброса квоты (полночь UTC) и продолжаем В ТОМ ЖЕ процессе с чекпоинта — без падения
+            # и без необходимости внешнего перезапуска.
+            state.flush_all_pending(shard_size=config.shard_size)
+            if config.hf_upload_enabled:
+                scan_shards_for_hf_upload(state, category=args.category)
+                run_hf_shard_upload_queue(state, config, category=args.category)
+            checkpoint = state.load_checkpoint()
+            _push_hf_progress(state, config, args)
+            print(
+                json.dumps(
+                    {
+                        "quota_exhausted": True,
+                        "waiting_for_reset": True,
+                        "error": str(exc),
+                        "checkpoint": jsonable(checkpoint.dict()) if checkpoint else None,
+                    },
+                    ensure_ascii=False,
+                ),
+                flush=True,
             )
-        )
-        raise
+            _sleep_until_quota_reset()
+            # key_pool._select_key() сам вызывает _reset_all_if_new_day() на каждый вызов — не нужно
+            # пересоздавать collector/key_pool, просто повторяем discover_campaign с тем же checkpoint.
+            continue
+        except Exception as exc:
+            state.flush_all_pending(shard_size=config.shard_size)
+            if config.hf_upload_enabled:
+                scan_shards_for_hf_upload(state, category=args.category)
+                run_hf_shard_upload_queue(state, config, category=args.category)
+            checkpoint = state.load_checkpoint()
+            _push_hf_progress(state, config, args)
+            print(
+                json.dumps(
+                    {
+                        "error": str(exc),
+                        "checkpoint": jsonable(checkpoint.dict()) if checkpoint else None,
+                    },
+                    ensure_ascii=False,
+                )
+            )
+            raise
     if config.hf_upload_enabled:
         scan_shards_for_hf_upload(state, category=args.category)
         run_hf_shard_upload_queue(state, config, category=args.category)

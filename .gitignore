@@ -88,6 +88,10 @@ automation/.session_start
 automation/runner/_archive_pre_merge_*/
 /state/
 
+# --- Fetcher-инфраструктура (рантайм-состояние + SSH-ключ подов) ---
+automation/fetcher/state/
+automation/fetcher/ssh/
+
 # --- Celery рантайм-локи ---
 backend/celerybeat-schedule-shm
 backend/celerybeat-schedule-wal
