@@ -25,6 +25,7 @@ class YouTubeKeyState:
     used_units: int = 0
     disabled_until: Optional[str] = None
     last_error: Optional[str] = None
+    quota_date: Optional[str] = None
 
 
 class YouTubeKeyPool:
@@ -46,6 +47,32 @@ class YouTubeKeyPool:
             raise ValueError("YouTubeKeyPool requires at least one API key")
         self._load()
 
+    @staticmethod
+    def _today_utc() -> str:
+        return datetime.now(timezone.utc).date().isoformat()
+
+    def _reset_if_new_day(self, state: YouTubeKeyState) -> bool:
+        """Google resets each key's daily quota every 24h. Our persisted
+        used_units must roll over too, otherwise a key that ever crossed
+        daily_quota_limit stays excluded from the pool forever (see bug
+        report: all 49 keys permanently exhausted after ~2 days)."""
+        today = self._today_utc()
+        if state.quota_date != today:
+            state.used_units = 0
+            state.disabled_until = None
+            state.last_error = None
+            state.quota_date = today
+            return True
+        return False
+
+    def _reset_all_if_new_day(self) -> None:
+        changed = False
+        for state in self.states.values():
+            if self._reset_if_new_day(state):
+                changed = True
+        if changed:
+            self._save()
+
     def get_client(self) -> YouTubeDataClient:
         state = self._select_key()
         remaining = max(self.daily_quota_limit - state.used_units, 1)
@@ -60,6 +87,7 @@ class YouTubeKeyPool:
 
     def record_success(self, api_key: str, units: int | None = None) -> None:
         state = self.states[api_key]
+        self._reset_if_new_day(state)
         state.used_units += units or 0
         state.last_error = None
         self._save()
@@ -68,6 +96,7 @@ class YouTubeKeyPool:
         if is_comments_disabled_error(error):
             return
         state = self.states[api_key]
+        self._reset_if_new_day(state)
         state.last_error = str(error)[:500]
         err_str = str(error)
         if isinstance(error, QuotaExceededError) or "quota" in err_str.lower():
@@ -83,6 +112,7 @@ class YouTubeKeyPool:
         self._save()
 
     def _select_key(self) -> YouTubeKeyState:
+        self._reset_all_if_new_day()
         now = utcnow()
         candidates = []
         for state in self.states.values():
@@ -112,6 +142,7 @@ class YouTubeKeyPool:
         self.state_path.write_text(json.dumps(payload, ensure_ascii=False, indent=2), encoding="utf-8")
 
     def quota_stats(self) -> dict[str, int]:
+        self._reset_all_if_new_day()
         now = utcnow()
         available = 0
         total_used = 0
