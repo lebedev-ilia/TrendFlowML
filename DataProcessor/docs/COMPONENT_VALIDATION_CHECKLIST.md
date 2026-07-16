@@ -86,9 +86,9 @@
 | speaker_turn_embeddings_aggregator | seq/agg | ✅ | v1.3.0 | REPORT_2026-07-17.md |
 | asr_text_proxy_audio_features | agg | ✅ | v1.2.0 | REPORT_2026-07-17.md |
 | lexico_static_features | agg | ✅ | v1.2.0 (авто-штамп 07-17) | [REPORT_2026-07-17.md](component_reports/lexico_static_features/REPORT_2026-07-17.md): CPU-only, 67 tp_lex_* ключей. U1 28/28 OK; U3 14/67 std>0 (ожидаемо — конфиг/NaN-поля); U4 empty-path ✅; U5 golden 0.0; U6 ✅. C1 emoji_diversity NaN by design; C2 NER-заглушка NaN by design; C4 transcript NaN без ASR. Баги не найдены. Авто-штамп 100% PASS |
-| semantics_topics_keyphrases | agg | ⬜ | — | — |
+| semantics_topics_keyphrases | agg | ✅ | v2.1.0 (авто-штамп 07-17) | [REPORT_2026-07-17.md](component_reports/semantics_topics_keyphrases/REPORT_2026-07-17.md): 116 tp_topics_* ключей. Баг import torch исправлен. U1 27/27 OK; U3 5 уник. top1_id; U4 disabled+empty ✅; U5 golden 0.0; U6 6 сценариев разных длин ✅. C1–C4 NaN-политика by design. Авто-штамп 100% PASS |
 | semantic_cluster_extractor | agg | ✅ | v1.3.0 | REPORT_2026-07-16.md |
-| cosine_metrics_extractor | agg | ⬜ | — | — |
+| cosine_metrics_extractor | agg | ✅ | v1.3.0 (авто-штамп 07-17) | [REPORT_2026-07-17.md](component_reports/cosine_metrics_extractor/REPORT_2026-07-17.md): CPU-only numpy, 39 tp_cos_* ключей. U1 28/28 OK; U3 косинусы ∈[0.73,0.88] при present=1, NaN at absent by design; U4 empty ✅; U5 golden max|Δ|=0; U6 matrix-mode+mismatch+zero-norm ✅. C1 28/28 OK; C2 min=0.73 ≥ 0.6; C3 one-hot sum ∈{0,1}; C4 ровно 5 NaN by design. Авто-штамп 100% PASS |
 | embedding_stats_extractor | agg | ⬜ | — | — |
 | embedding_shift_indicator_extractor | agg | ⬜ | — | — |
 | embedding_source_id_extractor | agg | ⬜ | — | — |
