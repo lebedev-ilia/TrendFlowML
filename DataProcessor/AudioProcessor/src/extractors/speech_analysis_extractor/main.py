@@ -427,11 +427,9 @@ class SpeechAnalysisExtractor(BaseExtractor):
                     raise RuntimeError(f"speech_analysis | failed to probe audio for silence detection: {e} (error_code={error_code})") from e
 
                 if peak < self.silence_peak_threshold and rms < self.silence_rms_threshold:
-                    # Используем стандартное empty_reason из каноничного словаря
-                    # (audio_silent - специфичная причина, но предпочтительно использовать стандартное значение)
                     payload: Dict[str, Any] = {
                         "status": "empty",
-                        "empty_reason": "audio_missing_or_extract_failed",  # Стандартное значение из каноничного словаря
+                        "empty_reason": "audio_silent",  # Аналог speaker_diarization/emotion_diarization/source_separation
                         "duration_sec": float(dur_sec),
                         "sample_rate": int(self.sample_rate),
                         "device_used": self.device,

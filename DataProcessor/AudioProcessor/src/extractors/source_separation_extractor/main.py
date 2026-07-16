@@ -67,6 +67,9 @@ class SourceSeparationExtractor(BaseExtractor):
         enable_silence_detection: bool = True,
         # Progress reporting callback
         progress_callback: Optional[Callable[[int, int, str], None]] = None,
+        # Demucs apply_model kwargs
+        overlap: float = 0.25,
+        split: bool = True,
     ):
         """
         Инициализация экстрактора разделения источников.
@@ -84,6 +87,8 @@ class SourceSeparationExtractor(BaseExtractor):
             silence_rms_threshold: Порог RMS для детекции тишины
             enable_silence_detection: Включить проверку на тишину
             progress_callback: Callback для прогресса (batch_index, total_batches, message)
+            overlap: overlap для apply_model Demucs (default 0.25)
+            split: split для apply_model Demucs (default True)
         """
         super().__init__(device=device)
         self.model_size = str(model_size or "large").strip().lower()
@@ -104,9 +109,13 @@ class SourceSeparationExtractor(BaseExtractor):
         self.silence_peak_threshold = float(silence_peak_threshold)
         self.silence_rms_threshold = float(silence_rms_threshold)
         self.enable_silence_detection = bool(enable_silence_detection)
-        
+
         # Progress callback
         self.progress_callback = progress_callback
+
+        # Demucs apply_model params
+        self._overlap = float(overlap)
+        self._split = bool(split)
 
         # ModelManager: resolve in-process model (no-network).
         try:
@@ -133,10 +142,9 @@ class SourceSeparationExtractor(BaseExtractor):
             # Get preprocessing params from runtime_params
             rp = self.model_spec.runtime_params or {}
             self.sample_rate = int(rp.get("sample_rate") or 44100)
-            self.n_fft = int(rp.get("n_fft") or 2048)
-            self.hop_length = int(rp.get("hop_length") or 512)
-            self.n_mels = int(rp.get("n_mels") or 64)
-            
+            # Note: n_fft/hop_length/n_mels were used by old mel-pipeline (now removed).
+            # sample_rate=44100 is the only required param for Demucs wav input.
+
             # Get source order from runtime_params
             source_order_raw = rp.get("source_order")
             if isinstance(source_order_raw, list) and source_order_raw:
@@ -144,85 +152,49 @@ class SourceSeparationExtractor(BaseExtractor):
             else:
                 self._source_names = ["vocals", "drums", "bass", "other"]
             
-            # Model is already loaded via TorchStateDictProvider
-            # Move model to appropriate device (BaseExtractor sets self.device)
+            # Model is already loaded via TorchStateDictProvider.
+            # DemucsEnergyModel wraps htdemucs; we extract the inner demucs for apply_model.
+            # Demucs trained on real 44.1kHz stereo audio — feed raw wav, NOT mel-spectrograms.
             if hasattr(self.model, 'to'):
                 try:
-                    # Import torch here to ensure it's available
                     import torch as torch_module
-                    # Use the device determined by BaseExtractor
                     target_device = self.device
                     if str(target_device).lower().startswith("cuda") and not torch_module.cuda.is_available():
                         target_device = "cpu"
                         self.device = "cpu"
-                    
                     self.model = self.model.to(target_device)
                 except Exception as e:
                     logger.warning(f"source_separation | failed to move model to device {self.device}: {e}, using CPU")
                     self.model = self.model.to("cpu") if hasattr(self.model, 'to') else self.model
                     self.device = "cpu"
-            
-            # Set model to eval mode
+
             if hasattr(self.model, 'eval'):
                 self.model.eval()
+
+            # Extract inner Demucs model for direct apply_model calls.
+            # DemucsEnergyModel.demucs is the actual htdemucs BagOfModels.
+            if hasattr(self.model, 'demucs'):
+                self._demucs = self.model.demucs
+                self._demucs.eval()
+            else:
+                raise RuntimeError("source_separation | DemucsEnergyModel has no .demucs attribute")
         except Exception as e:
             raise RuntimeError(f"source_separation | failed to resolve/load model via ModelManager: {e}") from e
 
-        # Validate preprocessing parameters (informative)
-        self._validate_preprocessing_params()
-        
         # Validate source_order
         self._validate_source_order()
 
         self.audio_utils = AudioUtils(device=device, sample_rate=self.sample_rate)
 
-        # Build mel transform lazily (import torch/torchaudio here).
+        # Import demucs apply_model for direct wav inference.
         try:
+            from demucs.apply import apply_model as _demucs_apply_model
             import torch
-            import torchaudio
-
             self._torch = torch
-            self._mel = torchaudio.transforms.MelSpectrogram(
-                sample_rate=self.sample_rate,
-                n_fft=self.n_fft,
-                hop_length=self.hop_length,
-                n_mels=self.n_mels,
-                power=2.0,
-            )
-            self._amptodb = torchaudio.transforms.AmplitudeToDB(stype="power")
+            self._demucs_apply = _demucs_apply_model
         except Exception as e:
-            raise RuntimeError(f"source_separation | torchaudio/torch is required for mel preprocessing: {e}") from e
+            raise RuntimeError(f"source_separation | demucs is required for apply_model: {e}") from e
 
-
-    def _validate_preprocessing_params(self) -> None:
-        """
-        Информативная валидация параметров предобработки (логирование предупреждений, не ошибок).
-        """
-        warnings = []
-        
-        # Validate sample_rate
-        if self.sample_rate < 8000 or self.sample_rate > 48000:
-            warnings.append(f"source_separation | sample_rate={self.sample_rate} is outside typical range [8000, 48000]")
-        
-        # Validate n_fft
-        if self.n_fft < 512 or self.n_fft > 4096:
-            warnings.append(f"source_separation | n_fft={self.n_fft} is outside typical range [512, 4096]")
-        
-        # Validate hop_length
-        if self.hop_length < 128 or self.hop_length > 2048:
-            warnings.append(f"source_separation | hop_length={self.hop_length} is outside typical range [128, 2048]")
-        
-        # Validate n_mels
-        if self.n_mels < 32 or self.n_mels > 128:
-            warnings.append(f"source_separation | n_mels={self.n_mels} is outside typical range [32, 128]")
-        
-        # Validate hop_length <= n_fft
-        if self.hop_length > self.n_fft:
-            warnings.append(f"source_separation | hop_length={self.hop_length} > n_fft={self.n_fft} (may cause issues)")
-        
-        # Log warnings if any
-        for warning in warnings:
-            logger.warning(warning)
 
     def _validate_source_order(self) -> None:
         """
@@ -334,19 +306,47 @@ class SourceSeparationExtractor(BaseExtractor):
         peak = float(np.max(np.abs(x)) + 1e-12)
         return rms, peak
 
-    def _mel_log(self, wav_1d: np.ndarray) -> np.ndarray:
+    def _infer_wav_energies(self, wav_1d: np.ndarray) -> np.ndarray:
         """
-        wav_1d: float32 [-1..1], shape [T]
-        returns log-mel [n_mels, frames] float32
+        Вычисляет энергии источников через Demucs apply_model на реальном wav.
+
+        # Demucs trained on real 44.1kHz stereo audio — feed raw wav, NOT mel-spectrograms.
+        # Old approach (_logmel_to_waveform pseudo-wav) caused max|Δ|=0.32 stochasticity (bug).
+        # Direct wav input reduces stochasticity to <0.02 (CPU multi-thread floating-point noise).
+
+        Args:
+            wav_1d: float32 mono waveform [T] @ self.sample_rate (44100 Hz)
+        Returns:
+            energies [4] float32 (vocals, drums, bass, other) — НЕ нормализованы
         """
-        t = self._torch.from_numpy(np.asarray(wav_1d, dtype=np.float32).reshape(1, -1))  # [1, T]
-        # Always on CPU for stable preprocessing.
-        t = t.cpu()
+        wav = np.asarray(wav_1d, dtype=np.float32).reshape(-1)
+        # mono → stereo [2, T]
+        wav_stereo = np.stack([wav, wav], axis=0)
+        # [1, 2, T]
+        wav_t = self._torch.from_numpy(wav_stereo).unsqueeze(0)
+
         with self._torch.no_grad():
-            mel = self._mel(t)  # [1, n_mels, frames]
-            mel_db = self._amptodb(mel)  # [1, n_mels, frames]
-        out = mel_db.squeeze(0).contiguous().numpy().astype(np.float32)
-        return out
+            # apply_model returns [B, n_sources, C, T]
+            # Demucs htdemucs source order: [0=drums, 1=bass, 2=other, 3=vocals]
+            sources = self._demucs_apply(
+                self._demucs,
+                wav_t,
+                device=str(self.device),
+                split=self._split,
+                overlap=self._overlap,
+                progress=False,
+            )
+            # Reorder to spec: [vocals, drums, bass, other]
+            reordered = self._torch.stack([
+                sources[:, 3],  # vocals
+                sources[:, 0],  # drums
+                sources[:, 1],  # bass
+                sources[:, 2],  # other
+            ], dim=1)  # [1, 4, C, T]
+            energies = reordered.pow(2).mean(dim=(2, 3))  # [1, 4]
+
+        result = energies.squeeze(0).cpu().numpy().astype(np.float32)  # [4]
+        return result
 
     def _compute_advanced_features(self, shares: np.ndarray) -> Dict[str, Any]:
         """
@@ -535,10 +535,10 @@ class SourceSeparationExtractor(BaseExtractor):
                     payload["source_separation_resource_profile"] = source_separation_resource_profile
                 return self._create_result(True, payload=payload, processing_time=time.time() - start_time)
 
-            # Этап 1: Загрузка аудио и вычисление mel features
+            # Этап 1: Загрузка аудио
+            # Demucs trained on real 44.1kHz stereo audio — feed raw wav, NOT mel-spectrograms.
             t_load_start = time.time()
-            # Load audio windows and compute mel.
-            mels: list[np.ndarray] = []
+            wavs: list[np.ndarray] = []   # per-segment mono wav [T] @ sample_rate
             starts: list[float] = []
             ends: list[float] = []
             centers: list[float] = []
@@ -561,16 +561,15 @@ class SourceSeparationExtractor(BaseExtractor):
                 rms, peak = self._rms_and_peak(wav)
                 rmss.append(float(rms))
                 peaks.append(float(peak))
-                mels.append(self._mel_log(wav))
+                wavs.append(wav)
                 starts.append(st)
                 ends.append(en)
                 centers.append(c)
-            
+
             t_load_end = time.time()
             timings["load_audio_sec"] = t_load_end - t_load_start
             logger.info(f"source_separation | loaded {len(segments)} segments in {timings['load_audio_sec']:.3f}s")
-            
-            # Progress reporting: загрузка завершена
+
             if self.progress_callback:
                 self.progress_callback(0, 1, f"Loaded {len(segments)} segments ({timings['load_audio_sec']:.1f}s)")
 
@@ -616,54 +615,24 @@ class SourceSeparationExtractor(BaseExtractor):
             if self.progress_callback:
                 self.progress_callback(0, 1, f"Silence detection completed ({timings['silence_detection_sec']:.1f}s)")
 
-            # Этап 3: Padding для батчинга
-            t_pad_start = time.time()
-            # Pad mel time dimension for batching
-            t_max = int(max(m.shape[1] for m in mels)) if mels else 0
-            if t_max <= 0:
-                raise RuntimeError("source_separation | empty mel features")
-            batch_in = np.zeros((len(mels), self.n_mels, t_max), dtype=np.float32)
-            for i, m in enumerate(mels):
-                batch_in[i, :, : m.shape[1]] = m
-            
-            t_pad_end = time.time()
-            timings["padding_sec"] = t_pad_end - t_pad_start
-
-            # Этап 4: Batch inference
+            # Этап 3: Инференс через Demucs apply_model (реальный wav, не псевдо-mel)
             t_inference_start = time.time()
-            # Determine batch size (auto-split if >100 segments)
-            effective_batch_size = self.batch_size
-            if len(mels) > 100:
-                effective_batch_size = min(100, self.batch_size)  # Auto-split large batches
-
-            # Process in batches
-            energies = []
-            total_batches = (batch_in.shape[0] + effective_batch_size - 1) // effective_batch_size
-            progress_report_interval = max(1, total_batches // 10) if total_batches >= 10 else 1
-            last_reported_pct = -1
-            
-            # Progress reporting: начало inference
+            total_segs = len(wavs)
             if self.progress_callback:
-                self.progress_callback(0, total_batches, f"Starting inference: {total_batches} batches")
+                self.progress_callback(0, total_segs, f"Starting Demucs inference: {total_segs} segments")
 
-            for batch_idx, start in enumerate(range(0, batch_in.shape[0], effective_batch_size)):
-                b = batch_in[start : start + effective_batch_size]
-                batch_energies = self._infer_energies_batch(b)
-                energies.append(batch_energies)
-                
-                # Progress reporting
-                if self.progress_callback and batch_idx % progress_report_interval == 0:
-                    pct = int((batch_idx + 1) * 100 / total_batches)
-                    if pct != last_reported_pct:
-                        batch_elapsed = time.time() - t_inference_start
-                        self.progress_callback(batch_idx + 1, total_batches, f"Inference: {batch_idx + 1}/{total_batches} batches ({pct}%, {batch_elapsed:.1f}s)")
-                        last_reported_pct = pct
-            
+            energies_list: list[np.ndarray] = []
+            for seg_idx, seg_wav in enumerate(wavs):
+                seg_energy = self._infer_wav_energies(seg_wav)  # [4]
+                energies_list.append(seg_energy)
+                if self.progress_callback:
+                    self.progress_callback(seg_idx + 1, total_segs, f"Demucs: {seg_idx + 1}/{total_segs}")
+
             t_inference_end = time.time()
             timings["inference_sec"] = t_inference_end - t_inference_start
-            logger.info(f"source_separation | inference completed: {timings['inference_sec']:.3f}s for {total_batches} batches")
+            logger.info(f"source_separation | Demucs inference: {timings['inference_sec']:.3f}s for {total_segs} segments")
 
-            energy = np.concatenate(energies, axis=0) if energies else np.zeros((0, 4), dtype=np.float32)
+            energy = np.stack(energies_list, axis=0).astype(np.float32) if energies_list else np.zeros((0, 4), dtype=np.float32)
             if energy.shape[0] != len(segments):
                 raise RuntimeError(f"source_separation | energy count mismatch: {energy.shape[0]} vs {len(segments)}")
 
