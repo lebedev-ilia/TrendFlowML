@@ -78,8 +78,8 @@
 | title_embedder | emb | ✅ | v1.2.0 | REPORT_2026-07-16.md |
 | description_embedder | emb | ✅ | v1.x | REPORT_2026-07-16.md |
 | hashtag_embedder | emb | ✅ | v1.x | REPORT_2026-07-16.md |
-| tags_extractor | agg | ⬜ | — | — |
-| transcript_aggregator | agg | ⬜ | — | — |
+| tags_extractor | agg | ✅ | v1.2.0 | REPORT_2026-07-17.md |
+| transcript_aggregator | agg | ✅ | v1.3.0 | REPORT_2026-07-17.md |
 | transcript_chunk_embedder | seq (emb) | ✅ | v1.3.0 | REPORT_2026-07-16.md |
 | comments_aggregator | agg | ⬜ | — | — |
 | comments_embedder | emb | ✅ | v1.3.0 | REPORT_2026-07-16.md |
