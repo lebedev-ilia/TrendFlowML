@@ -45,10 +45,23 @@ def send(text: str) -> None:
         pass
 
 
+def _lifecycle(summary: dict | None) -> dict:
+    """Реальная схема summary.json (подтверждена на живом поде 2026-07-16):
+    {"totals": {"lifecycle": {accepted, enriched, downloaded_or_on_hf, lag_download, lag_enrich,
+    lag_hf_video, lag_hf_enrich, ...}, "videos": {...}, "shards": {...}}, "by_category": {name: {...}}}
+    НЕ "counters"/"category_counters" верхнего уровня — это была ошибочная догадка при первом
+    написании отчёта (без живых данных под рукой), из-за которой отчёт слал одни "?"."""
+    if not summary:
+        return {}
+    return (summary.get("totals") or {}).get("lifecycle") or {}
+
+
 def _fmt_summary(pod_name: str, summary: dict | None) -> str:
     if summary is None:
         return f"  {pod_name}: нет данных (кампания ещё не запущена или SSH недоступен)"
-    c = summary.get("counters") or summary
+    c = _lifecycle(summary)
+    if not c:
+        return f"  {pod_name}: summary.json есть, но пустой/непривычной формы"
     accepted = c.get("accepted", "?")
     enriched = c.get("enriched", "?")
     downloaded = c.get("downloaded_or_on_hf", "?")
@@ -63,12 +76,20 @@ def _fmt_summary(pod_name: str, summary: dict | None) -> str:
 def _category_breakdown(summary: dict | None) -> str:
     if not summary:
         return ""
-    cats = summary.get("category_counters") or summary.get("categories")
+    cats = summary.get("by_category")
     if not cats:
         return ""
+    def _accepted(item):
+        lc = (item[1] or {}).get("lifecycle") or {}
+        try:
+            return -int(lc.get("accepted") or 0)
+        except Exception:
+            return 0
     lines = []
-    for name, n in sorted(cats.items(), key=lambda kv: -(kv[1] if isinstance(kv[1], (int, float)) else 0))[:6]:
-        lines.append(f"    {name}: {n}")
+    for name, entry in sorted(cats.items(), key=_accepted)[:6]:
+        lc = (entry or {}).get("lifecycle") or {}
+        lines.append(f"    {name}: accepted={lc.get('accepted', '?')} enriched={lc.get('enriched', '?')} "
+                    f"on_hf={lc.get('downloaded_or_on_hf', '?')}")
     return "\n".join(lines)
 
 
@@ -86,7 +107,7 @@ def build_report() -> str:
         lines.append(_fmt_summary(pod_name, summary))
         if summary:
             any_data = True
-            c = summary.get("counters") or summary
+            c = _lifecycle(summary)
             try:
                 total_accepted = max(total_accepted, int(c.get("accepted") or 0))
             except Exception:
