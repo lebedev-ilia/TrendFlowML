@@ -57,13 +57,26 @@ def append_jsonl(path: Path, payload: Any) -> None:
 
 
 def iter_jsonl(path: Path) -> Iterator[dict]:
+    """Читает JSONL построчно, устойчиво к битым строкам.
+
+    Баг найден 2026-07-16 (fetcher-worker-b, upload-hf-videos): одна невалидная строка (например,
+    строка из одного BOM-символа \\ufeff — он НЕ считается пробелом для str.strip(), поэтому раньше
+    проходил проверку `if line:` и падал на json.loads с "Expecting value: line 1 column 1 (char 0)")
+    ронял ВЕСЬ load_hf_video_upload_done() и, соответственно, весь проход воркера — каждые ~2 минуты,
+    без дозагрузки данных. `encoding="utf-8-sig"` снимает BOM в начале файла; try/except на строку
+    защищает от любой другой единичной порчи (например, гонка при неатомарной записи) — плохая строка
+    пропускается, а не рушит чтение остальных (валидных) тысяч строк."""
     if not path.exists():
         return
-    with path.open("r", encoding="utf-8") as fh:
+    with path.open("r", encoding="utf-8-sig") as fh:
         for line in fh:
             line = line.strip()
-            if line:
+            if not line:
+                continue
+            try:
                 yield json.loads(line)
+            except json.JSONDecodeError:
+                continue
 
 
 @contextmanager

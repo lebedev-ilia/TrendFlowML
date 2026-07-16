@@ -81,12 +81,19 @@ def is_video_unavailable_error(exc_or_text: Exception | str) -> bool:
 
 
 def iter_download_queue(path: Path) -> Iterable[dict]:
+    """encoding=utf-8-sig + skip-on-JSONDecodeError: см. state.py::iter_jsonl (баг 2026-07-16) —
+    одна битая строка (BOM/торн-запись) не должна ронять весь проход воркера."""
     if not path.exists():
         return
-    with path.open("r", encoding="utf-8") as fh:
+    with path.open("r", encoding="utf-8-sig") as fh:
         for line in fh:
-            if line.strip():
+            line = line.strip()
+            if not line:
+                continue
+            try:
                 yield json.loads(line)
+            except json.JSONDecodeError:
+                continue
 
 
 def scan_metadata_shards_for_downloads(

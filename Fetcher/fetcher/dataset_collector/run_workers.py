@@ -7,6 +7,7 @@ import subprocess
 import sys
 import threading
 import time
+import traceback
 from pathlib import Path
 from typing import List
 
@@ -143,6 +144,7 @@ def _queue_worker_daemon(
                 break
             except Exception as exc:
                 log.write(f"ERROR {type(exc).__name__}: {exc}\n")
+                log.write(traceback.format_exc())
                 log.flush()
                 if once or should_stop():
                     break

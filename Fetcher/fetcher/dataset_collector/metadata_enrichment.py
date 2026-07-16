@@ -53,13 +53,19 @@ def _enriched_marker() -> dict[str, str]:
 
 
 def iter_metadata_enrich_queue(path: Path) -> Iterable[dict]:
+    """encoding=utf-8-sig + skip-on-JSONDecodeError: см. state.py::iter_jsonl (баг 2026-07-16) —
+    одна битая строка (BOM/торн-запись) не должна ронять весь проход воркера."""
     if not path.exists():
         return
-    with path.open("r", encoding="utf-8") as fh:
+    with path.open("r", encoding="utf-8-sig") as fh:
         for line in fh:
             line = line.strip()
-            if line:
+            if not line:
+                continue
+            try:
                 yield json.loads(line)
+            except json.JSONDecodeError:
+                continue
 
 
 def fetch_ytdlp_info(
