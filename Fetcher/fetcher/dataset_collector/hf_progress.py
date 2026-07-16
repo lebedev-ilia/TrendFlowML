@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import json
 import os
+import time
 from dataclasses import dataclass
 from datetime import datetime, timezone
 from pathlib import Path
@@ -217,8 +218,15 @@ def _read_jsonl_rows(path: Path) -> list[dict]:
 
 
 def _write_jsonl_rows(path: Path, rows: Iterable[dict]) -> None:
+    """Уникальный tmp на процесс+момент (см. state.py::atomic_write_json — тот же паттерн уже был
+    там правильно сделан). Баг найден 2026-07-16: 5 воркер-демонов на одном поде параллельно тянут
+    прогресс из HF и мержат одни и те же локальные файлы (download_done.jsonl, hf_video_upload_done.jsonl
+    и т.д.) — общий `path.tmp` для всех писателей означал, что один процесс мог переименовать/забрать
+    tmp-файл ДО того, как другой процесс успевал сделать свой os.replace(), давая
+    FileNotFoundError на каждом почти проходе (не фатально — merge просто пропускался, но новые
+    данные с HF от других подов не подхватывались этим циклом)."""
     path.parent.mkdir(parents=True, exist_ok=True)
-    tmp = path.with_suffix(path.suffix + ".tmp")
+    tmp = path.with_name(f"{path.name}.{os.getpid()}.{time.time():.0f}.tmp")
     with tmp.open("w", encoding="utf-8") as fh:
         for row in rows:
             fh.write(json.dumps(jsonable(row), ensure_ascii=False))
