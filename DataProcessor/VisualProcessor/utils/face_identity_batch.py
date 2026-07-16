@@ -60,7 +60,7 @@ except ImportError:
 
 NAME = "core_face_identity"
 VERSION = "0.1"
-SCHEMA_VERSION = "core_face_identity_npz_v1"
+SCHEMA_VERSION = "core_face_identity_npz_v2"
 ARTIFACT_FILENAME = "face_identity.npz"
 FACE_CATEGORY = "face"
 TOP_K = 5

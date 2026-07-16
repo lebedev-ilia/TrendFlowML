@@ -436,43 +436,55 @@ Examples:
                 f"{NAME} | frames metadata missing required run identity keys: {missing}"
             )
         
-        # Initialize Embedding Service client for db_digest (fail-fast → EmbeddingServiceUnavailableError)
+        # Embedding Service — graceful для empty-path (нет лиц → db_digest best-effort, не fail-fast)
         embedding_client = EmbeddingServiceClient(
             base_url=args.embedding_service_url, timeout=args.http_timeout
         )
-        embedding_client._ensure_url()
-        
-        labels = embedding_client.get_labels(category=FACE_CATEGORY)
-        if not labels:
-            raise RuntimeError(
-                f"{NAME} | Embedding Service category '{FACE_CATEGORY}' has 0 labels (fail-fast)"
+        db_digest = ""
+        semantic_object_ids = np.asarray([], dtype="U")
+        semantic_label_names = np.asarray([], dtype="U")
+        embedding_model = ""
+        try:
+            embedding_client._ensure_url()
+            labels = embedding_client.get_labels(category=FACE_CATEGORY)
+            if labels:
+                def _canon_label_row_empty(r: Dict[str, Any]) -> Dict[str, Any]:
+                    return {
+                        "id": str(r.get("id") or ""),
+                        "name": str(r.get("name") or ""),
+                        "embedding_model": str(r.get("embedding_model") or ""),
+                        "embedding_dim": int(r.get("embedding_dim") or 0),
+                        "updated_at": str(r.get("updated_at") or ""),
+                    }
+                labels_canon_empty = [_canon_label_row_empty(r) for r in labels]
+                labels_canon_empty = [r for r in labels_canon_empty if r["id"]]
+                # Дедупликация по UUID (защита от дублей в ES-кеше)
+                _seen_uuids: set = set()
+                _labels_dedup = []
+                for _r in labels_canon_empty:
+                    if _r["id"] not in _seen_uuids:
+                        _seen_uuids.add(_r["id"])
+                        _labels_dedup.append(_r)
+                labels_canon_empty = _labels_dedup
+                if labels_canon_empty:
+                    labels_canon_empty.sort(key=lambda r: r["id"])
+                    db_digest = _sha256_hex(
+                        json.dumps(labels_canon_empty, ensure_ascii=False, sort_keys=True, separators=(",", ":"))
+                    )
+                    semantic_object_ids = np.asarray([r["id"] for r in labels_canon_empty], dtype="U")
+                    semantic_label_names = np.asarray(
+                        [f"{i}:{labels_canon_empty[i]['name']}" for i in range(len(labels_canon_empty))],
+                        dtype="U",
+                    )
+                    _embedding_models = sorted(
+                        {r["embedding_model"] for r in labels_canon_empty if r["embedding_model"]}
+                    )
+                    embedding_model = _embedding_models[0] if len(_embedding_models) == 1 else ""
+        except Exception as _es_err:
+            LOGGER.warning(
+                f"{NAME} | Embedding Service unavailable in empty-path (graceful): {_es_err}. "
+                "db_digest will be empty string."
             )
-        
-        def _canon_label_row(r: Dict[str, Any]) -> Dict[str, Any]:
-            return {
-                "id": str(r.get("id") or ""),
-                "name": str(r.get("name") or ""),
-                "embedding_model": str(r.get("embedding_model") or ""),
-                "embedding_dim": int(r.get("embedding_dim") or 0),
-                "updated_at": str(r.get("updated_at") or ""),
-            }
-        labels_canon = [_canon_label_row(r) for r in labels]
-        labels_canon = [r for r in labels_canon if r["id"]]
-        if not labels_canon:
-            raise RuntimeError(
-                f"{NAME} | Embedding Service returned invalid labels for '{FACE_CATEGORY}' (no ids)"
-            )
-        labels_canon.sort(key=lambda r: r["id"])
-        db_digest = _sha256_hex(
-            json.dumps(labels_canon, ensure_ascii=False, sort_keys=True, separators=(",", ":"))
-        )
-        semantic_object_ids = np.asarray([r["id"] for r in labels_canon], dtype="U")
-        semantic_label_names = np.asarray(
-            [f"{i}:{labels_canon[i]['name']}" for i in range(len(labels_canon))],
-            dtype="U",
-        )
-        embedding_models = sorted({r["embedding_model"] for r in labels_canon if r["embedding_model"]})
-        embedding_model = embedding_models[0] if len(embedding_models) == 1 else ""
         
         meta_out: Dict[str, Any] = {
             "producer": NAME,
@@ -644,6 +656,14 @@ Examples:
 
     labels_canon = [_canon_label_row(r) for r in labels]
     labels_canon = [r for r in labels_canon if r["id"]]
+    # Дедупликация по UUID (защита от дублей в ES-кеше при race/async добавлении)
+    _seen_uuids_main: set = set()
+    _labels_dedup_main = []
+    for _r in labels_canon:
+        if _r["id"] not in _seen_uuids_main:
+            _seen_uuids_main.add(_r["id"])
+            _labels_dedup_main.append(_r)
+    labels_canon = _labels_dedup_main
     if not labels_canon:
         raise RuntimeError(
             f"{NAME} | Embedding Service returned invalid labels for '{FACE_CATEGORY}' (no ids)"
@@ -866,13 +886,23 @@ Examples:
             f"{NAME} | frames metadata missing required run identity keys: {missing}"
         )
 
+    # Определяем статус и причину с учётом доступности ES
+    _faces_ok = total_faces_processed > 0
+    if _faces_ok:
+        _status, _empty_reason = "ok", None
+    elif not embedding_service_available:
+        _status, _empty_reason = "empty", "embedding_service_unavailable"
+    else:
+        # ES доступен, лица в видео есть, но 0 матчей в базе
+        _status, _empty_reason = "empty", "no_match_in_db"
+
     meta_out: Dict[str, Any] = {
         "producer": NAME,
         "producer_version": VERSION,
         "schema_version": SCHEMA_VERSION,
         "created_at": datetime.utcnow().isoformat() + "Z",
-        "status": "ok" if total_faces_processed > 0 else "empty",
-        "empty_reason": None if total_faces_processed > 0 else "no_faces_in_video",
+        "status": _status,
+        "empty_reason": _empty_reason,
     }
     
     # Required run identity fields

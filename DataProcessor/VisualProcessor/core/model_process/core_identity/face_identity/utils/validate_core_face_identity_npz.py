@@ -211,7 +211,8 @@ def validate_ranges(npz_path: str) -> List[str]:
             out.append(bad_row)
 
     ts = np.asarray(d["times_s"], dtype=np.float64).reshape(-1)
-    if int(ts.size) == n and n > 1 and np.any(np.diff(ts) < -1e-4):
+    n_ts = int(ts.size)
+    if n_ts > 1 and np.any(np.diff(ts) < -1e-4):
         out.append("times_s: не неубывающий ряд (union)")
 
     return out
