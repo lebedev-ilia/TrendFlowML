@@ -41,9 +41,15 @@ def _tabular_dict(d: Dict) -> Dict[str, float]:
 
 def _n_mels_from_tabular(td: Dict[str, float]) -> Optional[int]:
     if "n_mels" in td:
-        v = int(round(float(td["n_mels"])))
-        if v > 0:
-            return v
+        try:
+            v = float(td["n_mels"])
+        except (TypeError, ValueError):
+            return None
+        if not np.isfinite(v):  # NaN/inf при status=empty — пропускаем структурные проверки
+            return None
+        v_int = int(round(v))
+        if v_int > 0:
+            return v_int
     return None
 
 

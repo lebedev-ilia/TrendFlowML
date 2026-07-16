@@ -42,8 +42,14 @@ def _tabular_dict(d: Dict) -> Dict[str, float]:
 def _n_mfcc_from_tabular(td: Dict[str, float]) -> Optional[int]:
     if "n_mfcc" not in td:
         return None
-    v = int(round(float(td["n_mfcc"])))
-    return v if v > 0 else None
+    try:
+        v = float(td["n_mfcc"])
+    except (TypeError, ValueError):
+        return None
+    if not np.isfinite(v):  # NaN/inf при status=empty — пропускаем структурные проверки
+        return None
+    v_int = int(round(v))
+    return v_int if v_int > 0 else None
 
 
 def validate_schema(npz_path: str) -> bool:

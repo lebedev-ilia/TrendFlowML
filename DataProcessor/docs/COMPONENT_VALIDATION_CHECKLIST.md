@@ -59,7 +59,7 @@
 | loudness_extractor | seq | ✅ | **v2.1.1 (штамп 07-16)** | [REPORT 2026-07-16](component_reports/loudness_extractor/REPORT_2026-07-16.md): RMS/peak/dBFS + optional LUFS. 17 NPZ: ok=15, empty=2. U1–U6+C1–C3 все PASS: validate rc=0×17; segment_start монотонны; 17/18 finite (loudness_lufs=NaN by design — lufs_present=False, pyloudnorm optional); empty→fv NaN×18, seg_n=0; golden max\|Δfv\|=6.71e-08 (float32); 15 видео без падений. Авто-штамп 100% PASS |
 | spectral_extractor | seq | ✅ | **v-07-16 (штамп 07-16)** | [REPORT 2026-07-16](component_reports/spectral_extractor/REPORT_2026-07-16.md): 17 NPZ: ok=15, empty=2. U1–U6+C1–C2 PASS: validate rc=0×17; монотонны; fv_nan=0/46 (все finite!); empty fn=5/fv=[nan×4,0.0]; golden max\|Δ\|=0.0 (12 runs); seg_counts 5–30. Баги не найдены. Авто-штамп |
 | spectral_entropy_extractor | seq | ⬜ | — | — |
-| mel_extractor | seq | ⬜ | — | — |
+| mel_extractor | seq | ✅ | **v2.1.1 (штамп 07-16)** | [REPORT 2026-07-16](component_reports/mel_extractor/REPORT_2026-07-16.md): 17 NPZ (15 ok, 2 empty). **1 баг исправлен**: validate_mel.py::_n_mels_from_tabular NaN crash при --struct на empty NPZ (n_mels=NaN→ValueError) → добавлена isfinite-проверка. U1–U6+C1–C4 все PASS: validate rc=0×17; N-согласованы; nan=0/inf=0 на ok; config NaN в empty by design; **golden max\|Δ\|=0.0** (10 runs одного видео, torchaudio детерминирован); CV 158.7%/27.9%. mel_stability∈[0.82,0.9999]; mel_stats_vector size=512×15; mel_flatness∈(0,1]. Авто-штамп при 100% PASS |
 | mfcc_extractor | seq | ⬜ | — | — |
 | chroma_extractor | seq | ⬜ | — | — |
 | tempo_extractor | seq/agg | ⬜ | — | — |
