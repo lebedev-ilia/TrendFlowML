@@ -18,6 +18,16 @@ LOGDIR=/workspace/logs
 VENV=/workspace/venv
 mkdir -p "$LOGDIR" "$OUTPUT_DIR"
 
+# ffmpeg — системный пакет (НЕ на Network Volume, теряется при пересоздании контейнера пода),
+# нужен yt-dlp/pytubefix для склейки видео+аудио дорожек при скачивании. Идемпотентная проверка
+# на каждом запуске (баг найден 2026-07-16: без ffmpeg все download-воркеры падают в цикле).
+if ! command -v ffmpeg >/dev/null 2>&1; then
+  echo "[launch_role] ffmpeg не найден, ставлю..." >> "$LOGDIR/setup.log"
+  apt-get update -qq >> "$LOGDIR/setup.log" 2>&1
+  DEBIAN_FRONTEND=noninteractive apt-get install -y -qq ffmpeg >> "$LOGDIR/setup.log" 2>&1
+  echo "[launch_role] ffmpeg готов" >> "$LOGDIR/setup.log"
+fi
+
 # ВАЖНО: venv на Network Volume (/workspace), а НЕ системный pip3 — контейнер пода эфемерен
 # (пережил один раз необъяснимое пересоздание, см. deploy.py/README.md), а /workspace персистентен.
 # Системные пакеты (pip3 install без venv) теряются при пересоздании пода, venv на volume — нет.
