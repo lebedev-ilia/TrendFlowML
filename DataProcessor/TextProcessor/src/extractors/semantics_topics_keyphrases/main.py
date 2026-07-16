@@ -429,7 +429,6 @@ class SemanticTopicExtractor(BaseExtractor):
     def extract(self, doc: VideoDocument) -> Dict[str, Any]:
         import time
         import logging
-        import torch
 
         t0 = time.perf_counter()
         mem_before = process_memory_bytes()
@@ -538,6 +537,8 @@ class SemanticTopicExtractor(BaseExtractor):
         topics_ms = nan
         kp_encode_ms = nan
         db_weights_digest_for_extra = ""
+
+        import torch  # только здесь нужен — после disabled/empty-text выхода
 
         t_m0 = time.perf_counter()
         use_fp16 = "cuda" in self.device
