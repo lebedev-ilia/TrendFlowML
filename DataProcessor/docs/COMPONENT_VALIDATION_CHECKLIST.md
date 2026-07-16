@@ -84,8 +84,8 @@
 | comments_aggregator | agg | ✅ | v1.3.0 | REPORT_2026-07-17.md |
 | comments_embedder | emb | ✅ | v1.3.0 | REPORT_2026-07-16.md |
 | speaker_turn_embeddings_aggregator | seq/agg | ✅ | v1.3.0 | REPORT_2026-07-17.md |
-| asr_text_proxy_audio_features | agg | ⬜ | — | — |
-| lexico_static_features | agg | ⬜ | — | — |
+| asr_text_proxy_audio_features | agg | ✅ | v1.2.0 | REPORT_2026-07-17.md |
+| lexico_static_features | agg | ✅ | v1.2.0 (авто-штамп 07-17) | [REPORT_2026-07-17.md](component_reports/lexico_static_features/REPORT_2026-07-17.md): CPU-only, 67 tp_lex_* ключей. U1 28/28 OK; U3 14/67 std>0 (ожидаемо — конфиг/NaN-поля); U4 empty-path ✅; U5 golden 0.0; U6 ✅. C1 emoji_diversity NaN by design; C2 NER-заглушка NaN by design; C4 transcript NaN без ASR. Баги не найдены. Авто-штамп 100% PASS |
 | semantics_topics_keyphrases | agg | ⬜ | — | — |
 | semantic_cluster_extractor | agg | ✅ | v1.3.0 | REPORT_2026-07-16.md |
 | cosine_metrics_extractor | agg | ⬜ | — | — |
