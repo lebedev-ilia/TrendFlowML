@@ -73,15 +73,19 @@ def save_hpss_npz(
             if _sv is not None:
                 add(_sk, _sv)
     
-    # Metadata (always saved)
-    add("sample_rate", payload.get("sample_rate"))
-    add("n_fft", payload.get("n_fft"))
-    add("hop_length", payload.get("hop_length"))
-    add("duration", payload.get("duration"))
-    add("hpss_frames", payload.get("hpss_frames"))
-    add("hpss_kernel_size", payload.get("hpss_kernel_size"))
-    add("hpss_margin", payload.get("hpss_margin"))
-    add("hpss_power", payload.get("hpss_power"))
+    # Metadata — only when values are present (empty-path payload is empty → skip to keep F=0)
+    for _mk, _mv in [
+        ("sample_rate", payload.get("sample_rate")),
+        ("n_fft", payload.get("n_fft")),
+        ("hop_length", payload.get("hop_length")),
+        ("duration", payload.get("duration")),
+        ("hpss_frames", payload.get("hpss_frames")),
+        ("hpss_kernel_size", payload.get("hpss_kernel_size")),
+        ("hpss_margin", payload.get("hpss_margin")),
+        ("hpss_power", payload.get("hpss_power")),
+    ]:
+        if _mv is not None:
+            add(_mk, _mv)
     if "segments_count" in payload:
         add("segments_count", payload.get("segments_count"))
     

@@ -86,6 +86,9 @@ def validate_qa_rows(npz_path: str, qa: Any) -> List[str]:
 def validate_structure(npz_path: str) -> List[str]:
     out: List[str] = []
     d = load_npz(npz_path)
+    meta = extract_meta(d)
+    status = str(meta.get("status", ""))
+
     miss = [k for k in _SEGMENT_AXIS if k not in d]
     if miss:
         out.append(f"нет обязательных ключей: {miss}")
@@ -97,7 +100,8 @@ def validate_structure(npz_path: str) -> List[str]:
     for k, n in sizes.items():
         if n != n0:
             out.append(f"{k}: длина {n} != {n0} (строка сегмента)")
-    if n0 == 0:
+    if n0 == 0 and status != "empty":
+        # N=0 is expected-empty (audio_missing_or_extract_failed); skip for empty status.
         out.append("сегментные оси: длина 0 (для run_segments ожидается N>0)")
 
     for sk in ("hpss_harmonic_share_series", "hpss_percussive_share_series"):

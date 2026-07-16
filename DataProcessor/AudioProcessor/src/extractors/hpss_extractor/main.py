@@ -417,10 +417,13 @@ class HPSSExtractor(BaseExtractor):
                 p_stability = 1.0
             features["hpss_percussive_stability"] = p_stability
 
-            # Separation quality (based on residual energy)
+            # Separation quality (based on residual energy).
+            # NOTE: when margin > 1, librosa.decompose.hpss scales masks by margin,
+            # so H + P can exceed S_mag per-bin → residual can be negative → residual²
+            # can exceed S_mag² → raw value goes hugely negative.  We clip to [0, 1].
             residual = S_mag - H - P
             residual_energy = float(np.sum(residual ** 2))
-            separation_quality = float(1.0 - (residual_energy / (energy_total + 1e-12)))
+            separation_quality = float(np.clip(1.0 - (residual_energy / (energy_total + 1e-12)), 0.0, 1.0))
             features["hpss_separation_quality"] = separation_quality
 
             # Balance score (0.0-1.0, 0.5 = balanced)
