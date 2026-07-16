@@ -1,6 +1,13 @@
 #!/usr/bin/env python3
 """Агент-наблюдатель Fetcher (Третий бот, VK_TOKEN3, модель Haiku).
 
+Работает НА ТВОЁМ ПК (не на поде) — использует ту же Claude-подписку (OAuth-сессия `claude login`),
+что и agent_runner.py/assistant.py в automation/runner/. Постоянно поднят через systemd
+(fetcher-watchdog.service, см. README.md) — переживает перезагрузку ПК: systemd сам стартует сервис
+при загрузке (WantedBy=multi-user.target) и перезапускает при падении (Restart=on-failure). Внутреннего
+состояния между перезапусками почти нет (проверка раз в час читает живое состояние подов по SSH), так
+что просто продолжает работать как ни в чём не бывало.
+
 Раз в час (WATCHDOG_INTERVAL_SEC): SSH на все 3 пода, смотрит логи (discover.log, workers_*.log)
 и state/inventory/summary.json (см. deploy.py), решает — всё штатно (молчит) или есть проблема
 (зацикливание, ошибка ключей/квоты сверх нормы, аномальный рост queue_dead_letter, процесс не
@@ -17,7 +24,6 @@ from __future__ import annotations
 import asyncio
 import datetime as dt
 import random
-import time
 
 import requests
 from claude_agent_sdk import (
@@ -37,14 +43,19 @@ SYSTEM = (
     "У тебя есть: Bash/Read/Write/Edit в этом репозитории (automation/fetcher/ — твой код: "
     "deploy.py содержит готовые функции ssh_run/tail_logs/read_inventory_summary/kill_processes/"
     "pull_latest_code/launch — используй их через `python3 -c \"import deploy; ...\"` из директории "
-    "automation/fetcher/, не изобретай SSH-команды заново). Секреты — automation/fetcher/.env. "
+    "automation/fetcher/, не изобретай SSH-команды заново). ВАЖНО: kill_processes() использует "
+    "bracket-trick в pkill-паттернах ('[d]ataset_collector') — НЕ убирай скобки, без них pkill "
+    "матчит свою же командную строку и рвёт SSH-сессию сигналом (баг был найден и исправлен "
+    "2026-07-16, не повторяй его в собственных SSH-командах: если сам пишешь pkill/grep по SSH, "
+    "тоже используй bracket-trick на искомом слове). Секреты — automation/fetcher/.env. "
     "SSH-ключ — automation/fetcher/ssh/id_ed25519 (тот же паблик-ключ уже прописан RunPod автоматически "
     "во все поды аккаунта). Пароли/ID подов — automation/fetcher/state/provision_result.json. "
     "ПРОТОКОЛ ПРОВЕРКИ (раз в час): для каждого из 3 подов — deploy.tail_logs(pod) на ошибки "
-    "(QuotaExceededError — это НОРМА, код сам ждёт сброса, не считай багом; реальные проблемы — "
-    "traceback без восстановления, растущий queue_dead_letter, процесс не пишет в лог часами, "
-    "'yt-dlp enrich failed' резкий скачок, bot-detection постоянный) и deploy.read_inventory_summary(pod) "
-    "на lag_* метрики (растущий lag без движения — подозрительно). Всё штатно — НИЧЕГО не делай, "
+    "(QuotaExceededError — это НОРМА, код сам ждёт сброса, не считай багом; HF 429 Too Many Requests — "
+    "тоже норма, ретраится сам; bot_detection — штатная пауза; реальные проблемы — traceback без "
+    "восстановления, растущий queue_dead_letter, процесс не пишет в лог часами, ModuleNotFoundError/"
+    "FileNotFoundError, резкий скачок 'yt-dlp enrich failed') и deploy.read_inventory_summary(pod) на "
+    "lag_* метрики (растущий lag без движения — подозрительно). Всё штатно — НИЧЕГО не делай, "
     "заверши коротким итогом (1 строка). Есть проблема: (1) разберись в причине по логам/коду; "
     "(2) если можешь починить — правь код В ЭТОМ РЕПО (Fetcher/fetcher/dataset_collector/...), "
     "закоммить и запушь (git push — разрешено), затем deploy.pull_latest_code(pod) + "
@@ -128,7 +139,7 @@ CHECK_PROMPT = (
 
 async def _check_pass(model: str) -> str:
     parts = []
-    cost, tin, tout = 0.0, 0, 0
+    cost = 0.0
     async with ClaudeSDKClient(options=ClaudeAgentOptions(
         model=model, system_prompt=SYSTEM, cwd=str(config.REPO_DIR),
         allowed_tools=["Read", "Write", "Edit", "Bash", "Glob", "Grep"],

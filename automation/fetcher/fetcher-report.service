@@ -1,0 +1,17 @@
+[Unit]
+Description=TrendFlow Fetcher hourly report (чистый код, метрики по 3 подам, без LLM)
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=ilya
+WorkingDirectory=/home/ilya/Рабочий стол/TrendFlowML/automation/fetcher
+ExecStart=/bin/bash -lc 'cd "/home/ilya/Рабочий стол/TrendFlowML/automation/fetcher" && exec .venv/bin/python hourly_report.py --loop'
+Restart=on-failure
+RestartSec=30
+StartLimitIntervalSec=600
+StartLimitBurst=5
+
+[Install]
+WantedBy=multi-user.target

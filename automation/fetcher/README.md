@@ -34,15 +34,42 @@ for pod in ("fetcher-main", "fetcher-worker-b", "fetcher-worker-c"):
     print(pod, deploy.launch(pod, HF_TOKEN))
 ```
 
-## Мониторинг
+## Мониторинг — watchdog.py + hourly_report.py (Третий агент)
+
+Работают НА ТВОЁМ ПК (не на подах — нужен доступ к твоей Claude-подписке через `claude login`,
+которого на headless-поде нет), постоянно через systemd — переживают перезагрузку ПК так же, как
+`automation/runner/runner.service` для Первого агента: systemd сам поднимает сервис при загрузке
+(`WantedBy=multi-user.target`) и перезапускает при падении (`Restart=on-failure`). Внутреннего
+состояния между запусками почти нет — процессы просто продолжают опрашивать поды по SSH раз в час,
+рестарт/перезагрузка ПК не теряет прогресс (прогресс живёт на подах, не в watchdog).
+
+### Установка (один раз)
 
 ```bash
-cd automation/fetcher
-python3 -m venv .venv && source .venv/bin/activate && pip install -r requirements.txt
-cp .env.example .env   # заполнить RUNPOD_API_KEY (тот же, что у runner), VK_TOKEN3, HF_TOKEN
-python watchdog.py &        # Третий агент (Haiku) — почасовой анализ логов, брифинги при проблемах
-python hourly_report.py --loop &   # часовой отчёт метрик (код, не LLM)
+cd ~/Рабочий\ стол/TrendFlowML/automation/fetcher
+python3 -m venv .venv && source .venv/bin/activate
+pip install -r requirements.txt
+# .env уже заполнен (RUNPOD_API_KEY, VK_TOKEN3, HF_TOKEN) — проверь cat .env, если пусто см. .env.example
 ```
+
+### Автозапуск + автовосстановление после ребута (systemd)
+
+```bash
+sudo cp fetcher-watchdog.service /etc/systemd/system/
+sudo cp fetcher-report.service /etc/systemd/system/
+sudo systemctl daemon-reload
+sudo systemctl enable --now fetcher-watchdog
+sudo systemctl enable --now fetcher-report
+journalctl -u fetcher-watchdog -f     # лог живьём
+journalctl -u fetcher-report -f
+```
+
+`enable` — значит оба сервиса будут САМИ стартовать при каждой загрузке ПК, без ручного запуска.
+`Restart=on-failure` — если процесс упадёт (обрыв сети, временная ошибка), systemd поднимет его
+заново сам через 30с.
+
+Остановить: `sudo systemctl stop fetcher-watchdog fetcher-report`.
+Проверить статус: `systemctl status fetcher-watchdog`.
 
 ## Патч в самом Fetcher (2026-07-16)
 

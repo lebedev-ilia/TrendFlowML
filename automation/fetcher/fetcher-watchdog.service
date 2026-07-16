@@ -1,0 +1,18 @@
+[Unit]
+Description=TrendFlow Fetcher watchdog (Третий агент, наблюдатель за 3 CPU-подами сбора датасета)
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=ilya
+WorkingDirectory=/home/ilya/Рабочий стол/TrendFlowML/automation/fetcher
+# Путь содержит пробел/кириллицу — запускаем через bash -lc с кавычками, чтобы systemd не спотыкался.
+ExecStart=/bin/bash -lc 'cd "/home/ilya/Рабочий стол/TrendFlowML/automation/fetcher" && exec .venv/bin/python watchdog.py'
+Restart=on-failure
+RestartSec=30
+StartLimitIntervalSec=600
+StartLimitBurst=5
+
+[Install]
+WantedBy=multi-user.target
