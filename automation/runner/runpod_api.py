@@ -2,8 +2,18 @@
 
 Важный урок (2026-07-05): pod-id МЕНЯЕТСЯ при миграции. Поэтому останавливаем НЕ по
 захардкоженному id, а перечисляя все RUNNING-поды и гася каждый.
+
+КРИТИЧНО (2026-07-16): этот аккаунт RunPod держит поды ДВУХ независимых систем — ML-валидация
+(этот раннер, эфемерные GPU-поды) и Fetcher dataset collector (постоянные CPU-поды, отдельная
+инфраструктура, см. automation/fetcher/). Массовые операции (`stop_all_running`,
+`terminate_all_and_bill`) должны трогать ТОЛЬКО поды ЭТОГО раннера — иначе рабочий лимит/простой/
+крэш ML-агента случайно погасит вечные Fetcher-поды. Защита — через реестр `state/machines.json`
+(podmanager.py): под с `policy=="persistent"` или `kind` не GPU-шный считается ЧУЖИМ и исключается
+из `own_pods()`/массовых операций. Не создавай Fetcher-поды и другую постоянную инфраструктуру без
+немедленной регистрации через `podmanager.register(..., policy="persistent")` — иначе она не защищена.
 """
 from __future__ import annotations
+import json
 import time
 import requests
 
@@ -12,8 +22,37 @@ import budget
 
 HEADERS = lambda: {"Authorization": f"Bearer {config.RUNPOD_API_KEY}"}
 
+# Виды подов, которые массовые GPU-операции ЭТОГО раннера считают "своими". Всё остальное
+# (persistent policy, kind="fetcher"/"cpu"/... не входящий сюда) — чужая инфраструктура, не трогаем.
+_OWN_POD_KINDS = {"gpu", None}
+
+
+def _registry() -> dict:
+    try:
+        reg_path = config.STATE_DIR / "machines.json"
+        if reg_path.exists():
+            return json.loads(reg_path.read_text(encoding="utf-8"))
+    except Exception:
+        pass
+    return {}
+
+
+def _protected_pod_ids() -> set[str]:
+    """ID подов из реестра podmanager, которые НЕ принадлежат этому раннеру (persistent policy —
+    напр. Fetcher — или kind вне _OWN_POD_KINDS). См. предупреждение в шапке модуля."""
+    reg = _registry()
+    out = set()
+    for mid, m in reg.items():
+        if not isinstance(m, dict):
+            continue
+        if m.get("policy") == "persistent" or m.get("kind") not in _OWN_POD_KINDS:
+            out.add(mid)
+    return out
+
 
 def list_pods() -> list[dict]:
+    """ВСЕ поды аккаунта (включая чужую инфраструктуру) — для чтения/статуса. Для массовых
+    деструктивных операций используй own_pods(), не эту функцию напрямую."""
     r = requests.get(f"{config.RUNPOD_API}/pods", headers=HEADERS(), timeout=40)
     r.raise_for_status()
     data = r.json()
@@ -23,9 +62,17 @@ def list_pods() -> list[dict]:
     return data
 
 
+def own_pods() -> list[dict]:
+    """Поды ЭТОГО раннера — с исключением защищённой чужой инфраструктуры (Fetcher и т.п.).
+    Используй это, а не list_pods(), для start/stop/terminate/clone-логики ML-валидации."""
+    protected = _protected_pod_ids()
+    return [p for p in list_pods() if p.get("id") not in protected]
+
+
 def running_pods() -> list[dict]:
+    """RUNNING-поды ЭТОГО раннера (own_pods — чужая защищённая инфраструктура исключена)."""
     out = []
-    for p in list_pods():
+    for p in own_pods():
         status = p.get("desiredStatus") or p.get("status") or ""
         if str(status).upper() == "RUNNING":
             out.append(p)
@@ -264,7 +311,7 @@ def stop_pod(pod_id: str) -> dict:
 
 
 def stop_all_running() -> list[str]:
-    """Погасить ВСЕ RUNNING-поды. Возвращает список остановленных id. Идемпотентно."""
+    """Погасить ВСЕ RUNNING-поды ЭТОГО раннера (own_pods — чужая инфра исключена). Идемпотентно."""
     stopped = []
     for p in running_pods():
         pid = p.get("id")
@@ -282,10 +329,11 @@ def network_volume_id(pod: dict) -> str | None:
 
 
 def terminate_all_and_bill() -> list[str]:
-    """УДАЛИТЬ (terminate) все поды и закрыть в бюджете. Данные на Network Volume сохраняются.
+    """УДАЛИТЬ (terminate) ВСЕ поды ЭТОГО раннера (own_pods — чужая инфра, напр. Fetcher,
+    исключена) и закрыть в бюджете. Данные на Network Volume сохраняются.
     Жизненный цикл: создать → поработать → удалить (не останавливать)."""
     ids = []
-    for p in list_pods():
+    for p in own_pods():
         pid = p.get("id")
         if not pid:
             continue

@@ -65,13 +65,20 @@ class RunPodProvider(Provider):
     name = "runpod"
 
     def discover(self) -> list[dict]:
+        # ВАЖНО: НЕ затираем уже заданные kind/policy (напр. persistent Fetcher-инфра,
+        # см. runpod_api.py шапка модуля) — иначе каждый list_machines() откатывал бы защищённые
+        # поды обратно в gpu/ephemeral, и terminate_all_and_bill() их бы больше не исключал.
+        # "gpu"/"ephemeral" — дефолт ТОЛЬКО для новых/ещё незарегистрированных подов.
+        reg = _load()
         out = []
         for p in runpod_api.list_pods():
+            pid = p.get("id")
+            existing = reg.get(pid, {}) if pid else {}
             out.append({
-                "id": p.get("id"),
+                "id": pid,
                 "provider": "runpod",
-                "kind": "gpu",
-                "policy": "ephemeral",
+                "kind": existing.get("kind", "gpu"),
+                "policy": existing.get("policy", "ephemeral"),
                 "status": p.get("desiredStatus") or p.get("status"),
                 "ssh": runpod_api.pod_endpoint(p) or "",
                 "gpu": (p.get("machine") or {}).get("gpuType") or p.get("gpuTypeIds"),

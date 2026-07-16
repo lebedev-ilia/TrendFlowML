@@ -96,7 +96,7 @@ async def pod_control(args):
         return {"content": [{"type": "text", "text": runpod_api.status_summary()}]}
 
     if action == "start":
-        pods = runpod_api.list_pods()
+        pods = runpod_api.own_pods()  # чужая инфра (напр. Fetcher) исключена
         if not pods:
             return {"content": [{"type": "text",
                     "text": "Подов в аккаунте нет. Используй action=migrate, чтобы создать новый под "
@@ -162,7 +162,7 @@ async def _create_with_menu(short: bool = False):
     (max_pod_hourly_usd_short), иначе обычный (max_pod_hourly_usd). Прогнозировать длительность —
     ответственность вызывающего агента; ошибка в прогнозе стоит реальных денег."""
     import time as _t
-    pods = runpod_api.list_pods()
+    pods = runpod_api.own_pods()  # чужая инфра (напр. Fetcher) исключена — не годится как шаблон
     # Образец конфигурации (image/диск/порты/volume) берём из существующего пода, если он есть.
     template = {}
     src_id = None

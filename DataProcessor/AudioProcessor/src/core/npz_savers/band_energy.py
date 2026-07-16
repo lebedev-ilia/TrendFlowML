@@ -47,9 +47,17 @@ def save_band_energy_npz(
     # Canonical bands (Audit v3): fixed 3 bands.
     band_edges = payload.get("band_edges") or []
     band_edges_hz = np.asarray(band_edges, dtype=np.float32).reshape(-1, 2)
+    # Фиксированный shape (3, 2) — downstream всегда ожидает 3 полосы.
+    # При empty/failed (band_edges пуст) заполняем NaN вместо shape (0, 2).
+    if band_edges_hz.shape[0] != 3:
+        band_edges_hz = np.full((3, 2), np.nan, dtype=np.float32)
 
     band_shares = payload.get("band_energy_shares") or []
     band_energy_shares = np.asarray(band_shares, dtype=np.float32).reshape(-1)
+    # Фиксированный shape (3,) — downstream всегда ожидает 3 элемента.
+    # При empty/failed заполняем NaN вместо shape (0,).
+    if band_energy_shares.size != 3:
+        band_energy_shares = np.full(3, np.nan, dtype=np.float32)
 
     # Tabular features (model_facing subset): shares only.
     if band_energy_shares.size == 3:
