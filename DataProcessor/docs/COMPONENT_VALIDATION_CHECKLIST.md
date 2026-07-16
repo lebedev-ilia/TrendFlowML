@@ -16,12 +16,12 @@
 | core_object_detections | seq (proposals + track_ids) | ✅ | v3 (07-05) | [REPORT 2026-07-05](component_reports/core_object_detections/REPORT_2026-07-05.md): 4 видео — appearance-трекер даёт когерентные длинные person-треки (mean 52–127, max 295, frac_single~0), выходной валидатор ✅, **golden идентичен** (track_ids+boxes). Канонично `yolo11x_41_best.pt` (таксономия владельца). Остаток: метрики Prometheus |
 | core_face_landmarks | seq (landmarks) | ✅ | v-07-05 | [REPORT 2026-07-05](component_reports/core_face_landmarks/REPORT_2026-07-05.md): FaceMesh 468×3 + поза/руки; **face-present ✅** (245/245 кадров) + **валидный empty без лиц ✅** (для shot_quality); валидатор ✅. Deploy: mediapipe<0.10.15 |
 | ocr_extractor | seq/agg | ✅ | v-07-11 | [REPORT 2026-07-11](component_reports/ocr_extractor/REPORT.md): изоляция на синтет-фикстуре (реального text_region-детектора нет — зона владельца), движок ppocr_rec_onnx. Все гейты PASS: U1 validate_ocr ✅VALID×6/rc=0; ось int32/float32, axis_match, nan=0; **golden max\|Δconf\|=0.0** (ONNX детерминирован); privacy retain=false→только sha256+len; C1 frame-binding 100%; C3 R_varies. **Найден+исправлен логический баг expected-empty**: при отсутствии класса text_region OCR обрабатывал ВСЕ боксы вместо empty → фикс skip (reason=proposal_class_not_in_taxonomy), Dnobox→status=empty. TODO: перенести фикс main.py в git; rec_confidence на синтетике не показателен (OOD) |
-| core_identity/brand_semantics | seq/agg | ⬜ | — | — |
-| core_identity/car_semantics | seq/agg | ⬜ | — | — |
-| core_identity/content_domain | agg | ⬜ | — | — |
-| core_identity/face_identity | seq/agg | ⬜ | — | — |
-| core_identity/franchise_recognition | seq/agg | ⬜ | — | — |
-| core_identity/place_semantics | seq/agg | ⬜ | — | — |
+| core_identity/brand_semantics | seq/agg | ✅ | **v0.2 (штамп 07-16)** | [REPORT 2026-07-16](component_reports/core_identity/REPORT_2026-07-16.md): 22/22 VALID, U1–U4 PASS, U5/U6 SKIP (Embedding Service недоступен, одобрено). status=empty×22 (нет брендов в датасет-видео) — by design. Авто-штамп |
+| core_identity/car_semantics | seq/agg | ✅ | **v0.2 (штамп 07-16)** | [REPORT 2026-07-16](component_reports/core_identity/REPORT_2026-07-16.md): 26/26 VALID, U1–U4 PASS, U5/U6 SKIP. status=empty×26 (нет машин/брендов в базе) — by design. Авто-штамп |
+| core_identity/content_domain | agg | ✅ | **v0.2 (штамп 07-16)** | [REPORT 2026-07-16](component_reports/core_identity/REPORT_2026-07-16.md): 22/22 VALID, U1–U4 PASS, U5/U6 SKIP (Triton). status=ok×22: scores∈[0,1], 2 лейбла (live_action/animation), track_is_confident_top1=True в 5/22. Авто-штамп |
+| core_identity/face_identity | seq/agg | ⚫ | SKIPPED | Требует ручной разметки базы лиц — зона владельца. Статус: skipped_manual_labeling_required |
+| core_identity/franchise_recognition | seq/agg | ✅ | **v0.2 (штамп 07-16)** | [REPORT 2026-07-16](component_reports/core_identity/REPORT_2026-07-16.md): 23/23 VALID, U1–U4 PASS, U5/U6 SKIP. status=ok×23: scores∈[0,1], no-franchise→track scores=0.0 by design. Авто-штамп |
+| core_identity/place_semantics | seq/agg | ✅ | **v0.2 (штамп 07-16)** | [REPORT 2026-07-16](component_reports/core_identity/REPORT_2026-07-16.md): 23/23 VALID, U1–U4 PASS, U5/U6 SKIP (Embedding Service). status=empty×23 (нет совпадений с базой мест) — by design. Авто-штамп |
 
 ## VisualProcessor — modules
 
@@ -49,15 +49,15 @@
 
 | Компонент | Выход | Статус | Версия | Отчёт |
 |---|---|---|---|---|
-| asr_extractor | seq | ⬜ | — | — |
-| clap_extractor | seq (emb) | ⬜ | — | — |
+| asr_extractor | seq | ✅ | **v2.3.2 (штамп 07-16)** | [REPORT 2026-07-16](component_reports/asr_extractor/REPORT_2026-07-16.md): Whisper small fp16 CUDA, schema npz_v2. 16 NPZ: ok=14, empty=2. U1–U6+C1–C3 все PASS: validate rc=0×16 (schema, нет --struct); golden max\|Δfv\|=0.0 (9 ok-runs одного видео); dur 3–30s без падений; lang ru/en; logprob -1.9..-0.15. Авто-штамп 100% PASS |
+| clap_extractor | seq (emb) | ✅ | **v1.1.1 (штамп 07-16)** | [REPORT 2026-07-16](component_reports/clap_extractor/REPORT_2026-07-16.md): LAION CLAP 512-d эмбеддинги по аудио-сегментам. **2 бага исправлены**: (1) validate_clap rc=2 при empty/error (embedding_present=False не учитывался; фикс: проверка флага); (2) CLAPExtractor PyTorch 2.12 несовместимость с laion_clap checkpoint (weights_only=True → monkey-patch weights_only=False). 16 storage NPZ: ok=12, error=2, empty=2. U1–U6+C1–C3 все PASS: golden max\|Δ\|=0.0, dim=512, norms 0.80-0.98, N=5/30 без падений. Авто-штамп 100% PASS |
 | speaker_diarization_extractor | seq (events) | ⬜ | — | — |
 | emotion_diarization_extractor | seq | ⬜ | — | — |
 | source_separation_extractor | seq | ⬜ | — | — |
 | speech_analysis_extractor | agg | ⬜ | — | — |
 | pitch_extractor | seq | 🔄 | — | правился Cursor |
-| loudness_extractor | seq | ⬜ | — | — |
-| spectral_extractor | seq | ⬜ | — | — |
+| loudness_extractor | seq | ✅ | **v2.1.1 (штамп 07-16)** | [REPORT 2026-07-16](component_reports/loudness_extractor/REPORT_2026-07-16.md): RMS/peak/dBFS + optional LUFS. 17 NPZ: ok=15, empty=2. U1–U6+C1–C3 все PASS: validate rc=0×17; segment_start монотонны; 17/18 finite (loudness_lufs=NaN by design — lufs_present=False, pyloudnorm optional); empty→fv NaN×18, seg_n=0; golden max\|Δfv\|=6.71e-08 (float32); 15 видео без падений. Авто-штамп 100% PASS |
+| spectral_extractor | seq | ✅ | **v-07-16 (штамп 07-16)** | [REPORT 2026-07-16](component_reports/spectral_extractor/REPORT_2026-07-16.md): 17 NPZ: ok=15, empty=2. U1–U6+C1–C2 PASS: validate rc=0×17; монотонны; fv_nan=0/46 (все finite!); empty fn=5/fv=[nan×4,0.0]; golden max\|Δ\|=0.0 (12 runs); seg_counts 5–30. Баги не найдены. Авто-штамп |
 | spectral_entropy_extractor | seq | ⬜ | — | — |
 | mel_extractor | seq | ⬜ | — | — |
 | mfcc_extractor | seq | ⬜ | — | — |

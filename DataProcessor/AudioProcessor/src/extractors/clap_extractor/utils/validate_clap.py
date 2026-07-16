@@ -77,12 +77,17 @@ def validate_qa_rows(npz_path: str, qa: Any) -> List[str]:
 def validate_structure(npz_path: str) -> List[str]:
     out: List[str] = []
     d = load_npz(npz_path)
+    meta = extract_meta(d)
+    status = str(meta.get("status", "ok"))
+    emb_present_flag = bool(np.asarray(d.get("embedding_present", True)))
     emb = d.get("embedding")
     d_vec: int | None = None
     if emb is not None:
         e = np.asarray(emb, dtype=np.float64).reshape(-1)
         if e.size < 1:
-            out.append("embedding: пустой вектор")
+            # Пустой embedding допустим при status!=ok или embedding_present=False
+            if status == "ok" and emb_present_flag:
+                out.append("embedding: пустой вектор при status=ok и embedding_present=True")
         else:
             d_vec = int(e.size)
     es = d.get("embedding_sequence")

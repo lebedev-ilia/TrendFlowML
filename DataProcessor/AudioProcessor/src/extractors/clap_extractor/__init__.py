@@ -129,6 +129,15 @@ class CLAPExtractor(BaseExtractor):
             # Отключаем tqdm прогресс-бары через переменную окружения
             original_tqdm_disable = os.environ.get("TQDM_DISABLE")
             os.environ["TQDM_DISABLE"] = "1"
+            # PyTorch 2.6+ default weights_only=True несовместим с laion_clap checkpoint (numpy pickle).
+            # Monkey-patch torch.load чтобы laion_clap мог загрузить checkpoint c weights_only=False.
+            # Checkpoint из dp_models — доверенный локальный источник (ModelManager-verified).
+            import torch as _torch_patch
+            _orig_torch_load = _torch_patch.load
+            def _patched_torch_load(*_a, **_kw):
+                _kw.setdefault("weights_only", False)
+                return _orig_torch_load(*_a, **_kw)
+            _torch_patch.load = _patched_torch_load
             try:
                 with open(os.devnull, "w") as devnull:
                     with redirect_stdout(devnull), redirect_stderr(devnull):
