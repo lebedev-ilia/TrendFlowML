@@ -1,5 +1,6 @@
 #!/usr/bin/env python3
-"""Агент-наблюдатель Fetcher (Третий бот, VK_TOKEN3, модель Haiku).
+"""Агент-наблюдатель Fetcher (Третий бот, VK_TOKEN3, модель Sonnet 4.6 — см. config.WATCHDOG_MODEL;
+сменено с Haiku 2026-07-17, т.к. диагностика реальных проблем на подах требует более сильной модели).
 
 Работает НА ТВОЁМ ПК (не на поде) — использует ту же Claude-подписку (OAuth-сессия `claude login`),
 что и agent_runner.py/assistant.py в automation/runner/. Постоянно поднят через systemd
@@ -67,7 +68,8 @@ SYSTEM = (
     "Пиши по-русски, кратко."
 )
 
-HELP = "Я наблюдатель Fetcher. /status — проверить сейчас, /help — справка."
+HELP = ("Я наблюдатель Fetcher. /status — проверить сейчас, /help — справка. Любой другой текст — "
+       "реальная задача мне (спроси про логи, попроси починить, разобраться в проблеме и т.д.).")
 
 
 def _log_chat(direction: str, text: str) -> None:
@@ -137,15 +139,17 @@ CHECK_PROMPT = (
 )
 
 
-async def _check_pass(model: str) -> str:
+async def _run_llm(prompt: str, model: str, *, max_turns: int = 40) -> str:
+    """Общий раннер LLM-сессии для часовой проверки И для ответа на произвольное сообщение
+    владельца — один и тот же агент с одним и тем же системным промптом/доступом к deploy.py."""
     parts = []
     cost = 0.0
     async with ClaudeSDKClient(options=ClaudeAgentOptions(
         model=model, system_prompt=SYSTEM, cwd=str(config.REPO_DIR),
         allowed_tools=["Read", "Write", "Edit", "Bash", "Glob", "Grep"],
-        permission_mode="bypassPermissions", max_turns=40,
+        permission_mode="bypassPermissions", max_turns=max_turns,
     )) as client:
-        await client.query(CHECK_PROMPT)
+        await client.query(prompt)
         async for msg in client.receive_response():
             if isinstance(msg, AssistantMessage):
                 for b in msg.content:
@@ -154,8 +158,29 @@ async def _check_pass(model: str) -> str:
                         _log_chat("WATCHDOG(raw)", b.text.strip()[:300])
             elif isinstance(msg, ResultMessage):
                 cost = float(getattr(msg, "total_cost_usd", 0.0) or 0.0)
-    print(f"[watchdog] проверка завершена, cost=${cost:.4f}", flush=True)
+    print(f"[watchdog] сессия завершена, cost=${cost:.4f}", flush=True)
     return "\n".join(parts) if parts else "(без замечаний)"
+
+
+async def _check_pass(model: str) -> str:
+    return await _run_llm(CHECK_PROMPT, model)
+
+
+async def _handle_owner_message(text: str, model: str) -> str:
+    """Реальный диалог с владельцем в том же VK-чате, где идут часовые отчёты — не просто /status
+    и /help, а любой текст трактуется как задача агенту (аналог того, как assistant.py общается с
+    владельцем по ML-раннеру). Баг найден 2026-07-17: раньше любое сообщение, кроме /status и
+    /help, получало шаблонный HELP — владелец физически не мог попросить агента разобраться
+    в чём-то или починить, приходилось разбирать логи вручную вместе со мной в Cowork."""
+    prompt = (
+        f"Владелец написал в VK: «{text}»\n\n"
+        "Это НЕ команда из фиксированного списка — обработай как реальную задачу/вопрос по "
+        "Fetcher dataset collector (3 пода: fetcher-main, fetcher-worker-b, fetcher-worker-c). "
+        "Если нужно — посмотри логи/summary.json по протоколу из системного промпта, разберись "
+        "в причине, при возможности почини код и перезапусти процесс на поде. Ответь по существу "
+        "и кратко — это уйдёт напрямую владельцу в VK."
+    )
+    return await _run_llm(prompt, model, max_turns=60)
 
 
 async def _check_loop(model_getter):
@@ -176,7 +201,8 @@ async def main():
     print("[watchdog] запуск...", flush=True)
     lp = LP()
     model = config.WATCHDOG_MODEL
-    send("🤖 Наблюдатель Fetcher на связи. /help — команды. Проверяю каждый час.")
+    send("🤖 Наблюдатель Fetcher на связи (модель " + model + "). /help — команды. Проверяю каждый час, "
+        "но можешь и просто написать мне — разберусь.")
     print("[watchdog] готов, слушаю VK", flush=True)
     check_task = asyncio.create_task(_check_loop(lambda: model))
     try:
@@ -195,7 +221,15 @@ async def main():
                     except Exception as e:
                         send(f"❗ Ошибка проверки: {e}")
                 else:
-                    send(HELP)
+                    # Любой другой текст — реальная задача агенту, не заглушка HELP (см.
+                    # _handle_owner_message: баг найден 2026-07-17, владелец не мог обратиться к
+                    # агенту напрямую в VK).
+                    send("⏳ Разбираюсь...")
+                    try:
+                        result = await _handle_owner_message(t, model)
+                        send(result[:1500] if result else "(агент не дал ответа)")
+                    except Exception as e:
+                        send(f"❗ Ошибка: {e}")
     finally:
         check_task.cancel()
 

@@ -38,7 +38,7 @@ RUNPOD_GRAPHQL = "https://api.runpod.io/graphql"
 VK_TOKEN3 = os.environ.get("VK_TOKEN3", "")
 VK_OWNER_ID = int(os.environ.get("VK_OWNER_ID", "344881779") or 344881779)
 VK_API_VERSION = os.environ.get("VK_API_VERSION", "5.199")
-WATCHDOG_MODEL = os.environ.get("FETCHER_WATCHDOG_MODEL", "claude-haiku-4-5-20251001")
+WATCHDOG_MODEL = os.environ.get("FETCHER_WATCHDOG_MODEL", "claude-sonnet-4-6")
 
 # --- Секреты кампании (НЕ коммитить, только через .env/секрет-хранилище) ---
 HF_TOKEN = os.environ.get("HF_TOKEN", "")
