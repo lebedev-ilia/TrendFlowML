@@ -33,6 +33,7 @@ from claude_agent_sdk import (
 )
 
 import config
+import hourly_report
 
 VK = "https://api.vk.com/method"
 
@@ -215,11 +216,21 @@ async def main():
                     send(HELP)
                 elif low == "/status":
                     send("⏳ Проверяю сейчас...")
+                    # Шаг 1 — детерминированный отчёт с цифрами (быстро, без LLM).
                     try:
-                        result = await _check_pass(model)
-                        send(f"📋 {result[:1500]}")
+                        nums = await asyncio.to_thread(hourly_report.build_report)
+                        send(nums[:4000])
                     except Exception as e:
-                        send(f"❗ Ошибка проверки: {e}")
+                        send(f"❗ Ошибка чтения метрик: {e}")
+                    # Шаг 2 — LLM-диагностика (ищет аномалии в логах; только если есть проблемы).
+                    try:
+                        diag = await _check_pass(model)
+                        # Отправляем только если агент нашёл что-то (не просто «всё штатно»).
+                        low_diag = diag.lower()
+                        if any(w in low_diag for w in ("брифинг", "ошибк", "проблем", "зависл", "traceback", "dead_letter")):
+                            send(f"🔍 Диагностика: {diag[:1500]}")
+                    except Exception as e:
+                        send(f"❗ Ошибка диагностики: {e}")
                 else:
                     # Любой другой текст — реальная задача агенту, не заглушка HELP (см.
                     # _handle_owner_message: баг найден 2026-07-17, владелец не мог обратиться к
