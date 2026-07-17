@@ -203,7 +203,20 @@ def _download_remote_file(config: CampaignConfig, remote: str, dest: Path) -> bo
             repo_type="dataset",
             filename=remote,
         )
-        dest.write_bytes(Path(downloaded).read_bytes())
+        try:
+            dest.write_bytes(Path(downloaded).read_bytes())
+        except OSError as write_exc:
+            if write_exc.errno == 122:  # EDQUOT: disk quota exceeded on /workspace
+                # Cache write skipped — quota is full (downloads/ accumulation).
+                # Caller proceeds with the old cache file (stale but safe); the pass
+                # continues so upload-hf-videos can upload MP4s and free disk space.
+                print(
+                    f"[hf-progress] WARNING: EDQUOT writing cache {dest.name} "
+                    f"— skipping cache update, proceeding with existing local state",
+                    flush=True,
+                )
+            else:
+                raise
         return True
     except Exception as exc:
         if "404" in str(exc) or "EntryNotFound" in str(exc) or "not found" in str(exc).lower():
