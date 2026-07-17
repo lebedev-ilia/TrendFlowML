@@ -140,9 +140,15 @@ CHECK_PROMPT = (
 )
 
 
-async def _run_llm(prompt: str, model: str, *, max_turns: int = 40) -> str:
+async def _run_llm(prompt: str, model: str, *, max_turns: int = 40, progress: bool = False) -> str:
     """Общий раннер LLM-сессии для часовой проверки И для ответа на произвольное сообщение
-    владельца — один и тот же агент с одним и тем же системным промптом/доступом к deploy.py."""
+    владельца — один и тот же агент с одним и тем же системным промптом/доступом к deploy.py.
+
+    progress=True — слать каждый промежуточный шаг агента короткой строкой в VK СРАЗУ, а не только
+    финальный ответ в конце. Баг найден 2026-07-17: обычный разбор занимает 3-5 минут (SSH на 3
+    пода + анализ), всё это время чат молчал — владелец решил, что бот завис, и слал сообщение
+    повторно. Для часовой автопроверки (_check_pass) progress НЕ включаем — она и так молчит,
+    когда всё штатно, это осознанное поведение, не нужно."""
     parts = []
     cost = 0.0
     async with ClaudeSDKClient(options=ClaudeAgentOptions(
@@ -155,8 +161,11 @@ async def _run_llm(prompt: str, model: str, *, max_turns: int = 40) -> str:
             if isinstance(msg, AssistantMessage):
                 for b in msg.content:
                     if isinstance(b, TextBlock) and b.text.strip():
-                        parts.append(b.text.strip())
-                        _log_chat("WATCHDOG(raw)", b.text.strip()[:300])
+                        text = b.text.strip()
+                        parts.append(text)
+                        _log_chat("WATCHDOG(raw)", text[:300])
+                        if progress:
+                            send(f"⏳ {text[:200]}")
             elif isinstance(msg, ResultMessage):
                 cost = float(getattr(msg, "total_cost_usd", 0.0) or 0.0)
     print(f"[watchdog] сессия завершена, cost=${cost:.4f}", flush=True)
@@ -181,7 +190,7 @@ async def _handle_owner_message(text: str, model: str) -> str:
         "в причине, при возможности почини код и перезапусти процесс на поде. Ответь по существу "
         "и кратко — это уйдёт напрямую владельцу в VK."
     )
-    return await _run_llm(prompt, model, max_turns=60)
+    return await _run_llm(prompt, model, max_turns=60, progress=True)
 
 
 async def _check_loop(model_getter):
