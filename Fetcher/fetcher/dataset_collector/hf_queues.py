@@ -443,31 +443,6 @@ def run_hf_video_upload_queue(
                 commit_message=f"Upload {len(batch)} video file(s)",
                 state_dir=state.state_dir,
             )
-            for item in batch:
-                state.mark_hf_video_upload_done(
-                    item["key"],
-                    video_id=item["video_id"],
-                    category=item["category"],
-                    local_path=item["local_relpath"],
-                )
-                state.mark_download_done(
-                    item["key"],
-                    video_id=item["video_id"],
-                    category=item["category"],
-                    local_path=item["local_relpath"],
-                )
-                delete_local_file(
-                    item["local_path"],
-                    output_dir=config.output_dir,
-                    permanent_on_drive=config.drive_permanent_delete,
-                    log_channel="hf-videos",
-                )
-                done_keys.add(item["key"])
-                results["uploaded"] += 1
-                worker_log("hf-videos", f"OK {item['video_id']} (uploaded; local file removed)")
-            from fetcher.dataset_collector.metrics import record_hf_commit
-
-            record_hf_commit("videos", len(batch))
         except Exception as exc:
             worker_log("hf-videos", f"FAIL batch: {exc}")
             for item in batch:
@@ -484,6 +459,49 @@ def run_hf_video_upload_queue(
                 ):
                     dead_letter_keys.add(queue_item_key("hf-videos", item))
             results["failed"] += len(batch)
+            continue
+
+        # Upload committed — write state and delete local files.
+        # State writes may fail with EDQUOT when disk is full; delete local files
+        # regardless so that space is freed (videos are already safely on HF).
+        for item in batch:
+            try:
+                state.mark_hf_video_upload_done(
+                    item["key"],
+                    video_id=item["video_id"],
+                    category=item["category"],
+                    local_path=item["local_relpath"],
+                )
+                state.mark_download_done(
+                    item["key"],
+                    video_id=item["video_id"],
+                    category=item["category"],
+                    local_path=item["local_relpath"],
+                )
+            except OSError as state_exc:
+                if state_exc.errno == 122:  # EDQUOT: disk quota exceeded on /workspace
+                    # State write skipped — video is already on HF; local file will be
+                    # deleted below to free quota. On next pass the file won't exist
+                    # locally and will be marked as missing (expected after disk recovery).
+                    worker_log(
+                        "hf-videos",
+                        f"WARN EDQUOT: state write skipped for {item['video_id']}"
+                        f" — deleting local file anyway to free disk",
+                    )
+                else:
+                    raise
+            delete_local_file(
+                item["local_path"],
+                output_dir=config.output_dir,
+                permanent_on_drive=config.drive_permanent_delete,
+                log_channel="hf-videos",
+            )
+            done_keys.add(item["key"])
+            results["uploaded"] += 1
+            worker_log("hf-videos", f"OK {item['video_id']} (uploaded; local file removed)")
+        from fetcher.dataset_collector.metrics import record_hf_commit
+
+        record_hf_commit("videos", len(batch))
 
     if skip_reasons:
         log_kv_block("hf-videos", [(f"skipped_{k}", v) for k, v in sorted(skip_reasons.items())])

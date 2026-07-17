@@ -177,9 +177,20 @@ def record_commit(
         "ts": time.time(),
         "committed_at": datetime.now(timezone.utc).isoformat(),
     }
-    with log_path.open("a", encoding="utf-8") as fh:
-        fh.write(json.dumps(payload, ensure_ascii=False))
-        fh.write("\n")
+    try:
+        with log_path.open("a", encoding="utf-8") as fh:
+            fh.write(json.dumps(payload, ensure_ascii=False))
+            fh.write("\n")
+    except OSError as exc:
+        if exc.errno == 122:  # EDQUOT: disk quota exceeded on /workspace
+            # Commit log write skipped — quota full (downloads/ accumulation).
+            # Rate-limiting is slightly relaxed until disk is freed; acceptable.
+            print(
+                f"[hf-commit] WARN EDQUOT: commit log write skipped for {repo_id}",
+                flush=True,
+            )
+        else:
+            raise
 
 
 def upload_local_file(
