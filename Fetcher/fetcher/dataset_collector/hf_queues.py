@@ -392,6 +392,32 @@ def run_hf_video_upload_queue(
         if retry_key in dead_letter_keys:
             results["skipped"] += 1
             skip_reasons["dead_letter"] = skip_reasons.get("dead_letter", 0) + 1
+            # Dead-lettered video will never be uploaded — free local disk now.
+            # Prevents quota exhaustion when HF storage limit is reached and many
+            # videos accumulate in dead_letter without their local files being removed.
+            if local_relpath:
+                _dead_letter_local_path = state.root / local_relpath
+                if _dead_letter_local_path.is_file():
+                    try:
+                        delete_local_file(
+                            _dead_letter_local_path,
+                            output_dir=config.output_dir,
+                            permanent_on_drive=config.drive_permanent_delete,
+                            log_channel="hf-videos",
+                        )
+                        worker_log(
+                            "hf-videos",
+                            f"dead-letter cleanup: deleted {_dead_letter_local_path.name}",
+                        )
+                        skip_reasons["dead_letter_local_cleaned"] = (
+                            skip_reasons.get("dead_letter_local_cleaned", 0) + 1
+                        )
+                    except OSError as _dl_exc:
+                        worker_log(
+                            "hf-videos",
+                            f"WARN dead-letter cleanup failed for"
+                            f" {_dead_letter_local_path.name}: {_dl_exc}",
+                        )
             continue
         if key in done_keys:
             results["skipped"] += 1
