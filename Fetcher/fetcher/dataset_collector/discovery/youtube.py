@@ -145,7 +145,15 @@ class YouTubeKeyPool:
     def _load(self) -> None:
         if not self.state_path or not self.state_path.exists():
             return
-        data = json.loads(self.state_path.read_text(encoding="utf-8"))
+        text = self.state_path.read_text(encoding="utf-8").strip()
+        if not text:
+            # Пустой файл (например, write был прерван) — начинаем с чистого состояния.
+            return
+        try:
+            data = json.loads(text)
+        except json.JSONDecodeError:
+            # Повреждённый файл — игнорируем, начинаем заново без сохранённого состояния.
+            return
         for key, raw in data.get("keys", {}).items():
             if key in self.states:
                 self.states[key] = YouTubeKeyState(api_key=key, **{k: v for k, v in raw.items() if k != "api_key"})
@@ -155,7 +163,11 @@ class YouTubeKeyPool:
             return
         self.state_path.parent.mkdir(parents=True, exist_ok=True)
         payload = {"keys": {key: state.__dict__ for key, state in self.states.items()}}
-        self.state_path.write_text(json.dumps(payload, ensure_ascii=False, indent=2), encoding="utf-8")
+        # Атомарная запись через temp-файл + replace — предотвращает появление 0-байтных файлов
+        # при аварийном завершении процесса в момент write_text.
+        tmp_path = self.state_path.with_suffix(".json.tmp")
+        tmp_path.write_text(json.dumps(payload, ensure_ascii=False, indent=2), encoding="utf-8")
+        tmp_path.replace(self.state_path)
 
     def quota_stats(self) -> dict[str, int]:
         self._reset_all_if_new_day()
