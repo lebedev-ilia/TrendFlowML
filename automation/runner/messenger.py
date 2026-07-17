@@ -75,6 +75,35 @@ def send(text: str) -> int:
     )
 
 
+def send_photo(path, caption: str = "") -> int:
+    """Отправить фото владельцу (график/визуализация с диска). Стандартный VK-флоу:
+    photos.getMessagesUploadServer -> POST файла на upload_url -> photos.saveMessagesPhoto ->
+    messages.send с attachment=photoOWNER_ID. Возвращает message_id.
+
+    Добавлено 2026-07-17 для deepdive_agent.py (свободный чат-разбор компонентов) — раньше в
+    этом репозитории не было ни одного места, отправляющего VK-фото, только текст."""
+    log_chat("AGENT1->", f"[фото] {path}" + (f" — {caption}" if caption else ""))
+    upload = _call("photos.getMessagesUploadServer", peer_id=config.VK_OWNER_ID)
+    upload_url = upload["upload_url"]
+    with open(path, "rb") as f:
+        r = requests.post(upload_url, files={"photo": f}, timeout=60)
+    r.raise_for_status()
+    uploaded = r.json()
+    saved = _call(
+        "photos.saveMessagesPhoto",
+        photo=uploaded["photo"], server=uploaded["server"], hash=uploaded["hash"],
+    )
+    photo = saved[0] if isinstance(saved, list) else saved
+    attachment = f"photo{photo['owner_id']}_{photo['id']}"
+    return _call(
+        "messages.send",
+        user_id=config.VK_OWNER_ID,
+        random_id=random.randint(1, 2_000_000_000),
+        message=caption[:4000],
+        attachment=attachment,
+    )
+
+
 class LongPoll:
     """Group Long Poll — читает входящие message_new от владельца."""
 
