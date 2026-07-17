@@ -3,7 +3,8 @@ from __future__ import annotations
 from fetcher.dataset_collector.schemas import CampaignConfig
 
 
-KEYWORD_PATTERNS = [
+# Паттерны для русскоязычных seed-тем (содержат кириллицу).
+KEYWORD_PATTERNS_RU = [
     "{topic}",
     "{topic} 2026",
     "{topic} 2025",
@@ -15,6 +16,35 @@ KEYWORD_PATTERNS = [
     "{topic} review",
     "{topic} latest",
 ]
+
+# Паттерны для англоязычных seed-тем: позиции 4-6 заменены на английские эквиваленты
+# ("tips"/"top"/"guide" вместо "обзор"/"топ"/"гайд"), иначе смешанные запросы типа
+# "biology facts гайд" или "concert vlog топ" дают 0 результатов в YouTube Search API
+# и тратят квоту впустую. Остальные позиции (0-3, 7-9) совпадают с KEYWORD_PATTERNS_RU,
+# поэтому существующие keyword_index-чекпоинты для русских seed (0-14 × 10 = idx 0-149)
+# не ломаются; английские seed (15-29 × 10 = idx 150-299) получат лучшие запросы при
+# следующей итерации по «low»-статусным ключевым словам.
+KEYWORD_PATTERNS_EN = [
+    "{topic}",
+    "{topic} 2026",
+    "{topic} 2025",
+    "{topic} shorts",
+    "{topic} tips",
+    "{topic} top",
+    "{topic} guide",
+    "{topic} tutorial",
+    "{topic} review",
+    "{topic} latest",
+]
+
+# Устаревший алиас — оставлен для совместимости с кодом, который импортирует KEYWORD_PATTERNS
+# напрямую. Новый код должен использовать KEYWORD_PATTERNS_RU / KEYWORD_PATTERNS_EN.
+KEYWORD_PATTERNS = KEYWORD_PATTERNS_RU
+
+
+def _is_cyrillic(text: str) -> bool:
+    """True если строка содержит хотя бы один кириллический символ."""
+    return any("Ѐ" <= c <= "ӿ" for c in text)
 
 
 CATEGORY_SEEDS = {
@@ -172,7 +202,11 @@ def generate_keywords(category_name: str, *, count: int = 300) -> list[str]:
     keywords: list[str] = []
     seen: set[str] = set()
     for topic in seeds:
-        for pattern in KEYWORD_PATTERNS:
+        # Для русских seed-тем используем паттерны с кириллическими суффиксами (обзор/топ/гайд),
+        # для английских — их английские эквиваленты (tips/top/guide), иначе смешанные запросы
+        # вроде "biology facts гайд" дают 0 результатов и тратят YouTube API quota впустую.
+        patterns = KEYWORD_PATTERNS_RU if _is_cyrillic(topic) else KEYWORD_PATTERNS_EN
+        for pattern in patterns:
             phrase = pattern.format(topic=topic)
             if phrase in seen:
                 continue
