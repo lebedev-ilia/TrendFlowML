@@ -5,6 +5,10 @@ import json
 import os
 import time
 from datetime import datetime, timedelta, timezone
+from zoneinfo import ZoneInfo
+
+# YouTube quota resets at midnight Pacific Time, not UTC midnight.
+_PACIFIC_TZ = ZoneInfo("America/Los_Angeles")
 from pathlib import Path
 from typing import Dict
 
@@ -155,21 +159,26 @@ def command_init(args: argparse.Namespace) -> None:
 
 
 def _sleep_until_quota_reset(min_wait_sec: int = 60) -> None:
-    """Спать до полуночи UTC — та же граница сброса, что использует YouTubeKeyPool._reset_if_new_day
-    (см. discovery/youtube.py). Чанками по ~1ч (не один блокирующий sleep), чтобы в логах было видно,
-    что процесс жив и ждёт, а не завис. Вызывается, когда ВЕСЬ пул API-ключей исчерпан
-    (QuotaExceededError) — раньше это ронятло процесс discover необработанным исключением
-    (см. FETCHER_DATASET_COLLECTOR_HANDOFF.md §6); теперь процесс сам ждёт и продолжает."""
+    """Спать до полуночи Pacific Time (America/Los_Angeles) — реальная граница сброса квоты Google.
+    YouTube сбрасывает квоту в PT-полночь, что = 07:00 UTC летом (PDT) и 08:00 UTC зимой (PST).
+    СТАРЫЙ код ждал UTC-полночь — это на 7-8ч раньше реального сброса: мы просыпались, пробовали
+    ключи, снова получали QuotaExceededError и засыпали до СЛЕДУЮЩЕЙ UTC-полуночи (+24ч) — теряли
+    весь день. Теперь ждём Pacific-полночь: гарантированно Google уже сбросил.
+    Чанками по ~1ч, чтобы в логах было видно что процесс жив и ждёт (не завис).
+    Та же граница использует YouTubeKeyPool._reset_if_new_day (discovery/youtube.py)."""
+    pacific_now = datetime.now(_PACIFIC_TZ)
+    reset_at = (pacific_now + timedelta(days=1)).replace(
+        hour=0, minute=0, second=5, microsecond=0
+    ).astimezone(timezone.utc)
     now = datetime.now(timezone.utc)
-    reset_at = (now + timedelta(days=1)).replace(hour=0, minute=0, second=5, microsecond=0)
     remaining = max(min_wait_sec, (reset_at - now).total_seconds())
     chunk = 3600.0
     while remaining > 0:
         wait = min(chunk, remaining)
         print(
             f"[discover] Квота YouTube API исчерпана всем пулом ключей. Жду сброса "
-            f"(~{remaining / 3600:.1f}ч, полночь UTC ~{reset_at.isoformat()}) — процесс НЕ падает, "
-            f"продолжит сам после сброса.",
+            f"(~{remaining / 3600:.1f}ч, полночь Pacific Time = {reset_at.isoformat()} UTC) "
+            f"— процесс НЕ падает, продолжит сам после сброса.",
             flush=True,
         )
         time.sleep(wait)

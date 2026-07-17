@@ -5,6 +5,11 @@ from dataclasses import dataclass
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from typing import Dict, Iterable, List, Optional
+from zoneinfo import ZoneInfo
+
+# YouTube quota resets at midnight Pacific Time (not UTC midnight).
+# PDT (summer, Mar–Nov): UTC-7 → 07:00 UTC; PST (winter): UTC-8 → 08:00 UTC.
+_PACIFIC_TZ = ZoneInfo("America/Los_Angeles")
 
 from fetcher.dataset_collector.discovery.base import DiscoveryCapabilities
 from fetcher.dataset_collector.proxy import ProxyRotator
@@ -48,15 +53,20 @@ class YouTubeKeyPool:
         self._load()
 
     @staticmethod
-    def _today_utc() -> str:
-        return datetime.now(timezone.utc).date().isoformat()
+    def _today_pacific() -> str:
+        """Return today's date in Pacific Time (America/Los_Angeles).
+        YouTube quota resets at midnight PT, so this is the correct boundary
+        for rolling over used_units — NOT UTC date (which is 7-8h off)."""
+        return datetime.now(_PACIFIC_TZ).date().isoformat()
 
     def _reset_if_new_day(self, state: YouTubeKeyState) -> bool:
-        """Google resets each key's daily quota every 24h. Our persisted
-        used_units must roll over too, otherwise a key that ever crossed
-        daily_quota_limit stays excluded from the pool forever (see bug
-        report: all 49 keys permanently exhausted after ~2 days)."""
-        today = self._today_utc()
+        """Google resets each key's daily quota at midnight Pacific Time.
+        Our persisted used_units must roll over at the same boundary, otherwise
+        a key that ever crossed daily_quota_limit stays excluded from the pool
+        forever (see bug report: all 49 keys permanently exhausted after ~2 days).
+        Uses Pacific date (not UTC) so reset fires at 07:00/08:00 UTC, matching
+        Google's actual reset time."""
+        today = self._today_pacific()
         if state.quota_date != today:
             state.used_units = 0
             state.disabled_until = None
@@ -100,8 +110,14 @@ class YouTubeKeyPool:
         state.last_error = str(error)[:500]
         err_str = str(error)
         if isinstance(error, QuotaExceededError) or "quota" in err_str.lower():
-            tomorrow = datetime.now(timezone.utc).replace(hour=23, minute=59, second=59)
-            state.disabled_until = tomorrow.isoformat()
+            # Disable until next Pacific midnight (= actual Google quota reset time).
+            # Old code used 23:59:59 UTC which is wrong: it's 7-8h after Google resets,
+            # so the key stays locked for up to 31h instead of being freed at reset time.
+            pacific_now = datetime.now(_PACIFIC_TZ)
+            next_pacific_midnight = (pacific_now + timedelta(days=1)).replace(
+                hour=0, minute=0, second=5, microsecond=0
+            )
+            state.disabled_until = next_pacific_midnight.astimezone(timezone.utc).isoformat()
         elif "429" in err_str or "403" in err_str:
             state.disabled_until = (utcnow() + timedelta(minutes=15)).isoformat()
         else:
