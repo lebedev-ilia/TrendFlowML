@@ -45,11 +45,44 @@ def _write_json(path: Path, payload: dict) -> None:
     файловой системе (RunPod Network Volume / MooseFS не даёт тех же гарантий атомарности записи,
     что локальный ext4) и породить битый JSON ("Extra data" при парсинге — баг воспроизведён и
     исправлен 2026-07-16). os.replace — атомарный rename в пределах одной директории, гонки быть
-    не может: любой читатель либо видит старую полную версию, либо новую полную, никогда мешанину."""
+    не может: любой читатель либо видит старую полную версию, либо новую полную, никогда мешанину.
+
+    Дополнительные меры против MooseFS/RunPod quota (EDQUOT, errno 122, 2026-07-17):
+    1) Skip-if-unchanged: если файл уже содержит идентичный контент — пропускаем запись вообще.
+       Это главная защита при рестарте discover-процесса (config детерминирован для фиксированных args).
+    2) Cleanup-on-failure: tmp-файл всегда удаляется при ошибке — не накапливается мусор.
+    3) EDQUOT-fallback: если запись не прошла из-за квоты, но файл уже существует — используем
+       имеющийся файл и продолжаем (вместо краша в цикл рестарта)."""
     path.parent.mkdir(parents=True, exist_ok=True)
+    data = json.dumps(payload, ensure_ascii=False, indent=2)
+    # (1) Skip-if-unchanged: избегаем лишней записи на сетевой ФС с квотами
+    if path.exists():
+        try:
+            if path.read_text(encoding="utf-8") == data:
+                return
+        except Exception:
+            pass
     tmp_path = path.with_suffix(path.suffix + f".tmp{os.getpid()}")
-    tmp_path.write_text(json.dumps(payload, ensure_ascii=False, indent=2), encoding="utf-8")
-    os.replace(tmp_path, path)
+    try:
+        tmp_path.write_text(data, encoding="utf-8")
+        os.replace(tmp_path, path)
+    except OSError as exc:
+        # (2) Cleanup-on-failure: не оставляем мусорный tmp-файл
+        tmp_path.unlink(missing_ok=True)
+        # (3) EDQUOT-fallback: если квота исчерпана, но файл уже есть — продолжаем со старым
+        import errno as _errno
+        if exc.errno == _errno.EDQUOT and path.exists():
+            print(
+                f"[_write_json] WARN: EDQUOT на {path}; контент мог измениться, "
+                f"но используем существующий файл.",
+                flush=True,
+            )
+            return
+        raise
+    except Exception:
+        # (2) Cleanup-on-failure для прочих ошибок
+        tmp_path.unlink(missing_ok=True)
+        raise
 
 
 def _apply_parallel_colab_hf_tuning(config: dict, parallel: int) -> None:
@@ -159,6 +192,14 @@ def build_runtime_config(args: argparse.Namespace) -> Path:
         config.update(overrides)
     _sanitize_hf_token_env(config)
     runtime_config = output_dir / "runtime_dataset_campaign_20k.json"
+    # Чистим мусорные .tmp-файлы от предыдущих аварийных остановок.
+    # Они накапливаются при EDQUOT и могут исчерпывать inode-квоту директории.
+    import glob as _glob
+    for _stale in _glob.glob(str(runtime_config) + ".tmp*"):
+        try:
+            Path(_stale).unlink()
+        except Exception:
+            pass
     _write_json(runtime_config, config)
     _ensure_hf_token(output_dir=output_dir)
     token_path = output_dir / ".dataset_drive_token.pickle"
