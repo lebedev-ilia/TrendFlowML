@@ -28,6 +28,17 @@ if ! command -v ffmpeg >/dev/null 2>&1; then
   echo "[launch_role] ffmpeg готов" >> "$LOGDIR/setup.log"
 fi
 
+# Node.js — тоже системный пакет, теряется при пересоздании контейнера. yt-dlp использует его как
+# JS-рантайм для решения YouTube signature-challenge при выборе форматов; без него download-воркер
+# массово проваливает попытки ("Signature solving failed"). Найдено вотчдогом 2026-07-17 на
+# fetcher-worker-b: dead_letter вырос до 1452/9500 (почти всё) без Node.js, упал до 1 после установки.
+if ! command -v node >/dev/null 2>&1; then
+  echo "[launch_role] node не найден, ставлю..." >> "$LOGDIR/setup.log"
+  apt-get update -qq >> "$LOGDIR/setup.log" 2>&1
+  DEBIAN_FRONTEND=noninteractive apt-get install -y -qq nodejs >> "$LOGDIR/setup.log" 2>&1
+  echo "[launch_role] node готов" >> "$LOGDIR/setup.log"
+fi
+
 # ВАЖНО: venv на Network Volume (/workspace), а НЕ системный pip3 — контейнер пода эфемерен
 # (пережил один раз необъяснимое пересоздание, см. deploy.py/README.md), а /workspace персистентен.
 # Системные пакеты (pip3 install без venv) теряются при пересоздании пода, venv на volume — нет.
