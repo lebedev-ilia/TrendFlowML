@@ -81,14 +81,31 @@ def send_photo(path, caption: str = "") -> int:
     messages.send с attachment=photoOWNER_ID. Возвращает message_id.
 
     Добавлено 2026-07-17 для deepdive_agent.py (свободный чат-разбор компонентов) — раньше в
-    этом репозитории не было ни одного места, отправляющего VK-фото, только текст."""
-    log_chat("AGENT1->", f"[фото] {path}" + (f" — {caption}" if caption else ""))
+    этом репозитории не было ни одного места, отправляющего VK-фото, только текст.
+
+    Баг найден в первой версии (2026-07-17): `files={"photo": f}` без явного имени/mime-типа —
+    `requests` подставляет как filename ПОЛНЫЙ ПУТЬ файлового объекта, upload-сервер VK такое иногда
+    не распознаёт как валидное изображение и возвращает пустой/невалидный `photo` в JSON, из-за чего
+    `photos.saveMessagesPhoto` падает с "photo is undefined". Фикс — передавать явный (basename,
+    file, mimetype) кортеж. Плюс: проверка на 0-байтный файл ДО аплоада и лог сырого ответа
+    upload-сервера при ошибке (чтобы при следующем сбое сразу было видно, что реально вернул VK,
+    а не гадать по обрезанному сообщению об ошибке)."""
+    from pathlib import Path
+    import mimetypes
+
+    p = Path(path)
+    log_chat("AGENT1->", f"[фото] {p}" + (f" — {caption}" if caption else ""))
+    if not p.is_file() or p.stat().st_size == 0:
+        raise RuntimeError(f"send_photo: файл отсутствует или пуст: {p}")
     upload = _call("photos.getMessagesUploadServer", peer_id=config.VK_OWNER_ID)
     upload_url = upload["upload_url"]
-    with open(path, "rb") as f:
-        r = requests.post(upload_url, files={"photo": f}, timeout=60)
+    mime = mimetypes.guess_type(p.name)[0] or "image/png"
+    with open(p, "rb") as f:
+        r = requests.post(upload_url, files={"photo": (p.name, f, mime)}, timeout=60)
     r.raise_for_status()
     uploaded = r.json()
+    if not uploaded.get("photo"):
+        raise RuntimeError(f"send_photo: upload-сервер вернул невалидный ответ: {uploaded}")
     saved = _call(
         "photos.saveMessagesPhoto",
         photo=uploaded["photo"], server=uploaded["server"], hash=uploaded["hash"],

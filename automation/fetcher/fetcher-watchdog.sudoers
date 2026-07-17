@@ -1,0 +1,14 @@
+# Узкий passwordless sudo — ТОЛЬКО перезапуск/статус двух сервисов Fetcher-наблюдателя.
+# НЕ даёт полного root-доступа (никакого NOPASSWD: ALL) — если watchdog.py скомпрометирован или
+# сглючит, максимум, что он может сделать через sudo — перезапустить сам себя/отчёт.
+#
+# Установка (один раз, проверь путь к systemctl через `which systemctl`, если отличается от
+# /usr/bin/systemctl — поправь путь в обеих строках ниже перед установкой):
+#   sudo visudo -cf fetcher-watchdog.sudoers   # синтаксис-чек ПЕРЕД установкой, обязательно
+#   sudo cp fetcher-watchdog.sudoers /etc/sudoers.d/fetcher-watchdog
+#   sudo chmod 440 /etc/sudoers.d/fetcher-watchdog
+
+ilya ALL=(root) NOPASSWD: /usr/bin/systemctl restart fetcher-watchdog
+ilya ALL=(root) NOPASSWD: /usr/bin/systemctl restart fetcher-report
+ilya ALL=(root) NOPASSWD: /usr/bin/systemctl status fetcher-watchdog
+ilya ALL=(root) NOPASSWD: /usr/bin/systemctl status fetcher-report
