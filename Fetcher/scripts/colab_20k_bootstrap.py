@@ -232,7 +232,27 @@ def _persist_hf_token_for_subprocesses(output_dir: str | Path) -> None:
         return
     path = hf_token_file_path(output_dir)
     path.parent.mkdir(parents=True, exist_ok=True)
-    path.write_text(token + "\n", encoding="utf-8")
+    # Skip-if-unchanged: don't rewrite if token file already has correct content
+    if path.exists():
+        try:
+            if path.read_text(encoding="utf-8").strip() == token:
+                return
+        except Exception:
+            pass
+    try:
+        path.write_text(token + "\n", encoding="utf-8")
+    except OSError as exc:
+        import errno as _errno
+        if exc.errno == _errno.EDQUOT:
+            # На RunPod env-переменная HF_TOKEN наследуется воркерами напрямую.
+            # Файл .hf_token — удобство для Colab, но не обязателен при EDQUOT.
+            print(
+                "[_persist_hf_token_for_subprocesses] WARN: EDQUOT, "
+                "пропускаем запись .hf_token (токен доступен через env HF_TOKEN)",
+                flush=True,
+            )
+            return
+        raise
     try:
         path.chmod(0o600)
     except OSError:
