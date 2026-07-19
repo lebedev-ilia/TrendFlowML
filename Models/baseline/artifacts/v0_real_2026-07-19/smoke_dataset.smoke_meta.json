@@ -1,0 +1,15 @@
+{
+  "synthetic": true,
+  "note": "SMOKE FIXTURE \u2014 not real ground truth. For pipeline integration test only.",
+  "created_at": "2026-07-19T02:12:02.522176+00:00",
+  "n_rows": 240,
+  "n_videos": 240,
+  "n_channels": 24,
+  "n_feature_columns": 911,
+  "target_drivers": [
+    "clap_extractor__clap_magnitude_mean",
+    "clap_extractor__clap_magnitude_std",
+    "clap_extractor__clap_norm"
+  ],
+  "bootstrapped_from": "/tmp/dbuild/features_all.parquet"
+}

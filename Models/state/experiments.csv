@@ -1,0 +1,2 @@
+id,date,feature_schema_version,dataset,targets,model_family,n_rows,n_channels,n_features,leakage_audit,spearman_views_21d_test,notes
+exp_0001,2026-07-19,v0-real,smoke_dataset.parquet,SYNTHETIC,sklearn-histgb,240,24,918,passed,0.6747,"first end-to-end smoke; real features (6 vids) bootstrapped to 240; synthetic leakage-free targets; proves pipeline works + metrics non-NaN"

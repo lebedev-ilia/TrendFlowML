@@ -1,0 +1,19 @@
+{
+  "_doc": "Shared pipeline-stage queue for Models Bot (Agent B). Statuses: ⬜ todo, 🔄 in-progress, ✅ done, ⛔ blocked. TrendFlow Bot (Agent A) works the DataProcessor side; do not edit A's checklists here.",
+  "updated_at": "2026-07-19",
+  "feature_schema_version": "v0-real",
+  "stages": [
+    {"id": "feature_spec_v0", "status": "✅", "artifact": "DataProcessor/DatasetBuilder/feature_spec.yaml", "note": "v0-real schema: baseline list minus brand/car/place/face_identity stubs + object-detection text/logo semantics; structural/metadata columns pruned"},
+    {"id": "build_training_table", "status": "✅", "artifact": "DataProcessor/DatasetBuilder/build_training_table.py", "note": "walks result_store per-run via manifest, reuses npz_features.py; 26 rows / 6 videos / 971 feat cols on current store"},
+    {"id": "add_targets", "status": "✅", "artifact": "DataProcessor/DatasetBuilder/add_targets.py", "note": "reads HF snapshot shards, y=log1p(delta) @7/14/21d, masks; real-target math unit-validated"},
+    {"id": "enrichment_channel_id", "status": "✅", "artifact": "DataProcessor/DatasetBuilder/enrichment.py", "note": "deterministic channel_id for non-leaking split; currently all fall back to video_id (no channel metadata in local manifests)"},
+    {"id": "build_full_dataset", "status": "✅", "artifact": "DataProcessor/DatasetBuilder/build_full_dataset.py", "note": "one-command orchestrator C1->C2->C3->C4"},
+    {"id": "baseline_v0_train_smoke", "status": "✅", "artifact": "Models/baseline/artifacts/v0_real_2026-07-19/baseline_v0_smoke_model", "note": "train_baseline.py run AS-IS (no code changes needed); 6 heads, sklearn HistGB; metrics non-NaN val+test"},
+    {"id": "leakage_audit", "status": "✅", "artifact": "Models/baseline/artifacts/v0_real_2026-07-19/baseline_v0_smoke_model/leakage_audit.json", "note": "passed: 0 leaked target/mask, 0 forbidden-source, 0 unmapped of 918 features"},
+
+    {"id": "real_targets_join", "status": "⛔", "blocked_on": "Fetcher HF collection: day 7/14/21 follow-up snapshots not gathered yet (calendar time). add_targets.py ready; re-run when snapshots land.", "note": "REAL model impossible until follow-up snapshots exist"},
+    {"id": "corpus_scale_150_250", "status": "⬜", "depends_on": "TrendFlow Bot AUTOMATED_TEST_CORPUS_PROTOCOL.md corpus + full DP runs producing result_store artifacts"},
+    {"id": "catboost_lightgbm", "status": "⬜", "note": "Python 3.14 has no catboost/lightgbm wheels in Models/.venv yet; used sklearn HistGB for smoke. Add when wheels available or pin py3.11 venv"},
+    {"id": "baseline_v1_frozen", "status": "⬜", "note": "bump feature_schema_version to v1 once identity bases + object_detections re-labelled weights mature (portfolio §8)"}
+  ]
+}

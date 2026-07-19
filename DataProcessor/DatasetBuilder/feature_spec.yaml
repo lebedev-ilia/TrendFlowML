@@ -1,0 +1,158 @@
+# =============================================================================
+# feature_spec.yaml  —  Baseline feature schema  v0-real
+# =============================================================================
+# Owner: Models Bot (Agent B).  Created 2026-07-19.
+#
+# WHAT THIS IS
+#   Schema-driven contract for DatasetBuilder/build_training_table.py.
+#   It lists WHICH DataProcessor components feed the baseline feature vector and
+#   WHICH columns to drop, so the flat training table is reproducible and free of
+#   structural noise / untrusted / stub features.
+#
+# WHY "v0-real" and not the frozen v1.0 list from BASELINE_MODEL.md
+#   The frozen v1.0 list references components that are currently stubs or built
+#   on the wrong weights (see DataProcessor COMPONENT_DEEP_DIVE_PORTFOLIO_ASSESSMENT.md §8).
+#   Training strictly on that list would train on constants/noise for 4-5 groups.
+#   v0-real = the frozen list MINUS those, so the first honest baseline sees only
+#   trustworthy signal. When identity/detector mature -> bump to v1 and re-run.
+#
+#   feature_schema_version drives the freeze policy (BASELINE_MODEL.md):
+#     v0* = changes allowed (log everything); v1 = frozen.
+# =============================================================================
+
+feature_schema_version: v0-real
+created_at: "2026-07-19"
+target_contract: TARGETS_SPLITS_METRICS.md   # y = log(1 + delta) for views/likes @ 7/14/21d
+
+# -----------------------------------------------------------------------------
+# 1) COMPONENTS INCLUDED IN v0-real
+#    Names must match manifest.json component "name" fields exactly.
+#    NPZ artifact path is resolved from the manifest (type == "npz"), not hardcoded.
+# -----------------------------------------------------------------------------
+components:
+
+  # --- Visual modules (7) — from BASELINE_MODEL.md, all trustworthy ----------
+  - name: cut_detection
+  - name: optical_flow
+  - name: scene_classification
+  - name: shot_quality
+  - name: story_structure
+  - name: uniqueness
+  - name: video_pacing
+
+  # --- Audio extractors (3) — from BASELINE_MODEL.md -------------------------
+  - name: clap_extractor
+  - name: loudness_extractor
+  - name: tempo_extractor
+
+  # --- Core providers (kept) -------------------------------------------------
+  - name: core_clip
+  - name: core_face_landmarks
+  - name: core_optical_flow
+  - name: core_depth_midas
+  - name: core_object_detections
+    # COCO-80 weights, taxonomy re-labelling in progress (portfolio §3.4/§8).
+    # Keep only taxonomy-INDEPENDENT geometry / person-density signal; drop the
+    # class-semantic + text/logo layer that the wrong weights make untrustworthy.
+    column_exclude:
+      - "class_ids"        # COCO class-id stats — wrong taxonomy
+      - "text_region"      # text semantics — untrusted (weights + re-label WIP)
+      - "logo_region"      # logo semantics — untrusted
+
+# -----------------------------------------------------------------------------
+# 2) COMPONENTS EXPLICITLY EXCLUDED FROM v0-real (documented, not silent)
+#    Re-add on v1 once real data / correct weights land.
+# -----------------------------------------------------------------------------
+components_excluded:
+  - name: brand_semantics      # stub base, no data (owner decision, portfolio §8)
+  - name: car_semantics        # stub base, no data
+  - name: place_semantics      # stub base / no places detected
+  - name: face_identity        # stub identity base + GDPR (portfolio §3.10); also emits no NPZ
+  - name: franchise_recognition # stub base, no data (portfolio §8)
+  # Text components (TitleEmbedder/CommentsEmbedder/... ) — not in baseline v1.0
+  # feature list; comments are POST-publication => leakage risk (portfolio §3.9).
+
+# -----------------------------------------------------------------------------
+# 3) GLOBAL COLUMN EXCLUDE PATTERNS (applied to every component)
+#    These strip structural / metadata / constant columns that npz_features.py
+#    emits generically but which carry no content signal (and several coerce
+#    string metadata -> NaN). Removing them here avoids training on junk and
+#    keeps feature importance readable.
+# -----------------------------------------------------------------------------
+global_column_exclude:
+  # substring match anywhere in the (post-prefix) column name:
+  substrings:
+    - "frame_indices"      # frame positions — structural, identical across comps
+    - "meta_json"          # serialized dict coerced to NaN
+    - "__version"          # producer/schema metadata
+    - "__created_at"
+    - "__model_name"
+    - "__schema_version"
+    - "__producer_version"
+    - "embedding_dim"      # constant (512)
+  # suffix match (endswith):
+  suffixes:
+    - "__count"            # array-size of the summarized array (structural).
+                           # NOTE: real count features like person_count__mean
+                           # end with __mean/__std, NOT __count — kept.
+    - "__empty"
+    - "__all_non_finite"
+
+# -----------------------------------------------------------------------------
+# 4) SNAPSHOT_0 INPUT FIELDS (state at analysis time — leakage-safe)
+#    Sourced from HF snapshot_0 (Fetcher dataset_collector) or run metadata.
+#    comments_0 is a FEATURE, never a target (TARGETS_SPLITS_METRICS.md).
+# -----------------------------------------------------------------------------
+snapshot0_fields:
+  - views_0
+  - likes_0
+  - comments_0
+  - channel_subscribers_0
+  - channel_total_views_0
+  - channel_total_videos_0
+
+# -----------------------------------------------------------------------------
+# 5) TEMPORAL / STRUCTURAL FEATURES (added by builder, leakage-safe)
+# -----------------------------------------------------------------------------
+temporal_fields:
+  - video_age_hours_at_snapshot1   # required for age-bucket metrics
+  - duration_sec
+  - analysis_fps
+
+# -----------------------------------------------------------------------------
+# 6) IDENTITY / BOOKKEEPING COLUMNS (NEVER features — excluded by trainer)
+# -----------------------------------------------------------------------------
+id_columns:
+  - platform_id
+  - video_id
+  - run_id
+  - channel_id
+  - channelTitle
+  - publishedAt
+  - config_hash
+  - manifest_path
+  - language
+
+# -----------------------------------------------------------------------------
+# 7) TARGET / MASK COLUMNS (produced by add_targets.py, excluded from features)
+# -----------------------------------------------------------------------------
+target_columns:
+  - target_views_7d
+  - target_views_14d
+  - target_views_21d
+  - target_likes_7d
+  - target_likes_14d
+  - target_likes_21d
+mask_columns:
+  - mask_7d
+  - mask_14d
+  - mask_21d
+
+# -----------------------------------------------------------------------------
+# 8) LEAKAGE POLICY (asserted by builder; see README "Leakage audit")
+#    Every feature must be derivable from video content + snapshot_0 alone.
+#    NOTHING computed from a future snapshot (t+7/14/21) may enter features.
+# -----------------------------------------------------------------------------
+leakage_policy:
+  allowed_sources: [video_frames, video_audio, snapshot_0, run_metadata]
+  forbidden_sources: [snapshot_7d, snapshot_14d, snapshot_21d, post_publication_comments]

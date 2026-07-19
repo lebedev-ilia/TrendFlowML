@@ -121,6 +121,14 @@ scene_classification:
   batch_size: 1
   label_fusion: places
   enable_advanced_features: false
+video_pacing:
+  # §3.6 config-drift fix (2026-07-19): раньше секции не было → batch шёл вариантом A
+  # (enable_entropy_features/enable_histograms=False по коду-дефолту) → 13 NaN, тогда как
+  # штамп валидации получен на варианте B (флаги ON, 5 NaN). Выравниваем задеплоенный
+  # конфиг на провалидированный вариант B, чтобы 8 аналитических фич (shot_duration_entropy,
+  # shot_length_gini, tempo_entropy, 5×shot_length_histogram) были живыми в реальном батче.
+  enable_entropy_features: true
+  enable_histograms: true
 ocr_extractor:
   proposal_class: text_region
   min_det_score: 0.5
