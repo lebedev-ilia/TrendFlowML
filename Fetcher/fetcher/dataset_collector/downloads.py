@@ -41,6 +41,9 @@ from fetcher.dataset_collector.worker_logging import (
 MAX_DOWNLOAD_HEIGHT = 1080
 # Try highest cap first; on failure retry with lower caps (merge / stream errors).
 DOWNLOAD_HEIGHT_TIERS = (1080, 720, 480, 360, 240, 144)
+# Сколько куки пробовать для yt-dlp backend'а до отказа/фолбэка (баг 2026-07-19: раньше пробовался
+# только cookie_attempts[0], остальные никогда не задействовались).
+YTDLP_COOKIE_ATTEMPTS = 3
 
 
 class BotDetectionDownloadError(RuntimeError):
@@ -564,36 +567,60 @@ def download_video_local(
     started_at = time.perf_counter()
 
     if backend in {"yt_dlp", "yt_dlp_first"}:
-        cookie_file = cookie_attempts[0]
-        try:
-            return _download_video_local_ytdlp(
-                state,
-                config,
-                platform=platform,
-                video_id=video_id,
-                url=url,
-                category=category,
-                target=target,
-                proxy_rotator=proxy_rotator,
-                cookie_file=cookie_file,
-                started_at=started_at,
-            )
-        except BotDetectionDownloadError as exc:
-            worker_log("download", f"FAIL {video_id}: yt-dlp bot detection: {exc}")
-            raise
-        except KeyboardInterrupt:
-            _cleanup_download_temps(
-                target,
-                output_dir=config.output_dir,
-                permanent_on_drive=config.drive_permanent_delete,
-            )
-            worker_log("download", f"STOP {video_id}: shutdown requested")
-            raise
-        except Exception as exc:
-            if backend == "yt_dlp":
-                worker_log("download", f"FAIL {video_id}: yt-dlp {type(exc).__name__}: {exc}")
-                return None
-            worker_log("download", f"yt-dlp failed for {video_id}, trying pytubefix: {type(exc).__name__}: {exc}")
+        # Баг найден 2026-07-19: раньше брался ТОЛЬКО cookie_attempts[0] — ни разу не пробовались
+        # остальные куки для yt-dlp (в отличие от pytubefix, у которого есть полный перебор). На
+        # проде это означало, что при проблемном первом куки (albert_cookie2.txt в этой сессии
+        # массово ловил "Only images are available") ВСЕ видео проваливались без единой попытки
+        # других 6 куки. Пробуем до YTDLP_COOKIE_ATTEMPTS куки коротким циклом (без 120с bot-паузы
+        # между ними — pytubefix-цикл всё ещё делает это по-своему) ПЕРЕД тем, как считать видео
+        # неудачным/переходить к pytubefix.
+        _ytdlp_last_exc: Exception | None = None
+        for _cookie_file in cookie_attempts[:YTDLP_COOKIE_ATTEMPTS]:
+            try:
+                return _download_video_local_ytdlp(
+                    state,
+                    config,
+                    platform=platform,
+                    video_id=video_id,
+                    url=url,
+                    category=category,
+                    target=target,
+                    proxy_rotator=proxy_rotator,
+                    cookie_file=_cookie_file,
+                    started_at=started_at,
+                )
+            except BotDetectionDownloadError as exc:
+                worker_log(
+                    "download",
+                    f"yt-dlp bot_detection {video_id} cookie={_cookie_file.name if _cookie_file else 'none'} "
+                    "— пробую следующий куки",
+                )
+                _ytdlp_last_exc = exc
+                continue
+            except KeyboardInterrupt:
+                _cleanup_download_temps(
+                    target,
+                    output_dir=config.output_dir,
+                    permanent_on_drive=config.drive_permanent_delete,
+                )
+                worker_log("download", f"STOP {video_id}: shutdown requested")
+                raise
+            except Exception as exc:
+                _ytdlp_last_exc = exc
+                worker_log(
+                    "download",
+                    f"yt-dlp {type(exc).__name__} {video_id} cookie={_cookie_file.name if _cookie_file else 'none'}: "
+                    f"{exc} — пробую следующий куки",
+                )
+                continue
+        # Все YTDLP_COOKIE_ATTEMPTS куки провалились для этого видео.
+        if isinstance(_ytdlp_last_exc, BotDetectionDownloadError):
+            worker_log("download", f"FAIL {video_id}: yt-dlp bot detection на всех попробованных куки")
+            raise _ytdlp_last_exc
+        if backend == "yt_dlp":
+            worker_log("download", f"FAIL {video_id}: yt-dlp {type(_ytdlp_last_exc).__name__ if _ytdlp_last_exc else '?'}: {_ytdlp_last_exc}")
+            return None
+        worker_log("download", f"yt-dlp failed for {video_id} (все куки), trying pytubefix: {_ytdlp_last_exc}")
 
     global _pytubefix_sticky_client_index
 
