@@ -1165,7 +1165,11 @@ processors:
       face_identity:
         embedding_service_url: "http://localhost:8005"
         topk: 5
-        similarity_threshold: 0
+        # Было 0 (нет гейтинга — возвращает топ-K независимо от score, риск ложных "узнаваний").
+        # 0.5 — консервативная нижняя граница уверенного ArcFace-cosine-матча (типично ~0.4-0.6);
+        # см. DataProcessor/docs/component_reports/core_identity/face_identity/FINAL_REPORT.md
+        # раздел 10, рекомендация #1. Калибровать точнее после реальной privacy-политики (см. PRIVACY.md).
+        similarity_threshold: 0.5
         render:
           enable_render: true
           enable_html_render: true
