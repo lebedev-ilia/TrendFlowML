@@ -580,6 +580,24 @@ def download_video_local(
     if backend not in {"pytubefix", "yt_dlp", "yt_dlp_first"}:
         backend = "pytubefix"
     started_at = time.perf_counter()
+    # Баг найден 2026-07-19 (владелец): на видео, которое ловит bot_detection на КАЖДОЙ
+    # комбинации, полный перебор (yt-dlp x YTDLP_COOKIE_ATTEMPTS + pytubefix x client_count x
+    # len(cookie_attempts), каждая пауза 120с) растягивался до 15-25 минут на одно видео —
+    # огромная потеря времени, пока остальная очередь ждёт. Жёсткий потолок: max
+    # download_max_seconds_per_video (дефолт 180с/3мин) на видео СУММАРНО по всем бэкендам —
+    # проверяется перед каждой новой попыткой (не прерывает уже начатую загрузку).
+    _max_seconds = float(getattr(config, "download_max_seconds_per_video", 180.0) or 180.0)
+
+    def _deadline_hit() -> bool:
+        elapsed = time.perf_counter() - started_at
+        if elapsed >= _max_seconds:
+            worker_log(
+                "download",
+                f"deadline {video_id}: {elapsed:.0f}s >= {_max_seconds:.0f}s лимит на видео — "
+                "прекращаю перебор, перехожу к следующему видео",
+            )
+            return True
+        return False
 
     if backend in {"yt_dlp", "yt_dlp_first"}:
         # Баг найден 2026-07-19: раньше брался ТОЛЬКО cookie_attempts[0] — ни разу не пробовались
@@ -591,6 +609,8 @@ def download_video_local(
         # неудачным/переходить к pytubefix.
         _ytdlp_last_exc: Exception | None = None
         for _cookie_file in cookie_attempts[:YTDLP_COOKIE_ATTEMPTS]:
+            if _deadline_hit():
+                break
             try:
                 return _download_video_local_ytdlp(
                     state,
@@ -635,6 +655,8 @@ def download_video_local(
         if backend == "yt_dlp":
             worker_log("download", f"FAIL {video_id}: yt-dlp {type(_ytdlp_last_exc).__name__ if _ytdlp_last_exc else '?'}: {_ytdlp_last_exc}")
             return None
+        if _deadline_hit():
+            return None
         worker_log("download", f"yt-dlp failed for {video_id} (все куки), trying pytubefix: {_ytdlp_last_exc}")
 
     global _pytubefix_sticky_client_index
@@ -643,11 +665,18 @@ def download_video_local(
     pytubefix_clients = _pytubefix_client_sequence(config)
     client_count = len(pytubefix_clients)
     start_sticky = _pytubefix_sticky_client_index
+    _pytubefix_deadline_hit = False
     for offset in range(client_count):
+        if _pytubefix_deadline_hit or _deadline_hit():
+            _pytubefix_deadline_hit = True
+            break
         client_idx = (start_sticky + offset) % client_count
         client_name = pytubefix_clients[client_idx]
         client_exhausted = False
         for cookie_file in cookie_attempts:
+            if _deadline_hit():
+                _pytubefix_deadline_hit = True
+                break
             try:
                 downloaded = _download_video_local_pytubefix_attempt(
                     state,
@@ -703,6 +732,10 @@ def download_video_local(
                 f"sticky -> {next_client}",
             )
 
+    if _deadline_hit():
+        raise BotDetectionDownloadError("; ".join(bot_errors[-3:])) if bot_errors else RuntimeError(
+            f"deadline exceeded for {video_id}, no successful attempt"
+        )
     worker_log("download", f"pytubefix exhausted for {video_id}; trying yt-dlp fallback")
     try:
         return _download_video_local_ytdlp(

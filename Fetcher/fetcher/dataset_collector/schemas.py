@@ -328,6 +328,16 @@ class CampaignConfig(BaseModel):
         ge=0.0,
         description="Sleep after suspiciously fast download or generic fail/unavailable pacing.",
     )
+    download_max_seconds_per_video: float = Field(
+        180.0,
+        ge=0.0,
+        description=(
+            "Hard wall-clock cap per video across ALL backends/cookies/clients combined "
+            "(added 2026-07-19 owner request: было до 25 минут на одно видео из-за 120с "
+            "bot-пауз x 2 клиента x 7 куки в pytubefix-переборе — теперь жёстко режем и "
+            "переходим к следующему видео в очереди)."
+        ),
+    )
     drive_permanent_delete: Optional[bool] = Field(
         None,
         description=(
