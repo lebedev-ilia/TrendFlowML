@@ -1,10 +1,13 @@
 from __future__ import annotations
 
 import http.cookiejar
+import logging
 import os
 from pathlib import Path
 from typing import Optional
 from urllib import request
+
+_log = logging.getLogger(__name__)
 
 from fetcher.dataset_collector.schemas import CampaignConfig
 
@@ -95,8 +98,13 @@ def install_pytubefix_session(
         handlers.append(request.ProxyHandler(proxies))
     if cookie_file is not None and cookie_file.is_file():
         jar = http.cookiejar.MozillaCookieJar(str(cookie_file))
-        jar.load(ignore_discard=True, ignore_expires=True)
-        handlers.append(request.HTTPCookieProcessor(jar))
+        try:
+            jar.load(ignore_discard=True, ignore_expires=True)
+        except http.cookiejar.LoadError as exc:
+            _log.warning("Cookie file %s is invalid (%s), skipping", cookie_file, exc)
+            jar = None
+        if jar is not None:
+            handlers.append(request.HTTPCookieProcessor(jar))
     if handlers:
         request.install_opener(request.build_opener(*handlers))
 
