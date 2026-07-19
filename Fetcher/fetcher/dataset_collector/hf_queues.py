@@ -251,15 +251,14 @@ def run_hf_shard_upload_queue(
 
         local_path = state.root / shard_relpath
         if not local_path.is_file():
-            worker_log("hf-shards", f"FAIL missing file {shard_relpath}")
-            results["failed"] += 1
-            if record_queue_failure(
-                state,
-                service="hf-shards",
-                item=item,
-                error=f"missing file {shard_relpath}",
-            ):
-                dead_letter_keys.add(retry_key)
+            # Баг найден 2026-07-19: "файла ещё нет" — временное состояние (генерация могла просто
+            # не успеть), а не навсегда недоступный шард. Раньше это считалось так же, как
+            # постоянная ошибка — после queue_max_attempts попыток шард НАВСЕГДА уходил в
+            # dead_letter, и даже если файл появлялся позже, воркер аплоада активно удалял его при
+            # "dead-letter cleanup", ни разу не попытавшись загрузить. Теперь просто пропускаем без
+            # накопления dead_letter — проверим на следующем проходе, файл может появиться позже.
+            results["skipped"] += 1
+            skip_reasons["missing_file_pending"] = skip_reasons.get("missing_file_pending", 0) + 1
             continue
 
         size_mb = local_path.stat().st_size / (1024 * 1024)
@@ -426,15 +425,17 @@ def run_hf_video_upload_queue(
 
         local_path = state.root / local_relpath
         if not local_path.is_file():
-            worker_log("hf-videos", f"FAIL missing {local_relpath} (download not finished?)")
-            results["failed"] += 1
-            if record_queue_failure(
-                state,
-                service="hf-videos",
-                item=item,
-                error=f"missing local file {local_relpath}",
-            ):
-                dead_letter_keys.add(retry_key)
+            # Баг найден 2026-07-19 (реальный инцидент — вот почему on_hf стоял на месте, хотя
+            # download реально скачивал видео): "файла ещё нет" ЧАСТО означает "скачивание ещё не
+            # успело" или "скачивание сейчас идёт заново после временного сбоя" — НЕ "видео навсегда
+            # недоступно". Раньше это считалось так же, как постоянная ошибка — после
+            # queue_max_attempts попыток видео НАВСЕГДА уходило в dead_letter, и даже когда download
+            # УСПЕШНО перекачивал его повторно (например после фикса cookies/backend), этот же
+            # воркер активно УДАЛЯЛ свежий файл при "dead-letter cleanup", ни разу не пытаясь
+            # загрузить — молча теряя уже скачанные видео. Теперь просто пропускаем без накопления
+            # dead_letter — проверим на следующем проходе, файл может появиться позже.
+            results["skipped"] += 1
+            skip_reasons["missing_file_pending"] = skip_reasons.get("missing_file_pending", 0) + 1
             continue
 
         size_mb = local_path.stat().st_size / (1024 * 1024)
@@ -617,15 +618,11 @@ def run_hf_enrich_upload_queue(
                 results["skipped"] += 1
                 skip_reasons["stale_pending_path"] = skip_reasons.get("stale_pending_path", 0) + 1
                 continue
-            worker_log("hf-enrich", f"FAIL missing {local_relpath}")
-            results["failed"] += 1
-            if record_queue_failure(
-                state,
-                service="hf-enrich",
-                item=item,
-                error=f"missing local file {local_relpath}",
-            ):
-                dead_letter_keys.add(retry_key)
+            # Тот же баг, что в hf-videos/hf-shards (найден 2026-07-19) — "файла ещё нет" не значит
+            # "навсегда недоступно", не копим постоянный dead_letter из-за временного отсутствия
+            # файла (см. подробный комментарий в run_hf_video_upload_queue).
+            results["skipped"] += 1
+            skip_reasons["missing_file_pending"] = skip_reasons.get("missing_file_pending", 0) + 1
             continue
 
         pending_uploads.append(
