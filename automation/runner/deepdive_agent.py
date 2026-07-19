@@ -53,6 +53,14 @@ import messenger
 import settings
 import tools
 import hooks
+import session_state
+
+AGENT_NAME = "deepdive_agent"
+CONTINUE_AFTER_RESTART_MESSAGE = (
+    "Перезапуск (сбой сессии или рестарт процесса) — контекст восстановлен автоматически из "
+    "прошлой сессии, ничего не потеряно. Продолжай с того места, на котором остановился(-ась) "
+    "до перезапуска."
+)
 
 PROTOCOL_PATH = config.REPO_DIR / "DataProcessor" / "docs" / "COMPONENT_DEEP_DIVE_PROTOCOL.md"
 CHECKLIST_PATH = config.REPO_DIR / "DataProcessor" / "docs" / "COMPONENT_DEEP_DIVE_CHECKLIST.md"
@@ -206,31 +214,47 @@ async def _handle_turn(client: ClaudeSDKClient, text: str) -> None:
     в чате была полная тишина по 10+ минут, владелец решал, что агент завис (тот же баг, что
     чинили в watchdog.py). Теперь каждый TextBlock уходит в VK сразу, короткой пометкой — это и
     есть промежуточный прогресс; в конце хода финальный текст всё равно приходит целиком
-    (небольшое дублирование последней мысли — приемлемая цена за отсутствие тишины)."""
+    (небольшое дублирование последней мысли — приемлемая цена за отсутствие тишины).
+
+    Второй баг найден 2026-07-19 (в этом же разговоре): если во время хода приходит НОВОЕ
+    сообщение от владельца, скрипт физически не мог его увидеть — poll_once() вызывался только
+    ПОСЛЕ полного завершения текущего хода (см. main()). Теперь ход может быть прерван снаружи
+    через client.interrupt() (см. _producer в main()) — except ниже ловит обрыв стрима, который
+    interrupt вызывает, и не считает это ошибкой. session_id хода сохраняется на диск при каждом
+    сообщении — это то, что позволяет resume при рестарте (см. session_state.py)."""
     messenger.log_chat("OWNER->", text)
     await client.query(text)
     parts: list[str] = []
-    async for msg in client.receive_response():
-        if isinstance(msg, AssistantMessage):
-            for block in msg.content:
-                if isinstance(block, TextBlock) and block.text.strip():
-                    block_text = block.text.strip()
-                    parts.append(block_text)
-                    messenger.send(f"⏳ {block_text[:200]}")
-        elif isinstance(msg, ResultMessage):
-            cost = float(getattr(msg, "total_cost_usd", 0.0) or 0.0)
-            print(f"[deepdive] ход завершён, cost=${cost:.4f}", flush=True)
+    try:
+        async for msg in client.receive_response():
+            sid = getattr(msg, "session_id", None)
+            if sid:
+                session_state.save(AGENT_NAME, sid)
+            if isinstance(msg, AssistantMessage):
+                for block in msg.content:
+                    if isinstance(block, TextBlock) and block.text.strip():
+                        block_text = block.text.strip()
+                        parts.append(block_text)
+                        messenger.send(f"⏳ {block_text[:200]}")
+            elif isinstance(msg, ResultMessage):
+                cost = float(getattr(msg, "total_cost_usd", 0.0) or 0.0)
+                print(f"[deepdive] ход завершён, cost=${cost:.4f}", flush=True)
+    except Exception as e:
+        print(f"[deepdive] ход прерван: {e}", flush=True)
     if parts:
         _send_long("\n\n".join(parts))
     _flush_outbox_photos()
 
 
-async def _run_component_turn(client: ClaudeSDKClient, lp: "messenger.LongPoll", text: str) -> None:
+async def _run_component_turn(client: ClaudeSDKClient, queue: "asyncio.Queue[str]", text: str) -> None:
     """Один ход + автопродолжение очереди компонентов. Сверяет чеклист до/после хода: если
     появился новый ✅ и есть ещё ⬜ — сама шлёт CONTINUE_MESSAGE и рекурсивно продолжает, пока
-    компоненты не кончатся или пока не появится реальное сообщение от владельца (проверяется
-    коротким non-blocking-подобным poll_once(1) ПЕРЕД авто-сообщением — реальное сообщение всегда
-    приоритетнее автопродолжения)."""
+    компоненты не кончатся или пока не появится реальное сообщение от владельца.
+
+    Раньше проверка «не написал ли владелец» шла отдельным прямым lp.poll_once(1) — теперь ЕСТЬ
+    только один VK-слушатель на процесс (_producer в main()), поэтому здесь просто смотрим в общую
+    очередь non-blocking (queue.get_nowait()): два конкурентных poll_once на одном long-poll ts
+    ломали бы курсор VK. Реальное сообщение владельца всегда приоритетнее автопродолжения."""
     before = _done_components()
     await _handle_turn(client, text)
     after = _done_components()
@@ -243,14 +267,15 @@ async def _run_component_turn(client: ClaudeSDKClient, lp: "messenger.LongPoll",
         messenger.log_chat("AGENT1(auto)", send_text)
         return
     # Реальное сообщение владельца — всегда приоритетнее автопродолжения.
-    owner_msgs = await asyncio.to_thread(lp.poll_once, 1)
-    if owner_msgs:
-        for m in owner_msgs:
-            await _run_component_turn(client, lp, m)
+    try:
+        m = queue.get_nowait()
+        await _run_component_turn(client, queue, m)
         return
+    except asyncio.QueueEmpty:
+        pass
     await asyncio.sleep(2)
     messenger.log_chat("AGENT1(auto)", f"[авто] {', '.join(newly_done)} готов -> {CONTINUE_MESSAGE}")
-    await _run_component_turn(client, lp, CONTINUE_MESSAGE)
+    await _run_component_turn(client, queue, CONTINUE_MESSAGE)
 
 
 async def main(model_name: str | None) -> None:
@@ -259,13 +284,17 @@ async def main(model_name: str | None) -> None:
     model = settings.resolve_model(model_name) if model_name else config.AGENT_MODEL
     print(f"[deepdive] запуск, модель={model}...", flush=True)
     lp = messenger.LongPoll()
+    resume_id = session_state.load(AGENT_NAME)
     messenger.send(
-        "🧭 TrendFlow Bot переключён на свободный разбор компонентов (Final Report), модель "
-        f"{model}. Пиши как в обычном чате — спецкоманды не нужны. Например: «разбери core_clip». "
-        "Очередь компонентов идёт автоматически — после каждого готового отчёта сама берётся за "
-        "следующий, не нужно писать «продолжай»."
+        f"🧭 TrendFlow Bot на связи (модель {model})." + (
+            " Восстанавливаю прошлую сессию — контекст не потерян."
+            if resume_id else
+            " Пиши как в обычном чате — спецкоманды не нужны. Например: «разбери core_clip». "
+            "Очередь компонентов идёт автоматически — после каждого готового отчёта сама "
+            "берётся за следующий, не нужно писать «продолжай»."
+        )
     )
-    print("[deepdive] готов, слушаю VK", flush=True)
+    print(f"[deepdive] готов, слушаю VK (resume={resume_id!r})", flush=True)
     options = ClaudeAgentOptions(
         model=model,
         system_prompt=_system_prompt(),
@@ -278,39 +307,93 @@ async def main(model_name: str | None) -> None:
         ],
         permission_mode="bypassPermissions",
         max_turns=500,
-        hooks={"PreToolUse": [HookMatcher(matcher="Bash", hooks=[hooks.guard_bash])]},
+        # Ограничение на Bash (guard_bash: supervisor-проверка опасных команд, лимит на тяжёлые
+        # прогоны при высоком % Claude) СНЯТО по прямой просьбе владельца 2026-07-19 — полный
+        # доступ ко всем командам без исключений (в т.ч. нужно для ночной автономной задачи:
+        # чистка старых данных на Network Volume, куда явно дано разрешение).
+        resume=resume_id,
     )
     while True:
         try:
             async with ClaudeSDKClient(options=options) as client:
-                if _has_pending_components():
+                queue: asyncio.Queue[str] = asyncio.Queue()
+
+                if options.resume:
+                    await _run_component_turn(client, queue, CONTINUE_AFTER_RESTART_MESSAGE)
+                elif _has_pending_components():
                     messenger.send("▶️ В чеклисте есть неразобранные компоненты — начинаю сама.")
-                    await _run_component_turn(client, lp, CONTINUE_MESSAGE)
+                    await _run_component_turn(client, queue, CONTINUE_MESSAGE)
                 else:
                     messenger.send("▶️ Очередь разбора компонентов пуста — перехожу к автономным задачам "
                                    "из портфолио-оценки.")
-                    await _run_component_turn(client, lp, AUTONOMOUS_KICKOFF_MESSAGE)
-                while True:
-                    texts = await asyncio.to_thread(lp.poll_once, 25)
-                    for t in texts:
+                    await _run_component_turn(client, queue, AUTONOMOUS_KICKOFF_MESSAGE)
+
+                # Баг найден 2026-07-19: poll_once() раньше вызывался ТОЛЬКО между полностью
+                # завершёнными ходами (включая рекурсивное автопродолжение очереди компонентов) —
+                # если владелец писал во время долгого хода, сообщение физически не читалось, пока
+                # ход сам не закончится. Теперь VK слушается НЕПРЕРЫВНО отдельной задачей
+                # (_producer): если приходит сообщение, а бот занят (busy) — зовём client.interrupt()
+                # (штатная возможность SDK для streaming-режима), текущий receive_response()
+                # обрывается, и новое сообщение уходит в обработку сразу.
+                busy = asyncio.Event()
+
+                async def _producer() -> None:
+                    """Баг найден 2026-07-19: раньше был fire-and-forget asyncio.create_task —
+                    если lp.poll_once() кидал ЛЮБОЕ исключение мимо requests.RequestException
+                    (например json.JSONDecodeError на кривом ответе VK), задача молча умирала.
+                    Внешний try/except в main() её не видел (это отдельная Task, не await в
+                    основном потоке) — VK переставал слушаться НАВСЕГДА до ручного рестарта, при
+                    этом консьюмер продолжал жить на том, что уже было в очереди (автопродолжение
+                    очереди компонентов), создавая иллюзию, что бот просто "не реагирует", хотя на
+                    деле не мог физически увидеть новые сообщения. Подтверждено на практике:
+                    настоящее сообщение владельца НИ РАЗУ не попало в agent1_chat.log за ~8 минут
+                    непрерывной фоновой работы. Теперь опрос обёрнут в try/except, который никогда
+                    не даёт задаче умереть."""
+                    while True:
                         try:
-                            await _run_component_turn(client, lp, t)
+                            texts = await asyncio.to_thread(lp.poll_once, 25)
+                        except Exception as e:
+                            print(f"[deepdive] poll_once упал, жду и пробую снова: {e}", flush=True)
+                            await asyncio.sleep(3)
+                            continue
+                        for t in texts:
+                            if busy.is_set():
+                                messenger.send("⏸ Прерываю текущую работу — читаю новое сообщение.")
+                                try:
+                                    await client.interrupt()
+                                except Exception as e:
+                                    print(f"[deepdive] interrupt не сработал: {e}", flush=True)
+                            await queue.put(t)
+
+                producer_task = asyncio.create_task(_producer())
+                try:
+                    while True:
+                        t = await queue.get()
+                        busy.set()
+                        try:
+                            await _run_component_turn(client, queue, t)
                         except Exception as e:
                             print(f"[deepdive] ошибка обработки сообщения: {e}", flush=True)
                             try:
                                 messenger.send(f"❗ Ошибка: {e}")
                             except Exception:
                                 pass
+                        finally:
+                            busy.clear()
+                finally:
+                    producer_task.cancel()
         except Exception as e:
             print(f"[deepdive] сессия оборвалась, переоткрываю: {e}", flush=True)
             try:
                 messenger.send(
-                    f"⚠️ Сессия оборвалась ({e}), переоткрываю. Контекст разговора начнётся заново, "
-                    "но всё, что уже записано в FINAL_REPORT.md/CHECKLIST, не потеряно — очередь "
-                    "продолжится с того места, где остановилась."
+                    f"⚠️ Сессия оборвалась ({e}), переоткрываю с тем же контекстом (не с нуля). "
+                    "Прогресс в файлах тоже не теряется."
                 )
             except Exception:
                 pass
+            # Резюмируем с последнего известного session_id — переоткрытие сессии ВНУТРИ процесса
+            # тоже не должно терять контекст, не только полный рестарт процесса.
+            options.resume = session_state.load(AGENT_NAME) or options.resume
             await asyncio.sleep(5)
 
 
