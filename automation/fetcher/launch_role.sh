@@ -79,6 +79,13 @@ overrides = {
     "download_pause_after_fail_seconds": 15,
     "download_pause_after_bot_seconds": 120,
     "download_pause_after_fast_seconds": 15,
+    # pytubefix сейчас детектится YouTube как бот на 100% попыток (все куки x все клиенты) —
+    # проверено вживую 2026-07-19: 14 подряд bot_detection на одном видео, ~28 минут впустую
+    # ДО того как код вообще пробует yt-dlp. yt-dlp + куки + Deno (JS-рантайм для EJS/signature)
+    # СРАЗУ скачал то же самое видео за секунды — см. downloads.py, автодетект Deno уже есть.
+    # yt_dlp_first: yt-dlp пробуется первым; если бот-детект — сразу fail (без траты времени на
+    # мёртвый pytubefix); на прочих ошибках — фолбэк на pytubefix всё ещё есть.
+    "download_backend": "yt_dlp_first",
     "worker_id": "$WORKER_ID",
     "worker_shard_index": int("$WORKER_SHARD_INDEX"),
     "worker_shard_count": int("$WORKER_SHARD_COUNT"),
