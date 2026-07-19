@@ -83,9 +83,12 @@ overrides = {
     # проверено вживую 2026-07-19: 14 подряд bot_detection на одном видео, ~28 минут впустую
     # ДО того как код вообще пробует yt-dlp. yt-dlp + куки + Deno (JS-рантайм для EJS/signature)
     # СРАЗУ скачал то же самое видео за секунды — см. downloads.py, автодетект Deno уже есть.
-    # yt_dlp_first: yt-dlp пробуется первым; если бот-детект — сразу fail (без траты времени на
-    # мёртвый pytubefix); на прочих ошибках — фолбэк на pytubefix всё ещё есть.
-    "download_backend": "yt_dlp_first",
+    # Пробовали "yt_dlp_first" (фолбэк на pytubefix при НЕ-бот ошибках, напр. "Only images are
+    # available") — но раз pytubefix сейчас 100% сломан, фолбэк на него означает те же +28 минут
+    # впустую на каждом таком видео. "yt_dlp" (без фолбэка вообще) — быстрый fail (~15с пауза,
+    # download_pause_after_fail_seconds) и переход к следующему видео. Вернуть "yt_dlp_first" или
+    # "pytubefix", если pytubefix когда-нибудь перестанет быть 100% забаненным.
+    "download_backend": "yt_dlp",
     "worker_id": "$WORKER_ID",
     "worker_shard_index": int("$WORKER_SHARD_INDEX"),
     "worker_shard_count": int("$WORKER_SHARD_COUNT"),
