@@ -62,7 +62,21 @@ def _run_queue_pass(
     from fetcher.dataset_collector.hf_progress import pull_hf_progress
 
     role = "download" if kind == "download" else "enrich" if kind == "enrich-metadata" else "workers"
-    pull_hf_progress(state, config, role=role)
+    try:
+        pull_hf_progress(state, config, role=role)
+    except Exception:
+        # Баг найден 2026-07-19: pull_hf_progress() ничем не защищён — HF Xet-бэкенд иногда
+        # отдаёт "File size mismatch" (гонка: координационный файл на HF меняется другим воркером
+        # ровно в момент скачивания), и это НЕПОЙМАННОЕ исключение убивало весь демон воркера ещё
+        # до старта основного цикла — процесс "жив" по ps, но навсегда застревает здесь (наблюдали
+        # на fetcher-main несколько рестартов подряд). pull_hf_progress — это только оптимизация
+        # (не дублировать работу других воркеров), не жёсткое требование для старта: логируем и
+        # продолжаем с тем локальным состоянием, что уже есть, вместо падения демона.
+        print(
+            f"[{kind}] pull_hf_progress упал (не критично, продолжаю с локальным состоянием): "
+            + traceback.format_exc(limit=3),
+            flush=True,
+        )
     cookie_rotator = CookieRotator.from_config(config)
 
     if kind == "download":
