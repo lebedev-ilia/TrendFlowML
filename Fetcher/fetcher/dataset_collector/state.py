@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import fcntl
 import json
 import os
 from contextlib import contextmanager
@@ -81,17 +82,29 @@ def iter_jsonl(path: Path) -> Iterator[dict]:
 
 @contextmanager
 def file_lock(path: Path) -> Iterator[None]:
+    """Exclusive file lock using fcntl.flock.
+
+    Unlike O_CREAT|O_EXCL, flock is released by the OS automatically when the
+    process exits (including SIGKILL), so stale lock files can never block
+    future runs after a crash or pod restart.
+    """
     path.parent.mkdir(parents=True, exist_ok=True)
-    fd = os.open(str(path), os.O_CREAT | os.O_EXCL | os.O_WRONLY)
+    fd = os.open(str(path), os.O_CREAT | os.O_WRONLY)
+    acquired = False
     try:
+        # LOCK_NB: non-blocking — raises BlockingIOError if already locked
+        fcntl.flock(fd, fcntl.LOCK_EX | fcntl.LOCK_NB)
+        acquired = True
+        os.ftruncate(fd, 0)
         os.write(fd, str(os.getpid()).encode("utf-8"))
         yield
     finally:
+        if acquired:
+            try:
+                path.unlink()
+            except FileNotFoundError:
+                pass
         os.close(fd)
-        try:
-            path.unlink()
-        except FileNotFoundError:
-            pass
 
 
 class DatasetState:
