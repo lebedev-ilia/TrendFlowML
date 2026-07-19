@@ -16,7 +16,9 @@ from fetcher.dataset_collector.cookies import (
     apply_cookiefile,
     install_pytubefix_session,
 )
-from fetcher.dataset_collector.proxy import ProxyRotator, configured_proxies, pytubefix_proxy_dict
+from fetcher.dataset_collector.proxy import (
+    ProxyRotator, configured_proxies, pytubefix_proxy_dict, is_proxy_transport_error,
+)
 from fetcher.dataset_collector.schemas import CampaignConfig
 from fetcher.dataset_collector.state import DatasetState
 from fetcher.dataset_collector.local_delete import delete_local_file
@@ -472,12 +474,16 @@ def _download_video_local_pytubefix_attempt(
         worker_log("download", f"STOP {video_id}: shutdown requested")
         raise
     except subprocess.CalledProcessError as exc:
-        if proxy_rotator and proxy_url:
-            proxy_rotator.record_download_failure(proxy_url)
+        # ffmpeg merge — локальная ошибка, прокси тут ни при чём (баг найден 2026-07-19, см.
+        # комментарий ниже про тот же паттерн в _download_video_local_ytdlp).
         worker_log("download", f"FAIL {video_id}: ffmpeg merge failed: {exc.stderr.decode(errors='replace')[:300]}")
         return None
     except Exception as exc:
-        if proxy_rotator and proxy_url:
+        # Баг найден 2026-07-19: раньше blacklist прокси был безусловным на ЛЮБОЕ исключение —
+        # включая video_unavailable/client-ошибки, которые к прокси отношения не имеют (сжигало
+        # рабочие прокси на первой же протухшей куке/недоступном видео). Blacklist только на
+        # реальный сигнал про прокси.
+        if proxy_rotator and proxy_url and (is_bot_detection_error(exc) or is_proxy_transport_error(exc)):
             proxy_rotator.record_download_failure(proxy_url)
         if is_video_unavailable_error(exc):
             raise VideoUnavailableDownloadError(str(exc)) from exc
@@ -767,7 +773,14 @@ def _download_video_local_ytdlp(
         with YoutubeDL(ydl_opts) as ydl:
             ydl.download([url])
     except Exception as exc:
-        if proxy_rotator and proxy_url:
+        # Баг найден 2026-07-19: раньше record_download_failure() (безусловный blacklist прокси)
+        # вызывался на ЛЮБОЕ исключение — включая "Your account has been rate-limited" (ошибка
+        # КУКИ/аккаунта, не прокси) и обычный "Requested format is not available" (часто тоже
+        # не про прокси). На живом тесте с новым купленным пулом прокси это сжигало рабочие IP за
+        # первую же неудачу, вызванную протухшей кукой, а не самим прокси. Теперь blacklist только
+        # при реальном сигнале про прокси: bot-детект (могло сработать именно из-за этого IP) или
+        # транспортная ошибка (is_proxy_transport_error) — остальные причины прокси не трогают.
+        if proxy_rotator and proxy_url and (is_bot_detection_error(exc) or is_proxy_transport_error(exc)):
             proxy_rotator.record_download_failure(proxy_url)
         if is_bot_detection_error(exc):
             raise BotDetectionDownloadError(str(exc)) from exc
