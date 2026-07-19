@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import json
 import os
+import shutil
 import subprocess
 import threading
 import time
@@ -723,6 +724,12 @@ def _download_video_local_ytdlp(
     if proxy_url:
         ydl_opts["proxy"] = proxy_url
     apply_cookiefile(ydl_opts, CookieRotator([cookie_file]) if cookie_file else None)
+
+    # Auto-detect Deno for JS signature solving (required when using cookies with yt-dlp)
+    _deno_path = shutil.which("deno") or os.path.expanduser("~/.deno/bin/deno")
+    if os.path.isfile(_deno_path):
+        ydl_opts["js_runtimes"] = {"deno": {"path": _deno_path}}
+        ydl_opts["remote_components"] = {"ejs:github"}
 
     worker_log(
         "download",
