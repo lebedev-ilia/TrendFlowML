@@ -45,7 +45,16 @@ MAX_DOWNLOAD_HEIGHT = 1080
 DOWNLOAD_HEIGHT_TIERS = (1080, 720, 480, 360, 240, 144)
 # Сколько куки пробовать для yt-dlp backend'а до отказа/фолбэка (баг 2026-07-19: раньше пробовался
 # только cookie_attempts[0], остальные никогда не задействовались).
-YTDLP_COOKIE_ATTEMPTS = 3
+#
+# Поднято 3 -> 7 (2026-07-19, тот же день): живым тестом подтверждено, что yt-dlp+Deno (JS-challenge
+# solver) реально скачивает видео через купленные прокси (3/4 тестов успешны). Проблема была в
+# другом: первые 3 куки в ротации (albert/alexander/archebald) сейчас протухшие/rate-limited,
+# YTDLP_COOKIE_ATTEMPTS=3 исчерпывался ИМЕННО на них и падал в pytubefix-фолбэк — а pytubefix
+# (ANDROID_VR) сам сейчас ловит BotDetection на КАЖДОЙ прокси (see po_token.html — pytubefix, в
+# отличие от yt-dlp, PoToken не генерирует), то есть фолбэк гарантированно проигрышный и просто
+# сжигает прокси на bot_detection. Пробуем ВСЕ 7 куки на рабочем yt-dlp-пути раньше, чем падать на
+# заведомо сломанный pytubefix.
+YTDLP_COOKIE_ATTEMPTS = 7
 
 
 class BotDetectionDownloadError(RuntimeError):
