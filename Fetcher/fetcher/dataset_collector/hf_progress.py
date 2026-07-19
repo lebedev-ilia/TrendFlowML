@@ -194,34 +194,54 @@ def _role_file_names(role: str | None) -> set[str]:
 
 def _download_remote_file(config: CampaignConfig, remote: str, dest: Path) -> bool:
     dest.parent.mkdir(parents=True, exist_ok=True)
-    try:
-        from huggingface_hub import hf_hub_download
-
-        resolve_hf_token(config)
-        downloaded = hf_hub_download(
-            repo_id=resolve_progress_repo_id(config),
-            repo_type="dataset",
-            filename=remote,
-        )
+    _MAX_RETRIES = 3
+    _RETRY_DELAYS = [30, 60]  # seconds between attempts 1→2 and 2→3
+    last_exc: Exception | None = None
+    for attempt in range(_MAX_RETRIES):
         try:
-            dest.write_bytes(Path(downloaded).read_bytes())
-        except OSError as write_exc:
-            if write_exc.errno == 122:  # EDQUOT: disk quota exceeded on /workspace
-                # Cache write skipped — quota is full (downloads/ accumulation).
-                # Caller proceeds with the old cache file (stale but safe); the pass
-                # continues so upload-hf-videos can upload MP4s and free disk space.
+            from huggingface_hub import hf_hub_download
+
+            resolve_hf_token(config)
+            downloaded = hf_hub_download(
+                repo_id=resolve_progress_repo_id(config),
+                repo_type="dataset",
+                filename=remote,
+                force_download=(attempt > 0),  # bypass HF local cache on retry
+            )
+            try:
+                dest.write_bytes(Path(downloaded).read_bytes())
+            except OSError as write_exc:
+                if write_exc.errno == 122:  # EDQUOT: disk quota exceeded on /workspace
+                    # Cache write skipped — quota is full (downloads/ accumulation).
+                    # Caller proceeds with the old cache file (stale but safe); the pass
+                    # continues so upload-hf-videos can upload MP4s and free disk space.
+                    print(
+                        f"[hf-progress] WARNING: EDQUOT writing cache {dest.name} "
+                        f"— skipping cache update, proceeding with existing local state",
+                        flush=True,
+                    )
+                else:
+                    raise
+            return True
+        except Exception as exc:
+            if "404" in str(exc) or "EntryNotFound" in str(exc) or "not found" in str(exc).lower():
+                return False
+            last_exc = exc
+            if attempt < _MAX_RETRIES - 1:
+                delay = _RETRY_DELAYS[attempt]
                 print(
-                    f"[hf-progress] WARNING: EDQUOT writing cache {dest.name} "
-                    f"— skipping cache update, proceeding with existing local state",
+                    f"[hf-progress] WARNING: download {remote!r} attempt {attempt + 1}/{_MAX_RETRIES} "
+                    f"failed ({type(exc).__name__}: {exc}) — retry in {delay}s",
                     flush=True,
                 )
-            else:
-                raise
-        return True
-    except Exception as exc:
-        if "404" in str(exc) or "EntryNotFound" in str(exc) or "not found" in str(exc).lower():
-            return False
-        raise
+                time.sleep(delay)
+    # All retries exhausted — log and skip this progress file rather than crashing the worker.
+    print(
+        f"[hf-progress] WARNING: download {remote!r} failed after {_MAX_RETRIES} attempts "
+        f"({type(last_exc).__name__}: {last_exc}) — skipping, worker continues with stale local state",
+        flush=True,
+    )
+    return False
 
 
 def _read_jsonl_rows(path: Path) -> list[dict]:
