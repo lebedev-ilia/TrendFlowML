@@ -152,7 +152,10 @@ CHECK_PROMPT = (
 )
 
 
-async def _run_llm(prompt: str, model: str, *, max_turns: int = 40, progress: bool = False) -> str:
+async def _run_llm(
+    prompt: str, model: str, *, max_turns: int = 40, progress: bool = False,
+    client_holder: dict | None = None,
+) -> str:
     """Общий раннер LLM-сессии для часовой проверки И для ответа на произвольное сообщение
     владельца — один и тот же агент с одним и тем же системным промптом/доступом к deploy.py.
 
@@ -160,7 +163,12 @@ async def _run_llm(prompt: str, model: str, *, max_turns: int = 40, progress: bo
     финальный ответ в конце. Баг найден 2026-07-17: обычный разбор занимает 3-5 минут (SSH на 3
     пода + анализ), всё это время чат молчал — владелец решил, что бот завис, и слал сообщение
     повторно. Для часовой автопроверки (_check_pass) progress НЕ включаем — она и так молчит,
-    когда всё штатно, это осознанное поведение, не нужно."""
+    когда всё штатно, это осознанное поведение, не нужно.
+
+    client_holder — опциональный dict {"client": None}, куда кладётся текущий активный
+    ClaudeSDKClient, пока сессия идёт (см. main()/_producer: 2026-07-19, тот же баг, что чинили
+    в deepdive_agent.py/models_agent.py — если во время долгого разбора приходит НОВОЕ сообщение
+    владельца, нужен способ прервать текущий client.receive_response() через interrupt())."""
     parts = []
     cost = 0.0
     async with ClaudeSDKClient(options=ClaudeAgentOptions(
@@ -168,18 +176,26 @@ async def _run_llm(prompt: str, model: str, *, max_turns: int = 40, progress: bo
         allowed_tools=["Read", "Write", "Edit", "Bash", "Glob", "Grep"],
         permission_mode="bypassPermissions", max_turns=max_turns,
     )) as client:
+        if client_holder is not None:
+            client_holder["client"] = client
         await client.query(prompt)
-        async for msg in client.receive_response():
-            if isinstance(msg, AssistantMessage):
-                for b in msg.content:
-                    if isinstance(b, TextBlock) and b.text.strip():
-                        text = b.text.strip()
-                        parts.append(text)
-                        _log_chat("WATCHDOG(raw)", text[:300])
-                        if progress:
-                            send(f"⏳ {text[:200]}")
-            elif isinstance(msg, ResultMessage):
-                cost = float(getattr(msg, "total_cost_usd", 0.0) or 0.0)
+        try:
+            async for msg in client.receive_response():
+                if isinstance(msg, AssistantMessage):
+                    for b in msg.content:
+                        if isinstance(b, TextBlock) and b.text.strip():
+                            text = b.text.strip()
+                            parts.append(text)
+                            _log_chat("WATCHDOG(raw)", text[:300])
+                            if progress:
+                                send(f"⏳ {text[:200]}")
+                elif isinstance(msg, ResultMessage):
+                    cost = float(getattr(msg, "total_cost_usd", 0.0) or 0.0)
+        except Exception as e:
+            print(f"[watchdog] сессия прервана: {e}", flush=True)
+        finally:
+            if client_holder is not None:
+                client_holder["client"] = None
     print(f"[watchdog] сессия завершена, cost=${cost:.4f}", flush=True)
     return "\n".join(parts) if parts else "(без замечаний)"
 
@@ -188,7 +204,7 @@ async def _check_pass(model: str) -> str:
     return await _run_llm(CHECK_PROMPT, model)
 
 
-async def _handle_owner_message(text: str, model: str) -> str:
+async def _handle_owner_message(text: str, model: str, client_holder: dict | None = None) -> str:
     """Реальный диалог с владельцем в том же VK-чате, где идут часовые отчёты — не просто /status
     и /help, а любой текст трактуется как задача агенту (аналог того, как assistant.py общается с
     владельцем по ML-раннеру). Баг найден 2026-07-17: раньше любое сообщение, кроме /status и
@@ -202,7 +218,7 @@ async def _handle_owner_message(text: str, model: str) -> str:
         "в причине, при возможности почини код и перезапусти процесс на поде. Ответь по существу "
         "и кратко — это уйдёт напрямую владельцу в VK."
     )
-    return await _run_llm(prompt, model, max_turns=60, progress=True)
+    return await _run_llm(prompt, model, max_turns=60, progress=True, client_holder=client_holder)
 
 
 async def _check_loop(model_getter):
@@ -217,6 +233,39 @@ async def _check_loop(model_getter):
             print(f"[watchdog] ошибка проверки: {e}", flush=True)
 
 
+async def _process_owner_text(t: str, model: str, client_holder: dict) -> None:
+    _log_chat("OWNER->", t)
+    low = t.lower()
+    if low == "/help":
+        send(HELP)
+    elif low == "/status":
+        send("⏳ Проверяю сейчас...")
+        # Шаг 1 — детерминированный отчёт с цифрами (быстро, без LLM).
+        try:
+            nums = await asyncio.to_thread(hourly_report.build_report)
+            send(nums[:4000])
+        except Exception as e:
+            send(f"❗ Ошибка чтения метрик: {e}")
+        # Шаг 2 — LLM-диагностика (ищет аномалии в логах; только если есть проблемы).
+        try:
+            diag = await _run_llm(CHECK_PROMPT, model, client_holder=client_holder)
+            low_diag = diag.lower()
+            if any(w in low_diag for w in ("брифинг", "ошибк", "проблем", "зависл", "traceback", "dead_letter")):
+                send(f"🔍 Диагностика: {diag[:1500]}")
+        except Exception as e:
+            send(f"❗ Ошибка диагностики: {e}")
+    else:
+        # Любой другой текст — реальная задача агенту, не заглушка HELP (см.
+        # _handle_owner_message: баг найден 2026-07-17, владелец не мог обратиться к
+        # агенту напрямую в VK).
+        send("⏳ Разбираюсь...")
+        try:
+            result = await _handle_owner_message(t, model, client_holder=client_holder)
+            send(result[:1500] if result else "(агент не дал ответа)")
+        except Exception as e:
+            send(f"❗ Ошибка: {e}")
+
+
 async def main():
     if not config.VK_TOKEN3:
         raise SystemExit("Нет VK_TOKEN3 в automation/fetcher/.env")
@@ -227,43 +276,51 @@ async def main():
         "но можешь и просто написать мне — разберусь.")
     print("[watchdog] готов, слушаю VK", flush=True)
     check_task = asyncio.create_task(_check_loop(lambda: model))
+
+    # Баг найден 2026-07-19 (тот же класс, что чинили в deepdive_agent.py/models_agent.py):
+    # 1) lp.poll() был ничем не защищён от исключений мимо requests.RequestException (например
+    #    json.JSONDecodeError на кривом ответе VK) — такое падение рвало ВЕСЬ while-цикл, и
+    #    поскольку вокруг него не было try/except (только внешний try/finally на cancel
+    #    check_task), процесс просто завершался; ждать, что systemd успеет перезапустить и
+    #    владелец это заметит, не самая быстрая диагностика.
+    # 2) `/status` и произвольные сообщения разбирались ПОСЛЕДОВАТЕЛЬНО в одном цикле —
+    #    poll() не вызывался, пока текущее сообщение не обработано целиком (3-5+ минут на
+    #    SSH-разбор). Новое сообщение владельца в это время просто не читалось.
+    # Теперь: poll — в защищённой фоновой задаче, которая никогда не падает; при новом
+    # сообщении, если бот занят — прерываем текущую LLM-сессию через client.interrupt().
+    queue: asyncio.Queue[str] = asyncio.Queue()
+    busy = asyncio.Event()
+    client_holder: dict = {"client": None}
+
+    async def _producer() -> None:
+        while True:
+            try:
+                msgs = await asyncio.to_thread(lp.poll, 25)
+            except Exception as e:
+                print(f"[watchdog] poll упал, жду и пробую снова: {e}", flush=True)
+                await asyncio.sleep(3)
+                continue
+            for t in msgs:
+                if busy.is_set() and client_holder["client"] is not None:
+                    send("⏸ Прерываю текущую работу — читаю новое сообщение.")
+                    try:
+                        await client_holder["client"].interrupt()
+                    except Exception as e:
+                        print(f"[watchdog] interrupt не сработал: {e}", flush=True)
+                await queue.put(t)
+
+    producer_task = asyncio.create_task(_producer())
     try:
         while True:
-            msgs = await asyncio.to_thread(lp.poll, 25)
-            for t in msgs:
-                _log_chat("OWNER->", t)
-                low = t.lower()
-                if low == "/help":
-                    send(HELP)
-                elif low == "/status":
-                    send("⏳ Проверяю сейчас...")
-                    # Шаг 1 — детерминированный отчёт с цифрами (быстро, без LLM).
-                    try:
-                        nums = await asyncio.to_thread(hourly_report.build_report)
-                        send(nums[:4000])
-                    except Exception as e:
-                        send(f"❗ Ошибка чтения метрик: {e}")
-                    # Шаг 2 — LLM-диагностика (ищет аномалии в логах; только если есть проблемы).
-                    try:
-                        diag = await _check_pass(model)
-                        # Отправляем только если агент нашёл что-то (не просто «всё штатно»).
-                        low_diag = diag.lower()
-                        if any(w in low_diag for w in ("брифинг", "ошибк", "проблем", "зависл", "traceback", "dead_letter")):
-                            send(f"🔍 Диагностика: {diag[:1500]}")
-                    except Exception as e:
-                        send(f"❗ Ошибка диагностики: {e}")
-                else:
-                    # Любой другой текст — реальная задача агенту, не заглушка HELP (см.
-                    # _handle_owner_message: баг найден 2026-07-17, владелец не мог обратиться к
-                    # агенту напрямую в VK).
-                    send("⏳ Разбираюсь...")
-                    try:
-                        result = await _handle_owner_message(t, model)
-                        send(result[:1500] if result else "(агент не дал ответа)")
-                    except Exception as e:
-                        send(f"❗ Ошибка: {e}")
+            t = await queue.get()
+            busy.set()
+            try:
+                await _process_owner_text(t, model, client_holder)
+            finally:
+                busy.clear()
     finally:
         check_task.cancel()
+        producer_task.cancel()
 
 
 if __name__ == "__main__":
