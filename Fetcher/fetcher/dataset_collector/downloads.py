@@ -957,13 +957,29 @@ def run_download_queue(
                 apply_download_pause(config, "unavailable")
                 item_done = True
             except BotDetectionDownloadError as exc:
-                worker_log(
-                    "download",
-                    f"bot_detection {video_id}: {_short_error(exc)} — "
-                    f"sleep 2min, retry same video (not skipping)",
+                results["failed"] += 1
+                bot_dead = record_queue_failure(
+                    state,
+                    service="download",
+                    item=item,
+                    error=f"bot_detection: {_short_error(exc)}",
+                    dead_letter_cache=dead_letter_keys,
+                    attempt_cache=attempt_counts_cache,
                 )
+                if bot_dead:
+                    dead_letter_keys.add(retry_key)
+                    worker_log(
+                        "download",
+                        f"bot_detection {video_id}: max attempts reached — dead-lettered, skipping",
+                    )
+                else:
+                    worker_log(
+                        "download",
+                        f"bot_detection {video_id}: {_short_error(exc)} — "
+                        f"attempt recorded, skipping to next video (will retry next pass)",
+                    )
                 apply_download_pause(config, "bot")
-                continue
+                item_done = True
             else:
                 if path is None:
                     results["failed"] += 1
