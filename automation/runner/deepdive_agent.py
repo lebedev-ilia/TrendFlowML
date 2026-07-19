@@ -201,6 +201,12 @@ def _send_long(text: str) -> None:
 
 
 async def _handle_turn(client: ClaudeSDKClient, text: str) -> None:
+    """Баг найден 2026-07-19: раньше весь текст хода копился в parts и уходил в VK ОДНИМ
+    сообщением только в конце — при долгой работе (разбор компонента, DatasetBuilder, обучение)
+    в чате была полная тишина по 10+ минут, владелец решал, что агент завис (тот же баг, что
+    чинили в watchdog.py). Теперь каждый TextBlock уходит в VK сразу, короткой пометкой — это и
+    есть промежуточный прогресс; в конце хода финальный текст всё равно приходит целиком
+    (небольшое дублирование последней мысли — приемлемая цена за отсутствие тишины)."""
     messenger.log_chat("OWNER->", text)
     await client.query(text)
     parts: list[str] = []
@@ -208,7 +214,9 @@ async def _handle_turn(client: ClaudeSDKClient, text: str) -> None:
         if isinstance(msg, AssistantMessage):
             for block in msg.content:
                 if isinstance(block, TextBlock) and block.text.strip():
-                    parts.append(block.text.strip())
+                    block_text = block.text.strip()
+                    parts.append(block_text)
+                    messenger.send(f"⏳ {block_text[:200]}")
         elif isinstance(msg, ResultMessage):
             cost = float(getattr(msg, "total_cost_usd", 0.0) or 0.0)
             print(f"[deepdive] ход завершён, cost=${cost:.4f}", flush=True)

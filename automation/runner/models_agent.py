@@ -224,6 +224,9 @@ class LP:
 
 
 async def _handle_turn(client: ClaudeSDKClient, text: str) -> None:
+    """Баг найден 2026-07-19 (тот же, что в deepdive_agent.py/watchdog.py): раньше весь текст хода
+    копился и уходил в VK одним сообщением в конце — при долгой работе (сборка датасета, обучение)
+    в чате была тишина по 10+ минут. Теперь каждый TextBlock уходит сразу короткой пометкой."""
     _log_chat("OWNER->", text)
     await client.query(text)
     parts: list[str] = []
@@ -231,7 +234,9 @@ async def _handle_turn(client: ClaudeSDKClient, text: str) -> None:
         if isinstance(msg, AssistantMessage):
             for block in msg.content:
                 if isinstance(block, TextBlock) and block.text.strip():
-                    parts.append(block.text.strip())
+                    block_text = block.text.strip()
+                    parts.append(block_text)
+                    send(f"⏳ {block_text[:200]}")
         elif isinstance(msg, ResultMessage):
             cost = float(getattr(msg, "total_cost_usd", 0.0) or 0.0)
             print(f"[models_agent] ход завершён, cost=${cost:.4f}", flush=True)
