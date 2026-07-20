@@ -16,6 +16,10 @@ def _pod_ssh_endpoint(pod_id: str) -> tuple[str, str] | None:
     p = rc.get_pod(pod_id)
     ep = rc.pod_endpoint(p)
     if not ep:
+        # REST API /v1/pods/{id} для CPU-подов не возвращает runtime.ports (баг RunPod, 2026-07-20):
+        # publicIp всегда пустая строка, portMappings/runtime отсутствуют. GraphQL-fallback.
+        ep = rc.get_pod_endpoint_gql(pod_id)
+    if not ep:
         return None
     host, port = ep.split(":")
     return host, port

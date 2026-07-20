@@ -148,6 +148,24 @@ def create_cpu_pod(*, name: str, network_volume_id: str, data_center_id: str,
     return r.json() if r.text else {}
 
 
+def get_pod_endpoint_gql(pod_id: str) -> str | None:
+    """SSH host:port через GraphQL.
+
+    REST API /v1/pods/{id} для CPU-подов не возвращает поле `runtime` (баг/особенность RunPod,
+    обнаружено 2026-07-20): `publicIp` всегда пустая строка, `portMappings` и `runtime` отсутствуют.
+    GraphQL-эндпоинт возвращает `runtime.ports` корректно — используем как fallback.
+    Запрашиваем ВСЕ поды за один вызов и фильтруем по pod_id."""
+    q = "query { myself { pods { id runtime { ports { ip privatePort publicPort isIpPublic } } } } }"
+    r = requests.post(f"{config.RUNPOD_GRAPHQL}?api_key={config.RUNPOD_API_KEY}",
+                      json={"query": q}, timeout=30)
+    r.raise_for_status()
+    pods = (((r.json().get("data") or {}).get("myself") or {}).get("pods")) or []
+    for p in pods:
+        if p.get("id") == pod_id:
+            return pod_endpoint(p)
+    return None
+
+
 def account_balance() -> float | None:
     try:
         r = requests.post(f"{config.RUNPOD_GRAPHQL}?api_key={config.RUNPOD_API_KEY}",
