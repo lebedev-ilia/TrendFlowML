@@ -65,6 +65,12 @@ class VideoUnavailableDownloadError(RuntimeError):
     """Video deleted, private, or region-blocked — no point retrying cookies/clients."""
 
 
+class DownloadDeadlineExceededError(RuntimeError):
+    """Hit download_max_seconds_per_video — сдались по времени, не по факту бан-детекта на
+    последней попытке. Отдельный тип (не BotDetectionDownloadError), чтобы вызывающий код НЕ
+    накладывал сверху ещё одну 120с bot-паузу — мы её уже отсидели внутри лимита."""
+
+
 def is_pytubefix_client_error(exc: BaseException) -> bool:
     """YouTube innertube parse failures (visitorData / empty params) — try another client."""
     if isinstance(exc, (IndexError, KeyError)):
@@ -733,8 +739,11 @@ def download_video_local(
             )
 
     if _deadline_hit():
-        raise BotDetectionDownloadError("; ".join(bot_errors[-3:])) if bot_errors else RuntimeError(
-            f"deadline exceeded for {video_id}, no successful attempt"
+        # DownloadDeadlineExceededError, не BotDetectionDownloadError — иначе внешний
+        # обработчик (run_download_queue) наложит СВЕРХУ ещё одну 120с bot-паузу, хотя мы её уже
+        # отсидели внутри лимита (баг найден 2026-07-19: видео уходило в ~4.5мин вместо 3мин).
+        raise DownloadDeadlineExceededError(
+            f"deadline exceeded for {video_id}: {'; '.join(bot_errors[-3:]) if bot_errors else 'no successful attempt'}"
         )
     worker_log("download", f"pytubefix exhausted for {video_id}; trying yt-dlp fallback")
     try:
@@ -1044,6 +1053,22 @@ def run_download_queue(
                 ):
                     dead_letter_keys.add(retry_key)
                 apply_download_pause(config, "unavailable")
+                item_done = True
+            except DownloadDeadlineExceededError as exc:
+                # Не считаем это "мёртвым" по счётчику попыток bot_detection (не тот же класс
+                # причины) — просто короткая пауза и на следующее видео. Уже отсидели 3 минуты
+                # внутри лимита, добавлять сверху 120с bot-паузу не нужно (баг 2026-07-19).
+                results["failed"] += 1
+                worker_log("download", f"deadline {video_id}: {_short_error(exc)} — skipping to next video")
+                record_queue_failure(
+                    state,
+                    service="download",
+                    item=item,
+                    error=f"deadline: {exc}",
+                    dead_letter_cache=dead_letter_keys,
+                    attempt_cache=attempt_counts_cache,
+                )
+                apply_download_pause(config, "fail")
                 item_done = True
             except BotDetectionDownloadError as exc:
                 results["failed"] += 1
