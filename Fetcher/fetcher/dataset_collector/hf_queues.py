@@ -291,6 +291,14 @@ def run_hf_shard_upload_queue(
                 state_dir=state.state_dir,
             )
             for item in batch:
+                # НЕ удаляем локальный файл шарда метаданных после аплоада (проверил 2026-07-20,
+                # владелец просил найти пропущенную очистку — эта НЕ пропущена, а намеренно
+                # отсутствует): scan_shards_for_enrichment() в metadata_enrichment.py читает ИМЕННО
+                # эти локальные файлы, чтобы найти видео, которым ещё нужно yt-dlp-обогащение —
+                # удаление сразу после HF-аплоада оборвало бы обогащение для любого видео, чей
+                # шард выгрузился раньше, чем дошла очередь до enrichment. Метаданные-шарды малы
+                # (169МБ на поде на момент проверки) — не они держат диск, это enrich-файлы
+                # (см. run_hf_enrich_upload_queue ниже — там очистка теперь есть).
                 state.mark_hf_shard_upload_done(item["key"], shard_relpath=item["shard_relpath"])
                 done_keys.add(item["key"])
                 results["uploaded"] += 1
@@ -660,19 +668,41 @@ def run_hf_enrich_upload_queue(
                 state_dir=state.state_dir,
             )
             for item in batch:
-                state.mark_hf_enrich_upload_done(
-                    item["key"],
-                    video_id=item["video_id"],
-                    category=item["category"],
-                    local_path=item["local_relpath"],
-                )
-                state.mark_metadata_enrich_done(
-                    item["key"],
-                    video_id=item["video_id"],
-                    shard=item["local_relpath"],
-                )
+                try:
+                    state.mark_hf_enrich_upload_done(
+                        item["key"],
+                        video_id=item["video_id"],
+                        category=item["category"],
+                        local_path=item["local_relpath"],
+                    )
+                    state.mark_metadata_enrich_done(
+                        item["key"],
+                        video_id=item["video_id"],
+                        shard=item["local_relpath"],
+                    )
+                except OSError as state_exc:
+                    if state_exc.errno == 122:  # EDQUOT — тот же паттерн, что в hf-videos
+                        worker_log(
+                            "hf-enrich",
+                            f"WARN EDQUOT: state write skipped for {item['video_id']}"
+                            f" — удаляю локальный файл всё равно, чтобы освободить место",
+                        )
+                    else:
+                        raise
                 results["uploaded"] += 1
                 worker_log("hf-enrich", f"OK {item['video_id']}")
+            # Баг найден 2026-07-20 (владелец): в отличие от hf-videos, тут НИКОГДА не удалялся
+            # локальный enrich-файл после успешной загрузки в HF — рос без ограничения (1000+
+            # WARNING EDQUOT в логах на некоторых подах). Один физический файл может покрывать
+            # несколько video_id (unique_files уже дедуплицирует) — удаляем каждый файл РОВНО
+            # один раз, после того как ВСЕ ссылающиеся на него элементы батча подтверждены.
+            for local_relpath, (local_path, _remote) in unique_files.items():
+                delete_local_file(
+                    local_path,
+                    output_dir=config.output_dir,
+                    permanent_on_drive=config.drive_permanent_delete,
+                    log_channel="hf-enrich",
+                )
             from fetcher.dataset_collector.metrics import record_hf_commit
 
             record_hf_commit("enrich", len(unique_files))
