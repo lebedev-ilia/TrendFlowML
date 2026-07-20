@@ -31,6 +31,37 @@ def _pass_had_work(result: dict) -> bool:
     return int(result.get("attempted") or 0) > 0
 
 
+def _maybe_clear_hf_hub_cache(*, threshold_pct: float = 85.0) -> None:
+    """Баг найден 2026-07-20 (владелец): pull_hf_progress()/hf_hub_download() кэширует КАЖДУЮ
+    версию часто меняющихся координационных файлов под ~/.cache/huggingface/hub — контент-
+    адресация, старые ревизии сами не чистятся. На fetcher-main это набрало 18ГБ и забило
+    контейнерный диск (overlay, ОТДЕЛЬНЫЙ от /workspace-volume) до 93%. Дешёвая проверка
+    (statvfs, без обхода директорий) перед каждым pass-ом: если корневой диск выше порога —
+    сносим весь HF-кэш целиком (это чистый кэш, не источник истины — следующий hf_hub_download
+    просто перекачает заново)."""
+    try:
+        import shutil as _shutil
+        usage = _shutil.disk_usage("/")
+        pct = 100.0 * usage.used / usage.total
+        if pct < threshold_pct:
+            return
+        cache_dir = Path(os.path.expanduser("~/.cache/huggingface"))
+        if not cache_dir.exists():
+            return
+        freed_estimate = sum(
+            f.stat().st_size for f in cache_dir.rglob("*") if f.is_file()
+        )
+        import shutil as _shutil2
+        _shutil2.rmtree(cache_dir, ignore_errors=True)
+        print(
+            f"[run_workers] диск / был {pct:.0f}% (>= {threshold_pct}%) — снёс ~/.cache/huggingface "
+            f"(~{freed_estimate / 1024 / 1024:.0f} MB), это чистый кэш",
+            flush=True,
+        )
+    except Exception as e:
+        print(f"[run_workers] _maybe_clear_hf_hub_cache упал (не критично): {e}", flush=True)
+
+
 def _idle_sleep(idle_interval_sec: int) -> None:
     """Sleep in small slices so SIGINT/SIGTERM can stop the worker promptly."""
     deadline = time.monotonic() + max(idle_interval_sec, 10)
@@ -60,6 +91,8 @@ def _run_queue_pass(
     state = DatasetState(config)
     state.initialize()
     from fetcher.dataset_collector.hf_progress import pull_hf_progress
+
+    _maybe_clear_hf_hub_cache()
 
     role = "download" if kind == "download" else "enrich" if kind == "enrich-metadata" else "workers"
     try:
