@@ -55,6 +55,12 @@ else
 fi
 PY="$VENV/bin/python3"
 
+# PO Token provider (bgutil) — локальный сервер на 127.0.0.1:4416, yt-dlp находит его сам
+# (plugin auto-detect). Без него с 2026-07-19 yt-dlp массово падает даже со свежим IP/куки
+# (подтверждено живым тестом). Идемпотентно — пропускает, если уже поднят.
+POT_PROVIDER_PYTHON="$PY" bash "$FETCHER/scripts/setup_pot_provider.sh" /workspace \
+  >> "$LOGDIR/setup.log" 2>&1 || echo "[launch_role] WARN: setup_pot_provider.sh failed, см. $LOGDIR/setup.log" >> "$LOGDIR/setup.log"
+
 : "${WORKER_ID:?нужен WORKER_ID}"
 : "${WORKER_SHARD_INDEX:?нужен WORKER_SHARD_INDEX}"
 : "${WORKER_SHARD_COUNT:?нужен WORKER_SHARD_COUNT}"

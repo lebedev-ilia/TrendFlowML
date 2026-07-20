@@ -29,6 +29,9 @@ PySocks>=1.7.1
 # YouTube
 yt-dlp>=2023.0.0
 pytubefix>=9.5.0
+# PO Token provider plugin (yt-dlp auto-detects it once the local bgutil server is up —
+# см. Fetcher/scripts/setup_pot_provider.sh); требует yt-dlp>=2025.05.22
+bgutil-ytdlp-pot-provider>=1.3.0
 
 # Platform SDKs (TikTok, Instagram, Twitch)
 TikTokApi>=6.0.0
