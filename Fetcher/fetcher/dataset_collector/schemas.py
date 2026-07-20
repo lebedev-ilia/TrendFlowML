@@ -271,8 +271,14 @@ class CampaignConfig(BaseModel):
         description="yt-dlp format selector for mp4 downloads.",
     )
     download_ytdlp_player_clients: List[str] = Field(
-        default_factory=lambda: ["android", "web"],
-        description="YouTube player clients passed to yt-dlp extractor args.",
+        default_factory=lambda: ["web", "tv"],
+        description=(
+            "YouTube player clients passed to yt-dlp extractor args. Подтверждено живым тестом "
+            "2026-07-20 (после подъёма bgutil PO Token провайдера, см. scripts/setup_pot_provider.sh): "
+            "'web' один даёт PO-token-разлоченный контекст, но часто без прямых URL форматов "
+            "('No video formats'/SABR); 'android' один и 'tv' один ловят LOGIN_REQUIRED/bot; "
+            "связка web,tv — единственная, что реально скачала видео (2/2 теста). Было ['android','web'].",
+        ),
     )
     download_cookie_rotate_successes: int = Field(
         20,
