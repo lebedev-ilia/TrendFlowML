@@ -3,7 +3,9 @@ from __future__ import annotations
 import hashlib
 import os
 import re
+import threading
 import time
+from concurrent.futures import ThreadPoolExecutor, as_completed
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from typing import Iterable
@@ -212,6 +214,13 @@ class WorkerCoordination:
         except Exception:
             pass
 
+    def _write_shard_sync_cache(self, known: set[str]) -> None:
+        import json
+
+        tmp = self._shard_sync_cache.with_suffix(".tmp")
+        tmp.write_text(json.dumps(sorted(known), ensure_ascii=False, indent=2), encoding="utf-8")
+        tmp.replace(self._shard_sync_cache)
+
     def sync_metadata_shards_from_hf(
         self,
         api,
@@ -229,12 +238,12 @@ class WorkerCoordination:
             except Exception:
                 known = set()
 
-        downloaded = 0
         try:
             from huggingface_hub import hf_hub_download
         except ImportError:
             return 0
 
+        pending: list[tuple[str, str]] = []  # (remote_path, local_rel)
         for remote_path in repo_files:
             if metadata_prefix and not remote_path.startswith(metadata_prefix):
                 continue
@@ -242,23 +251,43 @@ class WorkerCoordination:
                 continue
             if remote_path in known:
                 continue
-            # Map HF path -> local shards/metadata/...
             if metadata_prefix:
                 rel_under_meta = remote_path[len(metadata_prefix) :]
             else:
                 rel_under_meta = remote_path
-            if rel_under_meta.startswith("shards/metadata/"):
-                local_rel = rel_under_meta
-            else:
-                local_rel = f"shards/metadata/{rel_under_meta}"
+            local_rel = rel_under_meta if rel_under_meta.startswith("shards/metadata/") else f"shards/metadata/{rel_under_meta}"
             local_path = self.state.root / local_rel
             if local_path.is_file() and local_path.stat().st_size > 0:
                 known.add(remote_path)
                 continue
+            pending.append((remote_path, local_rel))
+
+        if not pending:
+            return 0
+
+        # Холодный старт нового воркера (пустой local state) может означать тысячи файлов —
+        # серийная загрузка по одному молчала минутами/часами без единого лога и теряла ВЕСЬ
+        # прогресс при рестарте (кэш писался только в самом конце). Найдено 2026-07-20: свежий
+        # Colab-воркер синхронизирует 7000+ файлов метаданных на первом проходе. Фикс: пул потоков
+        # + периодический лог прогресса + инкрементальное сохранение кэша (каждые 200 файлов / 20с).
+        worker_log(
+            "coord",
+            f"metadata shards cold-sync: {len(pending)} files to fetch "
+            f"(first run on this worker — this can take a while, progress logged every ~200 files)",
+        )
+
+        cache_dir = self.local_root / "shard_cache"
+        cache_dir.mkdir(parents=True, exist_ok=True)
+
+        downloaded = 0
+        lock = threading.Lock()
+        last_log_at = time.monotonic()
+        last_persist_at = time.monotonic()
+
+        def _fetch_one(remote_path: str, local_rel: str) -> tuple[str, bool, str | None]:
+            local_path = self.state.root / local_rel
             local_path.parent.mkdir(parents=True, exist_ok=True)
             try:
-                cache_dir = self.local_root / "shard_cache"
-                cache_dir.mkdir(parents=True, exist_ok=True)
                 fetched = hf_hub_download(
                     repo_id=self.repo_id,
                     repo_type="dataset",
@@ -269,17 +298,34 @@ class WorkerCoordination:
                 src = Path(fetched)
                 if src.is_file():
                     local_path.write_bytes(src.read_bytes())
-                downloaded += 1
-                known.add(remote_path)
+                return remote_path, True, None
             except Exception as exc:
-                worker_log("coord", f"skip shard download {remote_path}: {exc}")
-        if downloaded:
-            import json
+                return remote_path, False, str(exc)
 
-            self._shard_sync_cache.write_text(
-                json.dumps(sorted(known), ensure_ascii=False, indent=2),
-                encoding="utf-8",
-            )
+        with ThreadPoolExecutor(max_workers=8) as pool:
+            futures = [pool.submit(_fetch_one, rp, lr) for rp, lr in pending]
+            for fut in as_completed(futures):
+                remote_path, ok, err = fut.result()
+                with lock:
+                    if ok:
+                        downloaded += 1
+                        known.add(remote_path)
+                    else:
+                        worker_log("coord", f"skip shard download {remote_path}: {err}")
+                    now = time.monotonic()
+                    if downloaded % 200 == 0 or (now - last_log_at) >= 20:
+                        worker_log(
+                            "coord",
+                            f"metadata shards cold-sync progress: {downloaded}/{len(pending)}",
+                        )
+                        last_log_at = now
+                    if (now - last_persist_at) >= 20:
+                        self._write_shard_sync_cache(known)
+                        last_persist_at = now
+
+        if downloaded:
+            self._write_shard_sync_cache(known)
+            worker_log("coord", f"metadata shards cold-sync done: {downloaded}/{len(pending)} fetched")
         return downloaded
 
     def skip_reason(self, service: str, key: str) -> str | None:
