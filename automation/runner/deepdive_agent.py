@@ -221,10 +221,17 @@ async def _handle_turn(client: ClaudeSDKClient, text: str) -> None:
     ПОСЛЕ полного завершения текущего хода (см. main()). Теперь ход может быть прерван снаружи
     через client.interrupt() (см. _producer в main()) — except ниже ловит обрыв стрима, который
     interrupt вызывает, и не считает это ошибкой. session_id хода сохраняется на диск при каждом
-    сообщении — это то, что позволяет resume при рестарте (см. session_state.py)."""
+    сообщении — это то, что позволяет resume при рестарте (см. session_state.py).
+
+    Третий баг найден 2026-07-20 (владелец): каждый TextBlock уходил в VK СРАЗУ урезанным до 200
+    символов ("⏳ ..."), а в конце хода ВЕСЬ накопленный текст уходил ЕЩЁ РАЗ целиком через
+    _send_long — то есть каждая мысль дублировалась дважды, а полный текст владелец видел только
+    во втором, отложенном сообщении (создавало ощущение, что бот "завис и потом резко высыпал
+    сообщения" — на деле это второй, дублирующий проход). Теперь каждый блок уходит СРАЗУ и
+    ПОЛНОСТЬЮ (через _send_long, режет только если реально длиннее лимита VK) — финального
+    повторного прохода по parts больше нет."""
     messenger.log_chat("OWNER->", text)
     await client.query(text)
-    parts: list[str] = []
     try:
         async for msg in client.receive_response():
             sid = getattr(msg, "session_id", None)
@@ -233,16 +240,12 @@ async def _handle_turn(client: ClaudeSDKClient, text: str) -> None:
             if isinstance(msg, AssistantMessage):
                 for block in msg.content:
                     if isinstance(block, TextBlock) and block.text.strip():
-                        block_text = block.text.strip()
-                        parts.append(block_text)
-                        messenger.send(f"⏳ {block_text[:200]}")
+                        _send_long(f"⏳ {block.text.strip()}")
             elif isinstance(msg, ResultMessage):
                 cost = float(getattr(msg, "total_cost_usd", 0.0) or 0.0)
                 print(f"[deepdive] ход завершён, cost=${cost:.4f}", flush=True)
     except Exception as e:
         print(f"[deepdive] ход прерван: {e}", flush=True)
-    if parts:
-        _send_long("\n\n".join(parts))
     _flush_outbox_photos()
 
 

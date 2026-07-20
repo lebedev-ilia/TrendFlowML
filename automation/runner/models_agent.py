@@ -34,8 +34,17 @@ import config
 import settings
 import tools
 import hooks
+import session_state
 
 VK = "https://api.vk.com/method"
+AGENT_NAME = "models_agent"
+
+CONTINUE_AFTER_RESTART_MESSAGE = (
+    "Перезапуск (сбой сессии или рестарт процесса) — контекст восстановлен автоматически из "
+    "прошлой сессии, ничего не потеряно. Продолжай с того места, на котором остановился(-ась) "
+    "до перезапуска; если на момент обрыва ждал(а) моего ответа — просто напиши, на чём "
+    "остановился(-ась), и жди."
+)
 
 MODELS_DIR = config.REPO_DIR / "Models"
 STRATEGY_PATH = MODELS_DIR / "docs" / "MULTI_AGENT_TRAINING_STRATEGY.md"
@@ -226,22 +235,34 @@ class LP:
 async def _handle_turn(client: ClaudeSDKClient, text: str) -> None:
     """Баг найден 2026-07-19 (тот же, что в deepdive_agent.py/watchdog.py): раньше весь текст хода
     копился и уходил в VK одним сообщением в конце — при долгой работе (сборка датасета, обучение)
-    в чате была тишина по 10+ минут. Теперь каждый TextBlock уходит сразу короткой пометкой."""
+    в чате была тишина по 10+ минут. Теперь каждый TextBlock уходит сразу короткой пометкой.
+
+    Второй баг найден 2026-07-19 (в этом же разговоре): если во время хода приходит НОВОЕ сообщение
+    от владельца, скрипт физически не мог его увидеть — poll_once() вызывался только ПОСЛЕ полного
+    завершения текущего хода (см. main()). Теперь ход может быть прерван снаружи через
+    client.interrupt() (см. _producer в main()) — этот except ловит обрыв стрима, который interrupt
+    вызывает, и не считает это ошибкой.
+
+    Третий баг найден 2026-07-20 (владелец, тот же в deepdive_agent.py): каждый блок уходил в VK
+    урезанным до 200 симв., а в конце хода ВЕСЬ текст уходил ЕЩЁ РАЗ целиком — дублирование каждой
+    мысли. Теперь блок уходит сразу и полностью (через _send_long), финального повторного прохода
+    нет."""
     _log_chat("OWNER->", text)
     await client.query(text)
-    parts: list[str] = []
-    async for msg in client.receive_response():
-        if isinstance(msg, AssistantMessage):
-            for block in msg.content:
-                if isinstance(block, TextBlock) and block.text.strip():
-                    block_text = block.text.strip()
-                    parts.append(block_text)
-                    send(f"⏳ {block_text[:200]}")
-        elif isinstance(msg, ResultMessage):
-            cost = float(getattr(msg, "total_cost_usd", 0.0) or 0.0)
-            print(f"[models_agent] ход завершён, cost=${cost:.4f}", flush=True)
-    if parts:
-        _send_long("\n\n".join(parts))
+    try:
+        async for msg in client.receive_response():
+            sid = getattr(msg, "session_id", None)
+            if sid:
+                session_state.save(AGENT_NAME, sid)
+            if isinstance(msg, AssistantMessage):
+                for block in msg.content:
+                    if isinstance(block, TextBlock) and block.text.strip():
+                        _send_long(f"⏳ {block.text.strip()}")
+            elif isinstance(msg, ResultMessage):
+                cost = float(getattr(msg, "total_cost_usd", 0.0) or 0.0)
+                print(f"[models_agent] ход завершён, cost=${cost:.4f}", flush=True)
+    except Exception as e:
+        print(f"[models_agent] ход прерван: {e}", flush=True)
     _flush_outbox_photos()
 
 
@@ -251,9 +272,13 @@ async def main(model_name: str | None) -> None:
     model = settings.resolve_model(model_name) if model_name else config.AGENT_MODEL
     print(f"[models_agent] запуск, модель={model}...", flush=True)
     lp = LP()
-    send(f"🧮 Models Bot на связи (модель {model}). Собираю DatasetBuilder и первый baseline "
-        "на реальных данных. Пиши как в обычном чате.")
-    print("[models_agent] готов, слушаю VK", flush=True)
+    resume_id = session_state.load(AGENT_NAME)
+    send(f"🧮 Models Bot на связи (модель {model})." + (
+        " Восстанавливаю прошлую сессию — контекст не потерян."
+        if resume_id else
+        " Собираю DatasetBuilder и первый baseline на реальных данных."
+    ) + " Пиши как в обычном чате.")
+    print(f"[models_agent] готов, слушаю VK (resume={resume_id!r})", flush=True)
     options = ClaudeAgentOptions(
         model=model,
         system_prompt=_system_prompt(),
@@ -267,18 +292,59 @@ async def main(model_name: str | None) -> None:
         permission_mode="bypassPermissions",
         max_turns=500,
         hooks={"PreToolUse": [HookMatcher(matcher="Bash", hooks=[hooks.guard_bash])]},
+        resume=resume_id,
     )
-    first_run = True
     while True:
         try:
             async with ClaudeSDKClient(options=options) as client:
-                if first_run:
+                if options.resume:
+                    await _handle_turn(client, CONTINUE_AFTER_RESTART_MESSAGE)
+                else:
                     send("▶️ Начинаю с DatasetBuilder — подробности в системном промпте.")
                     await _handle_turn(client, FIRST_TASK_MESSAGE)
-                    first_run = False
-                while True:
-                    texts = await asyncio.to_thread(lp.poll_once, 25)
-                    for t in texts:
+
+                # Баг найден 2026-07-19: poll_once() раньше вызывался ТОЛЬКО между полностью
+                # завершёнными ходами — если владелец писал во время долгого хода (сборка
+                # датасета, обучение — сотни tool-вызовов подряд без остановки), сообщение
+                # физически не читалось, пока ход сам не закончится. Теперь VK слушается
+                # НЕПРЕРЫВНО отдельной задачей (_producer): если приходит сообщение, а бот занят
+                # (busy) — зовём client.interrupt() (штатная возможность SDK для streaming-режима),
+                # текущий receive_response() в _handle_turn обрывается, и новое сообщение уходит в
+                # обработку сразу, а не после неопределённо долгого ожидания.
+                queue: asyncio.Queue[str] = asyncio.Queue()
+                busy = asyncio.Event()
+
+                async def _producer() -> None:
+                    """Баг найден 2026-07-19: раньше был fire-and-forget asyncio.create_task —
+                    если lp.poll_once() кидал ЛЮБОЕ исключение мимо requests.RequestException
+                    (например json.JSONDecodeError на кривом ответе VK), задача молча умирала.
+                    Внешний try/except в main() её не видел (это отдельная Task, не await в
+                    основном потоке) — VK переставал слушаться НАВСЕГДА до ручного рестарта, при
+                    этом консьюмер продолжал жить на том, что уже было в очереди, создавая
+                    иллюзию, что бот просто "не реагирует", хотя на деле не мог физически увидеть
+                    новые сообщения. Теперь опрос обёрнут в try/except, который никогда не даёт
+                    задаче умереть."""
+                    while True:
+                        try:
+                            texts = await asyncio.to_thread(lp.poll_once, 25)
+                        except Exception as e:
+                            print(f"[models_agent] poll_once упал, жду и пробую снова: {e}", flush=True)
+                            await asyncio.sleep(3)
+                            continue
+                        for t in texts:
+                            if busy.is_set():
+                                send("⏸ Прерываю текущую работу — читаю новое сообщение.")
+                                try:
+                                    await client.interrupt()
+                                except Exception as e:
+                                    print(f"[models_agent] interrupt не сработал: {e}", flush=True)
+                            await queue.put(t)
+
+                producer_task = asyncio.create_task(_producer())
+                try:
+                    while True:
+                        t = await queue.get()
+                        busy.set()
                         try:
                             await _handle_turn(client, t)
                         except Exception as e:
@@ -287,12 +353,20 @@ async def main(model_name: str | None) -> None:
                                 send(f"❗ Ошибка: {e}")
                             except Exception:
                                 pass
+                        finally:
+                            busy.clear()
+                finally:
+                    producer_task.cancel()
         except Exception as e:
             print(f"[models_agent] сессия оборвалась, переоткрываю: {e}", flush=True)
             try:
-                send(f"⚠️ Сессия оборвалась ({e}), переоткрываю. Прогресс в файлах не теряется.")
+                send(f"⚠️ Сессия оборвалась ({e}), переоткрываю с тем же контекстом.")
             except Exception:
                 pass
+            # Резюмируем с последнего известного session_id (мог обновиться за время работы) —
+            # переоткрытие сессии ВНУТРИ процесса тоже не должно терять контекст, не только
+            # полный рестарт процесса.
+            options.resume = session_state.load(AGENT_NAME) or options.resume
             await asyncio.sleep(5)
 
 

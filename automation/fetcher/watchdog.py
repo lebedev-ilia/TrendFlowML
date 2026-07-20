@@ -188,7 +188,13 @@ async def _run_llm(
                             parts.append(text)
                             _log_chat("WATCHDOG(raw)", text[:300])
                             if progress:
-                                send(f"⏳ {text[:200]}")
+                                # Баг найден 2026-07-20 (владелец): раньше блок уходил урезанным
+                                # до 200 симв., а вызывающий код (_process_owner_text) ЕЩЁ РАЗ
+                                # слал этот же текст целиком через result — двойная отправка
+                                # каждой мысли. Теперь шлём сразу полностью (send() сам режет
+                                # длинные сообщения по 4000 символов), а вызывающий код result
+                                # больше не пересылает (см. _process_owner_text).
+                                send(f"⏳ {text}")
                 elif isinstance(msg, ResultMessage):
                     cost = float(getattr(msg, "total_cost_usd", 0.0) or 0.0)
         except Exception as e:
@@ -261,7 +267,10 @@ async def _process_owner_text(t: str, model: str, client_holder: dict) -> None:
         send("⏳ Разбираюсь...")
         try:
             result = await _handle_owner_message(t, model, client_holder=client_holder)
-            send(result[:1500] if result else "(агент не дал ответа)")
+            if not result:
+                send("(агент не дал ответа)")
+            # иначе result уже полностью ушёл в VK живьём по ходу (progress=True) — повторно не
+            # шлём (баг найден 2026-07-20: раньше дублировали каждую мысль).
         except Exception as e:
             send(f"❗ Ошибка: {e}")
 
