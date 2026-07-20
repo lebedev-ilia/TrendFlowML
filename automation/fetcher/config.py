@@ -55,27 +55,16 @@ PREFERRED_DATACENTERS = [d.strip() for d in os.environ.get(
 # владельца "2 CPU 8GB RAM", $0.09/ч). cpu3c той же вилки даёт только 4ГБ на 2vCPU — не подходит.
 CPU_FLAVOR_CANDIDATES = ["cpu3g", "cpu5g"]  # general purpose — 4ГБ/vCPU, даёт 8ГБ на 2vCPU
 
+# worker-b/worker-c удалены с RunPod (2026-07) — download workers переехали на 4 Colab-аккаунта
+# (см. Fetcher/notebooks/Colab_100k_monthly_worker.ipynb). fetcher-main остаётся на RunPod
+# только с discover + shard 0 из 5 (main=0, Colab#1..4 = 1..4).
 PODS = {
     "fetcher-main": {
         "worker_id": "fetcher-main",
         "worker_shard_index": 0,
-        "worker_shard_count": 3,
-        "role": "main",  # discover (непрерывно) + workers shard 0/3
+        "worker_shard_count": 5,
+        "role": "main",  # discover (непрерывно) + workers shard 0/5
         "volume_name": "fetcher-main-vol",
-    },
-    "fetcher-worker-b": {
-        "worker_id": "fetcher-worker-b",
-        "worker_shard_index": 1,
-        "worker_shard_count": 3,
-        "role": "worker",  # workers shard 1/3
-        "volume_name": "fetcher-worker-b-vol",
-    },
-    "fetcher-worker-c": {
-        "worker_id": "fetcher-worker-c",
-        "worker_shard_index": 2,
-        "worker_shard_count": 3,
-        "role": "worker",  # workers shard 2/3
-        "volume_name": "fetcher-worker-c-vol",
     },
 }
 

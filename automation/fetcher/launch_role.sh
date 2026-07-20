@@ -70,7 +70,7 @@ CONFIG_OVERRIDES="$OUTPUT_DIR/config_overrides_${WORKER_ID}.json"
 "$PY" - "$CONFIG_OVERRIDES" <<PYEOF
 import json, sys
 overrides = {
-    "hf_parallel_colab_count": 3,
+    "hf_parallel_colab_count": 5,
     "hf_commit_min_interval_seconds": 95,
     "hf_shard_upload_batch_files": 50,
     "hf_video_upload_batch_files": 100,
@@ -79,16 +79,18 @@ overrides = {
     "download_pause_after_fail_seconds": 15,
     "download_pause_after_bot_seconds": 120,
     "download_pause_after_fast_seconds": 15,
-    # pytubefix сейчас детектится YouTube как бот на 100% попыток (все куки x все клиенты) —
-    # проверено вживую 2026-07-19: 14 подряд bot_detection на одном видео, ~28 минут впустую
-    # ДО того как код вообще пробует yt-dlp. yt-dlp + куки + Deno (JS-рантайм для EJS/signature)
-    # СРАЗУ скачал то же самое видео за секунды — см. downloads.py, автодетект Deno уже есть.
-    # Пробовали "yt_dlp_first" (фолбэк на pytubefix при НЕ-бот ошибках, напр. "Only images are
-    # available") — но раз pytubefix сейчас 100% сломан, фолбэк на него означает те же +28 минут
-    # впустую на каждом таком видео. "yt_dlp" (без фолбэка вообще) — быстрый fail (~15с пауза,
-    # download_pause_after_fail_seconds) и переход к следующему видео. Вернуть "yt_dlp_first" или
-    # "pytubefix", если pytubefix когда-нибудь перестанет быть 100% забаненным.
-    "download_backend": "yt_dlp",
+    # ИСТОРИЯ (не удалять — объясняет, почему тут было "yt_dlp", а не наоборот):
+    # 2026-07-19 утро: pytubefix был 100% забанен (14 подряд bot_detection на одном видео,
+    # ~28 мин впустую до yt-dlp) -> поставили "yt_dlp" (без фолбэка вообще).
+    # 2026-07-19 вечер (эта правка): "yt_dlp" сам сломался — 100% FAIL на всех 3 подах
+    # ("Requested format is not available" / "Only images are available", проверено живым SSH
+    # в download.log). При этом ТЕ ЖЕ логи показывают, что ПЕРЕД переключением на "yt_dlp"
+    # pytubefix:ANDROID_VR давал 396 OK / 49 FAIL (~89% успех) — т.е. состояние изменилось,
+    # именно ANDROID_VR клиент сейчас жив. Раз оба бэкенда время от времени то живы, то мертвы —
+    # используем "yt_dlp_first": пробуем yt-dlp (быстро, если жив), при ЛЮБОЙ неудаче падаем на
+    # pytubefix (полная куки x клиент матрица, сейчас рабочая через ANDROID_VR). Худший случай —
+    # +15с (download_pause_after_fail_seconds) на видео, если оба бэкенда сейчас мертвы; не 28 мин.
+    "download_backend": "yt_dlp_first",
     "worker_id": "$WORKER_ID",
     "worker_shard_index": int("$WORKER_SHARD_INDEX"),
     "worker_shard_count": int("$WORKER_SHARD_COUNT"),
@@ -97,7 +99,8 @@ with open(sys.argv[1], "w") as f:
     json.dump(overrides, f, indent=2)
 PYEOF
 
-# --- workers (download+enrich+upload, свой шард) — крутится всегда, на всех 3 подах ---
+# --- workers (download+enrich+upload, свой шард) — крутится всегда (main=шард 0/5 на RunPod,
+# 4 остальных шарда — на Colab через Colab_100k_monthly_worker.ipynb) ---
 nohup "$PY" scripts/colab_20k_bootstrap.py \
   --campaign-profile 100k-monthly \
   --role workers \
@@ -108,7 +111,7 @@ nohup "$PY" scripts/colab_20k_bootstrap.py \
   --worker-id "$WORKER_ID" \
   --worker-shard-index "$WORKER_SHARD_INDEX" \
   --worker-shard-count "$WORKER_SHARD_COUNT" \
-  --parallel-colab-count 3 \
+  --parallel-colab-count 5 \
   --config-overrides-json "$CONFIG_OVERRIDES" \
   --hf-coord \
   > "$LOGDIR/workers_${WORKER_ID}.log" 2>&1 < /dev/null &
