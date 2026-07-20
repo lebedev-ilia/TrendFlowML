@@ -97,6 +97,13 @@ overrides = {
     # pytubefix (полная куки x клиент матрица, сейчас рабочая через ANDROID_VR). Худший случай —
     # +15с (download_pause_after_fail_seconds) на видео, если оба бэкенда сейчас мертвы; не 28 мин.
     "download_backend": "yt_dlp_first",
+    # 2026-07-20/21: поднят локальный PO Token провайдер (bgutil, scripts/setup_pot_provider.sh).
+    # Живым тестом на fetcher-main подтверждено: 'android' один и 'tv' один -> LOGIN_REQUIRED/bot;
+    # 'web' один -> PO token есть, но часто 'No video formats' (SABR); 'web','tv' вместе -> 2/2
+    # реальных видео скачаны полностью. Раньше было ["android","web"]. Явный override здесь, а не
+    # только default в schemas.py, потому что runtime_dataset_campaign_20k.json уже материализован
+    # на диске со старым значением и не перегенерируется на рестарте.
+    "download_ytdlp_player_clients": ["web", "tv"],
     "worker_id": "$WORKER_ID",
     "worker_shard_index": int("$WORKER_SHARD_INDEX"),
     "worker_shard_count": int("$WORKER_SHARD_COUNT"),
