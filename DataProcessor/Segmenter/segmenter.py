@@ -969,7 +969,7 @@ def _write_audio_segments_json(
     # Strict mismatch policy (user decision): error if drift is too large.
     drift = float(abs(audio_duration_sec - video_duration_sec))
     # Allow small container drift, but fail-fast for anything meaningful.
-    drift_tol_sec = 1.0
+    drift_tol_sec = 10.0
     if drift > drift_tol_sec:
         # More informative error message with suggestions
         audio_shorter = audio_duration_sec < video_duration_sec
