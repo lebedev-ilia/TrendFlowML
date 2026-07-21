@@ -1,0 +1,47 @@
+{
+  "_doc": "Agent A prep for owner's 4-gate test (10->50->500->1000). Owner approved OPT-3 depth, torch-GPU, AP->TP ASR. Statuses ⬜🔄✅⛔.",
+  "updated_at": "2026-07-22",
+  "gate_plan": [
+    "10 videos (smoke, verify all works)",
+    "50 videos (optimizations + disk check)",
+    "500 videos (main test, then quick fixes)",
+    "1000 videos (compare vs 500)"
+  ],
+  "prep": [
+    {
+      "id": "opt3_depth",
+      "status": "🔄",
+      "note": "--persist-depth-maps flag (default off): maps transient for shot_quality/frames_composition, not persisted. 11x disk. Owner approved if full maps don't add quality (they don't for models; consumers get maps in-run)."
+    },
+    {
+      "id": "torch_gpu",
+      "status": "⬜",
+      "note": "torch cu121 (driver 550=CUDA12.4 compat) or Triton export -> scene + inprocess-torch on GPU. Owner: делай."
+    },
+    {
+      "id": "ap_tp_asr",
+      "status": "⬜",
+      "note": "Wire AP asr_extractor -> doc.asr -> TP. Owner: строй. Unblocks 7 TP components."
+    },
+    {
+      "id": "generalize_run_corpus",
+      "status": "⬜",
+      "note": "Component list as config (not hardcoded 7) + AP/TP venv support."
+    },
+    {
+      "id": "pod_setup_script",
+      "status": "⬜",
+      "note": "apt: ffmpeg time bc libarchive13 python3-numpy. Else Triton fails / metrics break."
+    },
+    {
+      "id": "hf_offload",
+      "status": "⬜",
+      "note": "For 500/1000 if disk needs it (with OPT-3 maybe not needed). Adapt Fetcher hf_queues."
+    },
+    {
+      "id": "gate_tests",
+      "status": "⬜",
+      "note": "Run 10/50/500/1000 with gen_report per gate. Raise pod self when ready."
+    }
+  ]
+}

@@ -280,6 +280,12 @@ def main():
     parser.add_argument("--out-height", type=int, default=384, help="Output height of saved depth maps (downsampled) to store in NPZ")
     parser.add_argument("--batch-size", type=int, required=True, help="Batch size (must be provided by scheduler/orchestrator)")
     parser.add_argument("--frames-bgr", action="store_true", help="Set if FrameManager returns BGR images instead of RGB")
+    parser.add_argument("--persist-depth-maps", action="store_true",
+                        help="Persist full per-frame depth_maps + depth_maps_norm in NPZ (default: OFF -> ~11x "
+                             "smaller NPZ). Full maps are ~95%% of DataProcessor disk and are NOT used by the "
+                             "Encoder (pooled depth_mean/std/p05/p95/... are). ONLY the shot_quality module "
+                             "consumes full maps (depth_grad_mean). Enable ONLY when shot_quality is in the run; "
+                             "otherwise keep OFF. Pooled stats + preview_depth_maps are always kept.")
     args = parser.parse_args()
 
     # Triton-only mode: device is not observable from client reliably; we assume GPU-backed Triton.
@@ -632,12 +638,9 @@ def main():
     if isinstance(rp_before, dict) and rp_before:
         meta_out["resource_profile_before"] = dict(rp_before)
 
-    _atomic_save_npz(
-        out_path,
+    _save_kwargs = dict(
         frame_indices=np.array(frame_indices, dtype=np.int32),
         times_s=times_s.astype(np.float32),
-        depth_maps=depth_maps,  # shape (N, out_h, out_w), dtype float32
-        depth_maps_norm=depth_maps_norm,  # (N,out_h,out_w) float32 in [0,1]
         depth_mean=depth_mean.astype(np.float32),
         depth_std=depth_std.astype(np.float32),
         depth_p05=depth_p05.astype(np.float32),
@@ -652,6 +655,15 @@ def main():
         # canonical meta (required by artifact_validator)
         meta=np.asarray(meta_out, dtype=object),
     )
+    # OPT-3 (disk): full depth_maps + depth_maps_norm are ~95%% of DataProcessor disk and are NOT used by
+    # the Encoder (pooled stats are). Persist them ONLY when explicitly requested (shot_quality consumer).
+    if getattr(args, "persist_depth_maps", False):
+        _save_kwargs["depth_maps"] = depth_maps  # (N, out_h, out_w) float32
+        _save_kwargs["depth_maps_norm"] = depth_maps_norm  # (N, out_h, out_w) float32 in [0,1]
+    else:
+        LOGGER.info(f"{NAME} | OPT-3: full depth_maps NOT persisted (pooled stats + preview kept; "
+                    f"~11x smaller NPZ). Pass --persist-depth-maps to include full maps (for shot_quality).")
+    _atomic_save_npz(out_path, **_save_kwargs)
 
     ok, issues, _ = validate_npz(
         out_path,
