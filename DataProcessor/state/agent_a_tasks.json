@@ -56,9 +56,11 @@
     },
     {
       "id": "phase7_next_test_plan",
-      "status": "🔄",
+      "status": "✅",
       "deliverable": "corpus_run_report/NEXT_TEST_PLAN.md",
-      "note": "Synthesize phases 1-6. All processors, 2-3 machines, 50->500->1000 gate-phases with pass criteria. Disk forecast + HF-offload plan. Multi-machine watchdog."
+      "note": "Synthesize phases 1-6. All processors, 2-3 machines, 50->500->1000 gate-phases with pass criteria. Disk forecast + HF-offload plan. Multi-machine watchdog.",
+      "updated_at": "2026-07-22",
+      "result": "NEXT_TEST_PLAN.md done. Component set, cheap-GPU+N=4, 50/500/1000 gate criteria, disk plan (OPT-3 depth => fits without HF-offload), readiness checklist (generalize run_corpus, AP->TP ASR, pod-setup apt-deps), multi-machine independent watchdogs."
     },
     {
       "id": "cross_disk_forecast",
@@ -67,5 +69,6 @@
       "result": "DISK_FORECAST.md done: 151MB/video measured -> ~500MB full; 120GB ceiling ~150 videos; HF-offload plan (adapt Fetcher hf_queues)",
       "updated_at": "2026-07-22"
     }
-  ]
+  ],
+  "summary": "ALL 7 phases complete. Key wins: OPT-1 cut_detection -44%; import-tax measured (venv SSD -31s); DEPTH finding (core_depth_midas=95% disk, OPT-3 11x); parallelism N=4=3.4x/$5.9 per 1000; full VP/AP/TP/disk/infra/next-test forecasts. Pending owner/coord: OPT-3 depth sign-off, torch-GPU decision, AP->TP ASR wiring."
 }
