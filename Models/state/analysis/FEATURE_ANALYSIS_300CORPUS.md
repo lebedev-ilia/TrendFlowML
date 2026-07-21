@@ -167,6 +167,46 @@ small-test artifact, NOT the real signal. Under proper CV:
 Net: the v2 lean recipe (drop const + redundancy-prune + per-fold top-K) is the
 right harness; the missing ingredient is corpus scale, not feature engineering.
 
+## 4c. Does content carry signal BEYOND snapshot_0? — YES (residual analysis)
+
+Content not *helping* accuracy (§4b) could mean either (i) p≫n — too few rows to fit
+500 features — or (ii) content is genuinely uninformative. To separate them
+(`residual_content_signal.py`): fit S0-only with out-of-fold CV → `residual = y −
+pred_S0` (what snapshot_0 can't explain) → Spearman(each content feature, residual).
+
+**Result: content carries real incremental signal — the blocker is N, not relevance.**
+
+`views_21d` (S0 OOF=0.815; **11/569** content features |corr(residual)|≥0.15):
+| content feature | vs residual | vs target |
+|---|---|---|
+| core_optical_flow flow_dir_dispersion (mean/p50/p90) | **+0.20/+0.18/+0.15** | +0.17 |
+| video_pacing cuts_per_10s_max | +0.14 | +0.15 |
+| core_clip places365 topk / scene_classification topk_ids | −0.16…−0.23 | −0.13 |
+
+`likes_21d` (S0 OOF=0.631, larger residual — likes harder):
+| content feature | vs residual | vs target |
+|---|---|---|
+| cut_detection edit_style_high_action_prob | +0.16 | +0.13 |
+| video_pacing cuts_per_10s_max | +0.15 | +0.16 |
+| cut_detection cuts_per_minute / hard_cuts_per_minute | +0.13 | **+0.20** |
+| core_clip scene_aesthetic_scores (p90/min) | +0.13 | +0.13 |
+
+**Takeaways:**
+1. **Editing rhythm/pace** (`cut_detection.cuts_per_minute`, `video_pacing.cuts_per_10s`)
+   and **motion-direction dispersion** (`optical_flow.flow_dir_dispersion`) are the
+   content signals most likely to pay off first — they correlate with what
+   snapshot_0 misses for BOTH views and likes.
+2. **Aesthetics** (`core_clip.scene_aesthetic_scores`) shows up for likes specifically
+   — consistent with likes being a taste/quality signal beyond raw reach.
+3. **Scene/place features use raw category-index encoding** (`places365_topk_indices`,
+   `frame_topk_ids`) — Spearman on arbitrary category IDs is not clean; these should
+   be **one-hot / embedded**, not fed as ordinal ints (v2 feature-engineering note).
+4. Correlations are modest (≤0.23) but non-trivial and consistent across horizons →
+   at 291 rows a 500-feature model can't exploit them, but **more data will**. This
+   is the concrete evidence that corpus scale is worth it, and the shortlist of
+   features to prioritise when it lands. Full ranking:
+   `residual_content_signal_{views_21d,likes_21d}.csv`.
+
 ## 5. Stratified quality (owner's "where are features better/worse")
 
 Per-video mean NaN fraction by duration bucket (content features):
@@ -188,12 +228,14 @@ Per-video mean NaN fraction by duration bucket (content features):
 
 ## 6. Conclusions & recommended priorities
 
-1. **Scale the corpus before content pays off.** The single biggest result: at
-   N=291 the content features overfit and *reduce* accuracy. They will only help
-   once there are enough videos (thousands) for 500+ features. **Highest-value next
-   step is more corpus videos through Agent A's pipeline**, not more feature
-   engineering. Until then, the snapshot_0+metadata model (`exp_0004`, 4958 vids,
-   Spearman ~0.75) remains the real baseline to beat.
+1. **Scale the corpus before content pays off — but content IS informative.** At
+   N=291 the full content set overfits (§4b, p≫n) and reduces accuracy, yet the
+   residual analysis (§4c) proves content carries **real incremental signal beyond
+   snapshot_0** — editing rhythm, motion dispersion, aesthetics. So the blocker is
+   sample size, not relevance. **Highest-value next step is more corpus videos
+   through Agent A's pipeline** (his phases 4/5/7); with thousands of rows a lean
+   content set should start to beat S0. Robust S0 baseline to beat: views ~0.81 /
+   likes ~0.65 (5-fold CV, §4b).
 2. **Aggressively reduce content dimensionality (my v2).** 819 cross-component
    redundant pairs + 87 constants ⇒ collapse optical_flow/cut_detection/clip-motion
    to a few representative features; keep top content features by importance. Feed a
