@@ -3,27 +3,61 @@
   "updated_at": "2026-07-21",
   "context": "300/300 corpus run complete (DataProcessor/docs/corpus_run_report/). 7 VP components + 2 pipeline steps. NPZ on Network Volume /workspace/corpus_out/<id>/rs/. This likely unblocks Agent B content_features_plus_real_targets + corpus_scale_150_250.",
   "phases": [
-    {"id": "phase1_timing_analysis", "status": "✅", "deliverable": "corpus_run_report/TIMING_ANALYSIS.md",
-     "updated_at": "2026-07-21",
-     "note": "DONE. Top-3 cost: cut_detection 25% (CPU only 31%/user 22s of 104s wall -> ~80s NON-compute overhead, biggest lever), scene_classification 22% (CPU-bound resnet50 on CPU due to driver, GPU idle -> move to GPU), core_clip 15% (+ Triton depth/flow, GPU util 8-55% underutilized -> parallelize/binary-tensor). Duration confirmed driver (Spearman 0.8-0.94) except core_clip anomaly (short 7-9s videos slow, 85-99s -> investigate). Memory NOT bottleneck (2.5/16GB) -> CPU is. scene soft-fail 13pz52piBj0 = pre-fix debug artifact, not a code bug."},
-    {"id": "phase3_notify_agent_b", "status": "✅ (посыл), 🔄 (диалог)", "updated_at": "2026-07-21",
-     "message_for_agent_b": [
-       "300/300 corpus run DONE. NPZ for 7 VP components (core_clip, core_depth_midas, core_optical_flow, cut_detection, scene_classification, video_pacing, uniqueness) on Network Volume: /workspace/corpus_out/<video_id>/rs/<component>/*.npz (2400 files, 8/video). Video list: DataProcessor/docs/corpus_run_report/corpus300.json (300 ids, repo, strata, duration).",
-       "These videos are from Ilialebedev/videos* = the SAME pool as Ilialebedev/pre_final_data -> they very likely HAVE real targets. This should unblock your content_features_plus_real_targets + corpus_scale_150_250.",
-       "IMPORTANT FORMAT FLAG: my run_corpus.sh wrote NPZ directly into rs/<component>/*.npz WITHOUT a per-run manifest.json (unlike the standard VisualProcessor/main.py orchestrator which writes manifest.json). Your build_training_table.py walks result_store via manifest -> it will NOT find these as-is. Options: (a) I can add a manifest-generation step (regenerate manifests from rs/ dirs), or (b) you add a direct-rs adapter. Tell me which you prefer — quick to add a manifest emitter on my side.",
-       "Note: pod is DOWN (killed per owner instruction). NPZ persist on the volume; a new pod must mount the same Network Volume to read them."
-     ]},
-    {"id": "phase2_optimization", "status": "⬜", "deliverable": "corpus_run_report/OPTIMIZATION_LOG.md",
-     "note": "After phase1. Each optimization: before/after on real videos + NPZ quality diff. Candidates: parallel Triton stages (clip/depth/flow ~190s seq), cut_detection profiling, scene_classification GPU (torch/CUDA compat)."},
-    {"id": "phase4_infra_scaling", "status": "⬜", "deliverable": "corpus_run_report/INFRA_SCALING_PLAN.md",
-     "note": "Empirical parallelism stress-test (1/2/3/4 workers), $/1000-videos per GPU option, coordination pattern (adapt Fetcher stable_shard_slot). Cheap pod, short run."},
-    {"id": "phase5_vp_rollout", "status": "⬜", "deliverable": "corpus_run_report/VP_ROLLOUT_FORECAST.md",
-     "note": "Extend to ~15 addable VP components (excl. object_detections/identity/ocr/text_scoring blocked). Generalize run_corpus.sh (component list as config). Smoke 5-10 videos. Check Docker for micro_emotion/OpenFace."},
-    {"id": "phase6_ap_tp_forecast", "status": "⬜", "deliverable": "corpus_run_report/AP_TP_ROLLOUT_FORECAST.md",
-     "note": "AudioProcessor(21)+TextProcessor(22) forecast. Blockers: ASR propagation doc.asr, voice_quality config-drift, WavLM cache. Smoke before extrapolating."},
-    {"id": "phase7_next_test_plan", "status": "⬜", "deliverable": "corpus_run_report/NEXT_TEST_PLAN.md",
-     "note": "Synthesize phases 1-6. All processors, 2-3 machines, 50->500->1000 gate-phases with pass criteria. Disk forecast + HF-offload plan. Multi-machine watchdog."},
-    {"id": "cross_disk_forecast", "status": "⬜",
-     "note": "Per-phase: MB/video added by new components; N videos x MB check vs 120GB volume; HF-offload plan (adapt Fetcher hf_queues.py). Current baseline: 151MB/video on 7 VP comps."}
+    {
+      "id": "phase1_timing_analysis",
+      "status": "✅",
+      "deliverable": "corpus_run_report/TIMING_ANALYSIS.md",
+      "updated_at": "2026-07-21",
+      "note": "DONE. Top-3 cost: cut_detection 25% (CPU only 31%/user 22s of 104s wall -> ~80s NON-compute overhead, biggest lever), scene_classification 22% (CPU-bound resnet50 on CPU due to driver, GPU idle -> move to GPU), core_clip 15% (+ Triton depth/flow, GPU util 8-55% underutilized -> parallelize/binary-tensor). Duration confirmed driver (Spearman 0.8-0.94) except core_clip anomaly (short 7-9s videos slow, 85-99s -> investigate). Memory NOT bottleneck (2.5/16GB) -> CPU is. scene soft-fail 13pz52piBj0 = pre-fix debug artifact, not a code bug."
+    },
+    {
+      "id": "phase3_notify_agent_b",
+      "status": "✅ (посыл), 🔄 (диалог)",
+      "updated_at": "2026-07-21",
+      "message_for_agent_b": [
+        "300/300 corpus run DONE. NPZ for 7 VP components (core_clip, core_depth_midas, core_optical_flow, cut_detection, scene_classification, video_pacing, uniqueness) on Network Volume: /workspace/corpus_out/<video_id>/rs/<component>/*.npz (2400 files, 8/video). Video list: DataProcessor/docs/corpus_run_report/corpus300.json (300 ids, repo, strata, duration).",
+        "These videos are from Ilialebedev/videos* = the SAME pool as Ilialebedev/pre_final_data -> they very likely HAVE real targets. This should unblock your content_features_plus_real_targets + corpus_scale_150_250.",
+        "IMPORTANT FORMAT FLAG: my run_corpus.sh wrote NPZ directly into rs/<component>/*.npz WITHOUT a per-run manifest.json (unlike the standard VisualProcessor/main.py orchestrator which writes manifest.json). Your build_training_table.py walks result_store via manifest -> it will NOT find these as-is. Options: (a) I can add a manifest-generation step (regenerate manifests from rs/ dirs), or (b) you add a direct-rs adapter. Tell me which you prefer — quick to add a manifest emitter on my side.",
+        "Note: pod is DOWN (killed per owner instruction). NPZ persist on the volume; a new pod must mount the same Network Volume to read them."
+      ]
+    },
+    {
+      "id": "phase2_optimization",
+      "status": "🔄",
+      "deliverable": "corpus_run_report/OPTIMIZATION_LOG.md",
+      "note": "After phase1. Each optimization: before/after on real videos + NPZ quality diff. Candidates: parallel Triton stages (clip/depth/flow ~190s seq), cut_detection profiling, scene_classification GPU (torch/CUDA compat).",
+      "opt_log": [
+        "OPT-1 cut_detection lazy torch import: 121.6s->68.6s (-53s/-44%), NPZ bit-identical, validated on RTX 2000 Ada. ~4.4h saved over 300 videos."
+      ]
+    },
+    {
+      "id": "phase4_infra_scaling",
+      "status": "⬜",
+      "deliverable": "corpus_run_report/INFRA_SCALING_PLAN.md",
+      "note": "Empirical parallelism stress-test (1/2/3/4 workers), $/1000-videos per GPU option, coordination pattern (adapt Fetcher stable_shard_slot). Cheap pod, short run."
+    },
+    {
+      "id": "phase5_vp_rollout",
+      "status": "⬜",
+      "deliverable": "corpus_run_report/VP_ROLLOUT_FORECAST.md",
+      "note": "Extend to ~15 addable VP components (excl. object_detections/identity/ocr/text_scoring blocked). Generalize run_corpus.sh (component list as config). Smoke 5-10 videos. Check Docker for micro_emotion/OpenFace."
+    },
+    {
+      "id": "phase6_ap_tp_forecast",
+      "status": "⬜",
+      "deliverable": "corpus_run_report/AP_TP_ROLLOUT_FORECAST.md",
+      "note": "AudioProcessor(21)+TextProcessor(22) forecast. Blockers: ASR propagation doc.asr, voice_quality config-drift, WavLM cache. Smoke before extrapolating."
+    },
+    {
+      "id": "phase7_next_test_plan",
+      "status": "⬜",
+      "deliverable": "corpus_run_report/NEXT_TEST_PLAN.md",
+      "note": "Synthesize phases 1-6. All processors, 2-3 machines, 50->500->1000 gate-phases with pass criteria. Disk forecast + HF-offload plan. Multi-machine watchdog."
+    },
+    {
+      "id": "cross_disk_forecast",
+      "status": "⬜",
+      "note": "Per-phase: MB/video added by new components; N videos x MB check vs 120GB volume; HF-offload plan (adapt Fetcher hf_queues.py). Current baseline: 151MB/video on 7 VP comps."
+    }
   ]
 }

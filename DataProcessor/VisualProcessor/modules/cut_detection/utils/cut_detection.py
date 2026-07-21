@@ -35,27 +35,35 @@ import scipy.stats
 from scipy.signal import medfilt
 from scipy.ndimage import gaussian_filter1d
 
-try:
-    import torch  # type: ignore
-except Exception:  # pragma: no cover
-    torch = None  # type: ignore
+# PERF: torch/torchvision/clip are heavy (~50s import from network-FS venv) but only used by
+# the deep/CLIP cut-feature path (get_embedding_model), which is OFF in the baseline (no-network)
+# path and, in practice, never invoked here. Importing them at module level cost ~50s per
+# per-video subprocess for nothing. Defer to lazy import (torch only pulled if deep features run).
+torch = None  # type: ignore
+models = None  # type: ignore
+T = None  # type: ignore
+clip = None  # type: ignore  # unused in this module; kept as None for reference-safety
 
-try:
-    from torchvision import models  # type: ignore
-    import torchvision.transforms as T  # type: ignore
-except Exception:  # pragma: no cover
-    models = None  # type: ignore
-    T = None  # type: ignore
+
+def _lazy_import_torch() -> bool:
+    """Import torch/torchvision on demand (deep-features path). Returns True if available."""
+    global torch, models, T
+    if torch is not None and models is not None and T is not None:
+        return True
+    try:
+        import torch as _torch  # type: ignore
+        from torchvision import models as _models  # type: ignore
+        import torchvision.transforms as _T  # type: ignore
+        torch, models, T = _torch, _models, _T
+        return True
+    except Exception:  # pragma: no cover
+        return False
+
 
 try:
     import librosa  # type: ignore
 except Exception:  # pragma: no cover
     librosa = None  # type: ignore
-
-try:
-    import clip  # type: ignore
-except Exception:  # pragma: no cover
-    clip = None  # type: ignore
 
 from skimage.metrics import structural_similarity as ssim
 from sklearn.cluster import KMeans, DBSCAN
@@ -202,6 +210,7 @@ def _cut_timing_statistics_from_times(cut_times_s: List[float], video_length_s: 
 
 def get_embedding_model(device='cpu', model_name='resnet18'):
     """Initialize and return a pre-trained embedding model."""
+    _lazy_import_torch()
     if torch is None or models is None or T is None:
         raise RuntimeError("cut_detection | torch/torchvision is required for deep features (use_deep_features=true)")
 
@@ -1946,9 +1955,10 @@ class CutDetectionPipeline(BaseModule):
             use_flow_consistency: Использовать консистентность оптического потока
             **kwargs: Дополнительные параметры для BaseModule
         """
-        # Определяем устройство
+        # Определяем устройство. torch импортируется лениво (deep-features path); в baseline
+        # (deep-фичи выключены/запрещены no-network policy) GPU не используется -> 'cpu'.
         if device == 'auto':
-            device = 'cuda' if torch.cuda.is_available() else 'cpu'
+            device = 'cuda' if (torch is not None and torch.cuda.is_available()) else 'cpu'
         
         super().__init__(rs_path=rs_path, logger_name="cut_detection", **kwargs)
         
