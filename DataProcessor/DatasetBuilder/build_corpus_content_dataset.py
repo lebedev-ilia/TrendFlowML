@@ -86,6 +86,20 @@ def main() -> int:
         if any(row.get(f"mask_{hz}") == 1.0 for hz in horizons):
             real_rows += 1
 
+    if not recs:
+        raise SystemExit(
+            f"[FATAL] 0/{len(wanted)} videos matched any pre_final shard "
+            f"({args.prefinal}). Wrong/empty shard paths (check for spaces in paths) "
+            f"or these video_ids are not in the given shards. Refusing to write an "
+            f"unlabelled dataset."
+        )
+
+    # ensure target/mask columns always exist (even if some horizon never matched)
+    for hz in horizons:
+        for col in (f"target_views_{hz}", f"target_likes_{hz}", f"mask_{hz}"):
+            if col not in df.columns:
+                df[col] = float("nan")
+
     # merge add_cols into df
     all_keys = sorted({k for r in add_cols.values() for k in r})
     for k in all_keys:
