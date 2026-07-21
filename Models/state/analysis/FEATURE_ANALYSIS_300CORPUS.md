@@ -136,6 +136,37 @@ constant/all-NaN columns before fit — 88+2 here — otherwise HistGB binning t
 `window shape cannot be larger than input array shape` on numpy≥2/py3.14; (b) 14d/21d
 heads respect their masks (real videos miss individual snapshots).
 
+## 4b. ROBUST re-check — 5-fold GroupKFold CV (exp_0007, supersedes §4 numbers)
+
+The single 80/10/10 split in §4 had a **tiny test set (n≈30)** → very noisy Spearman.
+Re-ran with **5-fold GroupKFold on channel_id, predictions pooled** across folds
+(`v2_cv_experiment.py`, `v2_cv_results.csv`). This is the number to trust:
+
+| head | S0 (20 snap0+meta) | S0+lean (top-25 pruned content) | S0+full (569 content) |
+|---|---|---|---|
+| views_7d | 0.808 | 0.809 | 0.798 |
+| views_14d | 0.807 | 0.809 | 0.794 |
+| views_21d | **0.819** | 0.816 | 0.793 |
+| likes_7d | 0.644 | 0.635 | 0.603 |
+| likes_14d | 0.642 | 0.650 | 0.594 |
+| likes_21d | 0.647 | **0.665** | 0.606 |
+
+**This corrects §4's headline.** The §4 single-split values (0.23–0.49) were a
+small-test artifact, NOT the real signal. Under proper CV:
+1. **S0 alone is strong on 291 videos** — views ~0.81 (even *above* exp_0004's 0.75
+   on 4958 videos; corpus300 is curated/stratified), likes ~0.65 (harder target).
+2. **Full content (569 feat) still hurts on all 6 heads** — p≫n overfit is real and
+   robust, not a split fluke.
+3. **Lean content (redundancy-pruned 569→410, then per-fold top-25 by |Spearman|)
+   ≈ S0**: a small consistent lift on `likes_14d`/`likes_21d` (+0.008/+0.018),
+   neutral-to-slightly-negative on views. So dimensionality reduction *stops the
+   overfit bleeding* but content does **not yet earn a clear win** at N=291.
+4. **Where content is most likely to pay off first: likes** (harder to predict from
+   snapshot_0 than views, and the only head where lean content nudged up).
+
+Net: the v2 lean recipe (drop const + redundancy-prune + per-fold top-K) is the
+right harness; the missing ingredient is corpus scale, not feature engineering.
+
 ## 5. Stratified quality (owner's "where are features better/worse")
 
 Per-video mean NaN fraction by duration bucket (content features):
