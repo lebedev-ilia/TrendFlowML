@@ -32,9 +32,11 @@
     },
     {
       "id": "phase4_infra_scaling",
-      "status": "🔄",
+      "status": "✅",
       "deliverable": "corpus_run_report/INFRA_SCALING_PLAN.md",
-      "note": "Empirical parallelism stress-test (1/2/3/4 workers), $/1000-videos per GPU option, coordination pattern (adapt Fetcher stable_shard_slot). Cheap pod, short run. | IN PROGRESS: parallelism stress-test 1/2/3/4 workers running on RTX 2000 Ada. Key insight: pipeline CPU-bound (scene/cut CPU, GPU 8-55%, VRAM 2.5/16GB) -> cheap GPU + parallelism, not big card."
+      "note": "Empirical parallelism stress-test (1/2/3/4 workers), $/1000-videos per GPU option, coordination pattern (adapt Fetcher stable_shard_slot). Cheap pod, short run. | IN PROGRESS: parallelism stress-test 1/2/3/4 workers running on RTX 2000 Ada. Key insight: pipeline CPU-bound (scene/cut CPU, GPU 8-55%, VRAM 2.5/16GB) -> cheap GPU + parallelism, not big card.",
+      "updated_at": "2026-07-22",
+      "result": "INFRA_SCALING_PLAN.md done. Parallelism: N=4 => 40.9 vid/h (3.4x vs N=1), $5.9/1000 vs $20/1000. VRAM 2.4/16GB + RAM 48/251GB huge headroom => CPU-bound, N limited by CPU cores not VRAM. Recommend cheap GPU (RTX 2000 Ada/A4000) + N=4 + Fetcher shard-slot for multi-machine. Big-GPU upgrade only after moving scene/cut to GPU."
     },
     {
       "id": "phase5_vp_rollout",
@@ -54,7 +56,7 @@
     },
     {
       "id": "phase7_next_test_plan",
-      "status": "⬜",
+      "status": "🔄",
       "deliverable": "corpus_run_report/NEXT_TEST_PLAN.md",
       "note": "Synthesize phases 1-6. All processors, 2-3 machines, 50->500->1000 gate-phases with pass criteria. Disk forecast + HF-offload plan. Multi-machine watchdog."
     },
