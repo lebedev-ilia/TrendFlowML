@@ -276,7 +276,16 @@ async def _handle_turn(client: ClaudeSDKClient, text: str) -> None:
             if isinstance(msg, AssistantMessage):
                 for block in msg.content:
                     if isinstance(block, TextBlock) and block.text.strip():
-                        _send_long(f"⏳ {block.text.strip()}")
+                        # Баг найден 2026-07-21: DNS/сетевой сбой api.vk.com (Temporary failure in
+                        # name resolution) внутри _send_long раньше улетал в общий except ниже и
+                        # обрывал ВЕСЬ остаток хода (не только этот один месседж) — ход Claude
+                        # продолжается, а дальнейшие TextBlock/ToolUseBlock уже никуда не уходят.
+                        # Теперь сбой отправки — локальная, не фатальная ошибка: пропускаем именно
+                        # эту реплику и продолжаем читать стрим дальше.
+                        try:
+                            _send_long(f"⏳ {block.text.strip()}")
+                        except Exception as e:
+                            print(f"[deepdive] сообщение не отправилось (сеть?): {e}", flush=True)
                     elif isinstance(block, ToolUseBlock):
                         try:
                             messenger.send(_summarize_tool_use(block))

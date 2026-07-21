@@ -291,7 +291,13 @@ async def _handle_turn(client: ClaudeSDKClient, text: str) -> None:
             if isinstance(msg, AssistantMessage):
                 for block in msg.content:
                     if isinstance(block, TextBlock) and block.text.strip():
-                        _send_long(f"⏳ {block.text.strip()}")
+                        # Баг найден 2026-07-21 (симметрично deepdive_agent.py): DNS/сетевой сбой
+                        # api.vk.com внутри _send_long раньше улетал в общий except ниже и обрывал
+                        # ВЕСЬ остаток хода, не только этот один месседж. Теперь не фатально.
+                        try:
+                            _send_long(f"⏳ {block.text.strip()}")
+                        except Exception as e:
+                            print(f"[models_agent] сообщение не отправилось (сеть?): {e}", flush=True)
                     elif isinstance(block, ToolUseBlock):
                         try:
                             send(_summarize_tool_use(block))
