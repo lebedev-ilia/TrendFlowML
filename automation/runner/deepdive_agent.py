@@ -45,7 +45,8 @@ import asyncio
 from pathlib import Path
 
 from claude_agent_sdk import (
-    ClaudeSDKClient, ClaudeAgentOptions, HookMatcher, AssistantMessage, TextBlock, ResultMessage,
+    ClaudeSDKClient, ClaudeAgentOptions, HookMatcher, AssistantMessage, TextBlock, ToolUseBlock,
+    ResultMessage,
 )
 
 import config
@@ -208,6 +209,34 @@ def _send_long(text: str) -> None:
         text = text[cut:].strip()
 
 
+async def _safe_interrupt(client: ClaudeSDKClient) -> None:
+    """Вызывается фоновой задачей из _producer (см. баг №5 там) — НИКОГДА не await'ится напрямую
+    в цикле опроса VK, чтобы долгий/подвисший control-request к CLI не блокировал приём сообщений."""
+    try:
+        await client.interrupt()
+    except Exception as e:
+        print(f"[deepdive] interrupt не сработал: {e}", flush=True)
+
+
+_TOOL_INPUT_KEYS = ("command", "file_path", "pattern", "path", "prompt", "url", "description")
+
+
+def _summarize_tool_use(block: "ToolUseBlock") -> str:
+    """Короткая строка-эхо на каждый вызов инструмента — см. _handle_turn докстринг, баг №4."""
+    value = ""
+    for key in _TOOL_INPUT_KEYS:
+        raw = (block.input or {}).get(key)
+        if raw:
+            value = str(raw)
+            break
+    if not value and block.input:
+        value = str(block.input)
+    value = value.strip().replace("\n", " ")
+    if len(value) > 140:
+        value = value[:140] + "…"
+    return f"🔧 {block.name}: {value}" if value else f"🔧 {block.name}"
+
+
 async def _handle_turn(client: ClaudeSDKClient, text: str) -> None:
     """Баг найден 2026-07-19: раньше весь текст хода копился в parts и уходил в VK ОДНИМ
     сообщением только в конце — при долгой работе (разбор компонента, DatasetBuilder, обучение)
@@ -229,7 +258,14 @@ async def _handle_turn(client: ClaudeSDKClient, text: str) -> None:
     во втором, отложенном сообщении (создавало ощущение, что бот "завис и потом резко высыпал
     сообщения" — на деле это второй, дублирующий проход). Теперь каждый блок уходит СРАЗУ и
     ПОЛНОСТЬЮ (через _send_long, режет только если реально длиннее лимита VK) — финального
-    повторного прохода по parts больше нет."""
+    повторного прохода по parts больше нет.
+
+    Четвёртый баг найден 2026-07-21 (владелец, снова "зависает"): после того, как боту дали
+    многодневную работу с длинными сериями Bash/Read/Write БЕЗ TextBlock между ними (git, pod_control,
+    анализ файлов), в VK не уходило вообще ничего на протяжении всей такой серии — процесс жив и
+    работает, но со стороны VK неотличимо от зависания. Теперь каждый ToolUseBlock тоже шлёт короткую
+    строку-эхо (см. _summarize_tool_use) — тишины между текстовыми мыслями больше не бывает, даже если
+    ход целиком состоит из вызовов инструментов."""
     messenger.log_chat("OWNER->", text)
     await client.query(text)
     try:
@@ -241,6 +277,11 @@ async def _handle_turn(client: ClaudeSDKClient, text: str) -> None:
                 for block in msg.content:
                     if isinstance(block, TextBlock) and block.text.strip():
                         _send_long(f"⏳ {block.text.strip()}")
+                    elif isinstance(block, ToolUseBlock):
+                        try:
+                            messenger.send(_summarize_tool_use(block))
+                        except Exception as e:
+                            print(f"[deepdive] tool-echo не отправился: {e}", flush=True)
             elif isinstance(msg, ResultMessage):
                 cost = float(getattr(msg, "total_cost_usd", 0.0) or 0.0)
                 print(f"[deepdive] ход завершён, cost=${cost:.4f}", flush=True)
@@ -362,10 +403,19 @@ async def main(model_name: str | None) -> None:
                         for t in texts:
                             if busy.is_set():
                                 messenger.send("⏸ Прерываю текущую работу — читаю новое сообщение.")
-                                try:
-                                    await client.interrupt()
-                                except Exception as e:
-                                    print(f"[deepdive] interrupt не сработал: {e}", flush=True)
+                                # Баг найден 2026-07-21: раньше `await client.interrupt()` стоял ПРЯМО
+                                # тут, внутри _producer — единственного цикла, который вообще читает
+                                # VK. SDK ждёт ответа CLI-подпроцесса на control-request до 60с; если
+                                # CLI в этот момент занят долгим Bash (git/pod_control/анализ файлов —
+                                # именно то, чем боты теперь занимаются часами), interrupt() блокировал
+                                # ВЕСЬ _producer на эти секунды/до минуты — новые сообщения физически
+                                # не вычитывались из VK, не только не обрабатывались. Со стороны
+                                # владельца выглядело как "зависает, пока не напишу ещё раз" — на самом
+                                # деле не interrupt чинил зависание повторным сообщением, а просто
+                                # совпадало по времени с окончанием этой блокировки. Теперь interrupt
+                                # запускается фоновой задачей — _producer НИКОГДА не блокируется на
+                                # нём и продолжает опрашивать VK без остановки.
+                                asyncio.create_task(_safe_interrupt(client))
                             await queue.put(t)
 
                 producer_task = asyncio.create_task(_producer())
