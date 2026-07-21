@@ -1,0 +1,142 @@
+{
+  "created_at": "2026-07-19T04:19:49.918139Z",
+  "seed": 1337,
+  "model_family": "sklearn",
+  "model_version": "baseline_v0_real_model",
+  "channel_col_used": "channel_id",
+  "feature_names": [
+    "views_0",
+    "likes_0",
+    "comments_0",
+    "channel_subscribers_0",
+    "channel_total_views_0",
+    "channel_total_videos_0",
+    "video_age_hours_at_snapshot1",
+    "duration_seconds",
+    "title_len",
+    "title_word_count",
+    "title_has_question",
+    "title_upper_ratio",
+    "description_len",
+    "tag_count",
+    "made_for_kids",
+    "has_chapters",
+    "chapter_count",
+    "n_thumbnails",
+    "n_subtitle_langs",
+    "likes_per_view_0",
+    "comments_per_view_0"
+  ],
+  "targets": [
+    {
+      "name": "views_7d",
+      "target_col": "target_views_7d",
+      "mask_col": "mask_7d"
+    },
+    {
+      "name": "views_14d",
+      "target_col": "target_views_14d",
+      "mask_col": "mask_14d"
+    },
+    {
+      "name": "views_21d",
+      "target_col": "target_views_21d",
+      "mask_col": "mask_21d"
+    },
+    {
+      "name": "likes_7d",
+      "target_col": "target_likes_7d",
+      "mask_col": "mask_7d"
+    },
+    {
+      "name": "likes_14d",
+      "target_col": "target_likes_14d",
+      "mask_col": "mask_14d"
+    },
+    {
+      "name": "likes_21d",
+      "target_col": "target_likes_21d",
+      "mask_col": "mask_21d"
+    }
+  ],
+  "imputation": {
+    "strategy": "median",
+    "medians_by_feature": {
+      "views_0": 347957.0,
+      "likes_0": 6316.0,
+      "comments_0": 144.0,
+      "channel_subscribers_0": 167000.0,
+      "channel_total_views_0": 79493917.0,
+      "channel_total_videos_0": 479.0,
+      "video_age_hours_at_snapshot1": 2644.0441666666666,
+      "duration_seconds": 54.0,
+      "title_len": 41.0,
+      "title_word_count": 7.0,
+      "title_has_question": 0.0,
+      "title_upper_ratio": 0.09375,
+      "description_len": 59.0,
+      "tag_count": 6.0,
+      "made_for_kids": 0.0,
+      "has_chapters": 0.0,
+      "chapter_count": 0.0,
+      "n_thumbnails": 1.0,
+      "n_subtitle_langs": 0.0,
+      "likes_per_view_0": 0.019896538002387585,
+      "comments_per_view_0": 0.0004486330808857209
+    }
+  },
+  "dataset": {
+    "path": "Models/baseline/artifacts/v0_real_prefinal_2026-07-19/dataset_real_prefinal.parquet",
+    "metadata_path": "Models/baseline/artifacts/v0_real_prefinal_2026-07-19/dataset_metadata.json",
+    "dataset_fingerprint": null,
+    "feature_schema_version": "v0-prefinal-meta"
+  },
+  "bundles": [
+    {
+      "name": "views",
+      "horizons": [
+        {
+          "name": "7d",
+          "target_col": "target_views_7d",
+          "mask_col": "mask_7d",
+          "model_path": "Models/baseline/artifacts/v0_real_prefinal_2026-07-19/baseline_v0_real_model/models/views/7d.pkl"
+        },
+        {
+          "name": "14d",
+          "target_col": "target_views_14d",
+          "mask_col": "mask_14d",
+          "model_path": "Models/baseline/artifacts/v0_real_prefinal_2026-07-19/baseline_v0_real_model/models/views/14d.pkl"
+        },
+        {
+          "name": "21d",
+          "target_col": "target_views_21d",
+          "mask_col": "mask_21d",
+          "model_path": "Models/baseline/artifacts/v0_real_prefinal_2026-07-19/baseline_v0_real_model/models/views/21d.pkl"
+        }
+      ]
+    },
+    {
+      "name": "likes",
+      "horizons": [
+        {
+          "name": "7d",
+          "target_col": "target_likes_7d",
+          "mask_col": "mask_7d",
+          "model_path": "Models/baseline/artifacts/v0_real_prefinal_2026-07-19/baseline_v0_real_model/models/likes/7d.pkl"
+        },
+        {
+          "name": "14d",
+          "target_col": "target_likes_14d",
+          "mask_col": "mask_14d",
+          "model_path": "Models/baseline/artifacts/v0_real_prefinal_2026-07-19/baseline_v0_real_model/models/likes/14d.pkl"
+        },
+        {
+          "name": "21d",
+          "target_col": "target_likes_21d",
+          "mask_col": "mask_21d",
+          "model_path": "Models/baseline/artifacts/v0_real_prefinal_2026-07-19/baseline_v0_real_model/models/likes/21d.pkl"
+        }
+      ]
+    }
+  ]
+}

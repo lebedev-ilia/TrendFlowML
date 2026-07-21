@@ -105,3 +105,13 @@ automation/runpod_ssh/id_ed25519.pub
 *.pem
 id_rsa
 id_ed25519
+
+# Large downloaded target dataset (pre_final_data shards, ~390MB each)
+storage/pre_final_data/
+
+# Regenerable baseline artifacts (keep JSON metrics/metadata + md, ignore binaries)
+Models/baseline/artifacts/**/*.pkl
+Models/baseline/artifacts/**/*.parquet
+Models/baseline/artifacts/**/*.png
+Models/baseline/artifacts/**/*.cbm
+Models/baseline/artifacts/**/*.txt

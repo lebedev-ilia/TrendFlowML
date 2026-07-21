@@ -33,22 +33,67 @@ components:
 
   # --- Visual modules (7) — from BASELINE_MODEL.md, all trustworthy ----------
   - name: cut_detection
+    # FINAL_REPORT: deep-channel dead (jump_cut not active) — deep_valid_mask
+    # all-False, deep_cosine_dist 100% NaN; jump_cut_* ≡ 0 on all 26 real runs.
+    column_exclude:
+      - "deep_valid"       # all-False mask (deep channel inactive)
+      - "deep_cosine"      # 100% NaN on real corpus
+      - "jump_cut"         # jump_cut_intensity/ratio/count ≡ 0 (audit-confirmed dead)
   - name: optical_flow
+    # FINAL_REPORT: adds ~0 over core_optical_flow (redundant motion); bg_ratio
+    # inherited-dead ≡ 0.40. Keep component for v0, but drop the dead constant;
+    # redundancy vs core will surface in feature importance -> prune at scale.
+    column_exclude:
+      - "bg_ratio"         # ≡ 0.40 by design (constant, no signal)
   - name: scene_classification
   - name: shot_quality
   - name: story_structure
+    # FINAL_REPORT: hook_to_avg_energy_ratio POISONED (−8.9e5 .. +1.07e6 in real
+    # batch — a feature literally able to break the model / dominate importance);
+    # topic_shift_* dead (present=0, curve NaN). Other hook_* signals are sane, kept.
+    column_exclude:
+      - "hook_to_avg_energy_ratio"   # ±1e6 poison — safety-critical drop
+      - "topic_shift"                # present=0 / NaN curve (dead)
   - name: uniqueness
   - name: video_pacing
+    # 8-13 analytic features are all-NaN in the real batch due to CONFIG-DRIFT
+    # (variant A vs B), NOT by design — Agent A (TrendFlow Bot) owns the re-run.
+    # Excluded from v0 to keep the vector/importance clean; RE-ADD after variant-B
+    # re-run repopulates them (they are config-recoverable, not dead-by-design).
+    column_exclude:
+      - "shot_length_histogram"      # 5-bin hist all-NaN (config-drift)
+      - "shot_length_gini"
+      - "shot_duration_entropy"
+      - "tempo_entropy"
+      - "pace_curve_"                # dominant_period/power/peaks_prominence all-NaN
+      - "color_change_bursts"
+      - "semantic_change_burst_count"
 
   # --- Audio extractors (3) — from BASELINE_MODEL.md -------------------------
   - name: clap_extractor
   - name: loudness_extractor
+    # FINAL_REPORT: LUFS dead everywhere (pyloudnorm not installed) — loudness_lufs
+    # / segment_lufs 100% NaN. dBFS/rms channel is live and kept.
+    column_exclude:
+      - "lufs"             # loudness_lufs + segment_lufs — 100% NaN (dead)
   - name: tempo_extractor
 
   # --- Core providers (kept) -------------------------------------------------
   - name: core_clip
+    # FINAL_REPORT: *_text_embeddings__* are FIXED PROMPT vectors (identical for
+    # every video) -> 42 constant columns, pure dead weight. Keep only the
+    # per-video image/frame CLIP signal (frame_embeddings).
+    column_exclude:
+      - "text_embeddings"  # fixed zero-shot prompt vectors — constant by design
   - name: core_face_landmarks
+    # FINAL_REPORT: *_landmarks_raw are debug raw-point tensors (81-85% NaN,
+    # need pooling/derivatives, not raw coords) — drop raw, keep derived features.
+    column_exclude:
+      - "landmarks_raw"    # face/pose/hands raw point stats — debug, high-NaN
   - name: core_optical_flow
+    # FINAL_REPORT: bg_ratio ≡ 0.400 on all 26 real videos (constant by design).
+    column_exclude:
+      - "bg_ratio"         # ≡ 0.40 (constant, no signal)
   - name: core_depth_midas
   - name: core_object_detections
     # COCO-80 weights, taxonomy re-labelling in progress (portfolio §3.4/§8).
@@ -84,6 +129,7 @@ global_column_exclude:
   substrings:
     - "frame_indices"      # frame positions — structural, identical across comps
     - "meta_json"          # serialized dict coerced to NaN
+    - "npz_path"           # artifact path strings coerced to NaN (e.g. model_facing_npz_path)
     - "__version"          # producer/schema metadata
     - "__created_at"
     - "__model_name"

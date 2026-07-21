@@ -10,18 +10,33 @@ Target contract (TARGETS_SPLITS_METRICS.md):
     horizons: 7d (masked/optional), 14d, 21d
     snapshot_0 fields are FEATURES (comments_0 too), never targets.
 
-Snapshot source = HF dataset shards (Fetcher dataset_collector, `Ilialebedev/*`).
+Snapshot sources (in priority order):
+  1. `--prefinal` : the READY labelled dataset `Ilialebedev/pre_final_data`
+     (`main_ready/data_00.json … data_21.json`). Top level is a dict
+     {video_id: {time_interval, metadata, snapshot_0..3, _enriched, ...}}. Metric
+     fields live directly in each `snapshot_N` as STRINGS (viewCount, likeCount,
+     commentCount, subscriberCount, videoCount, viewCount_channel, comments).
+     ~81.5% of videos carry all 4 snapshots; intervals measured at ~7d steps, so
+     index 1->7d, 2->14d, 3->21d. This is the PRIMARY real-target source.
+  2. `--snapshots` : the live Fetcher HF collection (`Ilialebedev/*` monthly
+     shards). Same record shapes accepted; used as fallback / newer data.
+
 A video's snapshot record may arrive in several shapes; we accept all:
     (a) {"snapshots": [{"snapshot_index":0,"viewCount":..}, {"snapshot_index":1,..}, ...]}
-    (b) {"snapshot_0": {...}, "snapshot_1": {...}, "snapshot_2": {...}, ...}
+    (b) {"snapshot_0": {...}, "snapshot_1": {...}, "snapshot_2": {...}, ...}  <- pre_final
     (c) {"snapshot_0": {...}}   -> only snapshot_0 filled, all horizons masked=0
 Index->horizon mapping follows the collection schedule [0,7,14,21,28]:
     index 1 -> 7d, index 2 -> 14d, index 3 -> 21d   (override via --index-map).
 
-REALITY (2026-07): production follow-up snapshots (day 7/14/21) are not collected
-yet — calendar time hasn't passed — so a real join yields masked (NaN) targets and
-this script reports coverage honestly. Use --synthetic to fabricate clearly-labelled
-targets so the downstream TRAIN pipeline can be smoke-tested (metrics != NaN).
+Data-integrity handling (measured on pre_final_data):
+  * metric fields are strings -> parsed via _to_float (try/except -> NaN);
+  * ~0.7% records have a non-numeric viewCount -> counted, target masked;
+  * ~6.6% records show views DECREASING between snapshots (YouTube API noise, not a
+    builder bug) -> counted + logged as edge-case, NOT dropped; log1p(max(delta,0))
+    already floors negative deltas at 0.
+
+--synthetic still fabricates clearly-labelled targets for a pure smoke run when NO
+real source is available.
 """
 from __future__ import annotations
 
@@ -102,6 +117,64 @@ def load_snapshot_records(paths: List[str]) -> Dict[str, dict]:
                 if isinstance(rec, dict) and rec.get("video_id"):
                     out[str(rec["video_id"])] = rec
     return out
+
+
+def _iter_prefinal_files(paths: List[str]) -> List[str]:
+    files: List[str] = []
+    for p in paths:
+        if os.path.isdir(p):
+            files.extend(sorted(glob.glob(os.path.join(p, "**", "data_*.json"), recursive=True)))
+        else:
+            files.extend(sorted(glob.glob(p)))
+    return files
+
+
+def stream_prefinal_records(paths: List[str], wanted_ids: Optional[set] = None):
+    """
+    Stream {video_id: record} from pre_final_data shards WITHOUT loading a whole
+    390MB shard into memory (ijson.kvitems over the top-level dict). If `wanted_ids`
+    is given, only those video_ids are yielded (memory-safe join for a small feature
+    table). Yields (video_id, record).
+    """
+    import ijson  # local import: only needed for the pre_final path
+
+    for f in _iter_prefinal_files(paths):
+        with open(f, "rb") as fh:
+            for vid, rec in ijson.kvitems(fh, ""):
+                if not isinstance(rec, dict):
+                    continue
+                if wanted_ids is not None and str(vid) not in wanted_ids:
+                    continue
+                yield str(vid), rec
+
+
+def load_prefinal_records(paths: List[str], wanted_ids: Optional[set] = None) -> Dict[str, dict]:
+    """Materialize {video_id: record} from pre_final_data shards (optionally filtered)."""
+    out: Dict[str, dict] = {}
+    for vid, rec in stream_prefinal_records(paths, wanted_ids=wanted_ids):
+        out[vid] = rec
+    return out
+
+
+def target_edge_cases(rec: dict, index_map: Dict[int, str]) -> Dict[str, bool]:
+    """Flag data-integrity edge-cases per the owner's audit (log, don't drop)."""
+    snaps = _collect_snapshots(rec)
+    s0 = snaps.get(0) or rec.get("snapshot_0") or {}
+    raw_v0 = s0.get("viewCount")
+    nonnumeric_views = not math.isfinite(_to_float(raw_v0))
+    v0 = _to_float(raw_v0)
+    decreasing = False
+    prev = v0
+    for idx in sorted(index_map):
+        s = snaps.get(idx)
+        if not s:
+            continue
+        vh = _to_float(s.get("viewCount"))
+        if math.isfinite(vh) and math.isfinite(prev) and vh < prev - 1e-9:
+            decreasing = True
+        if math.isfinite(vh):
+            prev = vh
+    return {"nonnumeric_views": bool(nonnumeric_views), "decreasing_views": bool(decreasing)}
 
 
 def _collect_snapshots(rec: dict) -> Dict[int, dict]:
@@ -230,7 +303,8 @@ def main() -> int:
 
     ap = argparse.ArgumentParser(description="Attach targets/masks/snapshot_0 to feature table (DatasetBuilder C2)")
     ap.add_argument("--features", required=True, help="Input feature table (.parquet/.csv)")
-    ap.add_argument("--snapshots", nargs="*", default=[], help="Snapshot shard JSON files/dirs/globs")
+    ap.add_argument("--prefinal", nargs="*", default=[], help="pre_final_data shard files/dirs/globs (PRIMARY real-target source)")
+    ap.add_argument("--snapshots", nargs="*", default=[], help="Fetcher HF snapshot shard JSON files/dirs/globs (fallback)")
     ap.add_argument("--out", required=True, help="Output path (.parquet/.csv)")
     ap.add_argument("--synthetic", action="store_true", help="Fabricate labelled targets (smoke only)")
     ap.add_argument("--seed", type=int, default=1337)
@@ -246,8 +320,19 @@ def main() -> int:
     df = pd.read_parquet(fp) if fp.suffix == ".parquet" else pd.read_csv(fp)
     n0 = len(df)
 
-    records = load_snapshot_records(args.snapshots) if args.snapshots else {}
+    wanted = set(df["video_id"].astype(str).tolist())
+    if args.prefinal:
+        records = load_prefinal_records(args.prefinal, wanted_ids=wanted)
+        source = "pre_final"
+    elif args.snapshots:
+        records = load_snapshot_records(args.snapshots)
+        source = "hf_shards"
+    else:
+        records = {}
+        source = "none"
     matched = 0
+    n_nonnumeric_views = 0
+    n_decreasing_views = 0
     horizons = list(index_map.values())
 
     # ensure target/mask/snapshot columns exist (NaN default => native missing)
@@ -262,6 +347,9 @@ def main() -> int:
         if rec is None:
             continue
         matched += 1
+        ec = target_edge_cases(rec, index_map)
+        n_nonnumeric_views += int(ec["nonnumeric_views"])
+        n_decreasing_views += int(ec["decreasing_views"])
         tr = compute_targets_for_video(rec, index_map)
         for k, v in tr.items():
             df.at[df.index[i], k] = v
@@ -289,10 +377,15 @@ def main() -> int:
     meta = {
         "created_at": _now_utc(),
         "n_rows": int(len(df)),
+        "source": source,
         "snapshot_files_matched_videos": matched,
         "rows_with_real_targets": real_target_rows,
         "rows_with_any_target": labelled_rows,
         "synthetic_targets": synthetic,
+        "edge_cases": {
+            "nonnumeric_viewCount": n_nonnumeric_views,
+            "decreasing_views_between_snapshots": n_decreasing_views,
+        },
         "index_map": index_map,
         "horizons": horizons,
     }
@@ -300,8 +393,11 @@ def main() -> int:
         json.dumps(meta, ensure_ascii=False, indent=2), encoding="utf-8"
     )
     tag = "SYNTHETIC" if synthetic else "real"
-    print(f"[ok] targets attached ({tag}): {labelled_rows}/{n0} rows labelled, "
+    print(f"[ok] targets attached ({tag}, source={source}): {labelled_rows}/{n0} rows labelled, "
           f"real={real_target_rows}, matched_videos={matched} -> {out}")
+    if matched:
+        print(f"[edge] non-numeric viewCount={n_nonnumeric_views}, "
+              f"decreasing-views records={n_decreasing_views} (logged, not dropped)")
     if real_target_rows == 0 and not synthetic:
         print("[warn] no real follow-up snapshots (day 7/14/21) found -> all targets masked. "
               "This is expected until the HF collection matures. Use --synthetic for a smoke run.")

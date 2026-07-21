@@ -40,6 +40,7 @@ def main() -> int:
     ap.add_argument("--result-store", default=str(C1.REPO_ROOT / "storage" / "result_store"))
     ap.add_argument("--feature-spec", default=str(THIS.parent / "feature_spec.yaml"))
     ap.add_argument("--snapshots", nargs="*", default=[])
+    ap.add_argument("--prefinal", nargs="*", default=[], help="pre_final_data shards (PRIMARY real-target source)")
     ap.add_argument("--platform", default="youtube")
     ap.add_argument("--all-runs", action="store_true")
     ap.add_argument("--synthetic", action="store_true")

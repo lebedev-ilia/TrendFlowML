@@ -142,14 +142,17 @@ class ModelSpec:
 
 
 def build_model_specs() -> List[ModelSpec]:
-    # 6 outputs (views/likes × 7/14/21). 7d is masked; 14/21 assumed present.
+    # 6 outputs (views/likes × 7/14/21). Every horizon carries a per-horizon mask:
+    # real data (pre_final_data) has videos missing an individual follow-up snapshot,
+    # so 14d/21d targets can be NaN too, not just 7d. Respect the mask for all three
+    # (mask columns default to 1.0 when a horizon is always present, e.g. smoke set).
     return [
         ModelSpec("views_7d", "target_views_7d", "mask_7d"),
-        ModelSpec("views_14d", "target_views_14d", None),
-        ModelSpec("views_21d", "target_views_21d", None),
+        ModelSpec("views_14d", "target_views_14d", "mask_14d"),
+        ModelSpec("views_21d", "target_views_21d", "mask_21d"),
         ModelSpec("likes_7d", "target_likes_7d", "mask_7d"),
-        ModelSpec("likes_14d", "target_likes_14d", None),
-        ModelSpec("likes_21d", "target_likes_21d", None),
+        ModelSpec("likes_14d", "target_likes_14d", "mask_14d"),
+        ModelSpec("likes_21d", "target_likes_21d", "mask_21d"),
     ]
 
 
