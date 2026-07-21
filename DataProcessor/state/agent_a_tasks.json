@@ -1,6 +1,6 @@
 {
   "_doc": "Task board for TrendFlow Bot (Agent A) — DataProcessor side. Statuses: ⬜ todo, 🔄 in-progress, ✅ done, ⛔ blocked. Plan source: DataProcessor/docs/AGENT_A_WORKPLAN_2026-07-21.md. Agent B board (read-only for A): Models/state/training_tasks.json.",
-  "updated_at": "2026-07-21",
+  "updated_at": "2026-07-22",
   "context": "300/300 corpus run complete (DataProcessor/docs/corpus_run_report/). 7 VP components + 2 pipeline steps. NPZ on Network Volume /workspace/corpus_out/<id>/rs/. This likely unblocks Agent B content_features_plus_real_targets + corpus_scale_150_250.",
   "phases": [
     {
@@ -32,21 +32,25 @@
     },
     {
       "id": "phase4_infra_scaling",
-      "status": "⬜",
+      "status": "🔄",
       "deliverable": "corpus_run_report/INFRA_SCALING_PLAN.md",
-      "note": "Empirical parallelism stress-test (1/2/3/4 workers), $/1000-videos per GPU option, coordination pattern (adapt Fetcher stable_shard_slot). Cheap pod, short run."
+      "note": "Empirical parallelism stress-test (1/2/3/4 workers), $/1000-videos per GPU option, coordination pattern (adapt Fetcher stable_shard_slot). Cheap pod, short run. | IN PROGRESS: parallelism stress-test 1/2/3/4 workers running on RTX 2000 Ada. Key insight: pipeline CPU-bound (scene/cut CPU, GPU 8-55%, VRAM 2.5/16GB) -> cheap GPU + parallelism, not big card."
     },
     {
       "id": "phase5_vp_rollout",
-      "status": "⬜",
+      "status": "✅",
       "deliverable": "corpus_run_report/VP_ROLLOUT_FORECAST.md",
-      "note": "Extend to ~15 addable VP components (excl. object_detections/identity/ocr/text_scoring blocked). Generalize run_corpus.sh (component list as config). Smoke 5-10 videos. Check Docker for micro_emotion/OpenFace."
+      "note": "Extend to ~15 addable VP components (excl. object_detections/identity/ocr/text_scoring blocked). Generalize run_corpus.sh (component list as config). Smoke 5-10 videos. Check Docker for micro_emotion/OpenFace.",
+      "result": "VP_ROLLOUT_FORECAST.md done: 6 cheap-ready, 5 slow-on-CPU (torch-GPU blocker), emotion/action need weights, micro_emotion Docker-blocked",
+      "updated_at": "2026-07-22"
     },
     {
       "id": "phase6_ap_tp_forecast",
-      "status": "⬜",
+      "status": "✅",
       "deliverable": "corpus_run_report/AP_TP_ROLLOUT_FORECAST.md",
-      "note": "AudioProcessor(21)+TextProcessor(22) forecast. Blockers: ASR propagation doc.asr, voice_quality config-drift, WavLM cache. Smoke before extrapolating."
+      "note": "AudioProcessor(21)+TextProcessor(22) forecast. Blockers: ASR propagation doc.asr, voice_quality config-drift, WavLM cache. Smoke before extrapolating.",
+      "result": "AP_TP_ROLLOUT_FORECAST.md done: main blocker ASR doc.asr not wired (7 TP comps), voice_quality drift, WavLM cache, TP<-AP sequential",
+      "updated_at": "2026-07-22"
     },
     {
       "id": "phase7_next_test_plan",
@@ -56,8 +60,10 @@
     },
     {
       "id": "cross_disk_forecast",
-      "status": "⬜",
-      "note": "Per-phase: MB/video added by new components; N videos x MB check vs 120GB volume; HF-offload plan (adapt Fetcher hf_queues.py). Current baseline: 151MB/video on 7 VP comps."
+      "status": "✅",
+      "note": "Per-phase: MB/video added by new components; N videos x MB check vs 120GB volume; HF-offload plan (adapt Fetcher hf_queues.py). Current baseline: 151MB/video on 7 VP comps.",
+      "result": "DISK_FORECAST.md done: 151MB/video measured -> ~500MB full; 120GB ceiling ~150 videos; HF-offload plan (adapt Fetcher hf_queues)",
+      "updated_at": "2026-07-22"
     }
   ]
 }
