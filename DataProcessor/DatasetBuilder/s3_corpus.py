@@ -81,6 +81,74 @@ def download_video(s3, bucket: str, vid: str, dest_root: Path,
     return n
 
 
+import threading
+
+_TLS = threading.local()
+
+
+def _tls_client():
+    if not hasattr(_TLS, "s3"):
+        _TLS.s3, _TLS.bucket = client()
+    return _TLS.s3, _TLS.bucket
+
+
+def download_corpus_fast(video_ids: List[str], dest_root: Path, *,
+                         include_depth: bool = False, list_workers: int = 24,
+                         dl_workers: int = 32) -> Dict[str, int]:
+    """File-level parallel download with thread-local (reused) clients.
+    1) list all videos in parallel -> flat file task list
+    2) download all files in parallel, skipping already-complete ones."""
+    dest_root.mkdir(parents=True, exist_ok=True)
+
+    # ---- parallel listing ----
+    def _list(vid: str):
+        s3, bk = _tls_client()
+        try:
+            return vid, list_video_npz(s3, bk, vid, include_depth=include_depth)
+        except Exception as e:  # noqa: BLE001
+            return vid, f"ERR:{type(e).__name__}"
+
+    tasks = []  # (vid, key, size)
+    listed = 0
+    with ThreadPoolExecutor(max_workers=list_workers) as ex:
+        for vid, res in ex.map(_list, video_ids):
+            listed += 1
+            if isinstance(res, str):
+                continue
+            for o in res:
+                tasks.append((vid, o["key"], o["size"]))
+    print(f"  listed {listed} videos -> {len(tasks)} files", flush=True)
+
+    # ---- parallel download ----
+    results: Dict[str, int] = {v: 0 for v in video_ids}
+    lock = threading.Lock()
+
+    def _dl(t):
+        vid, key, size = t
+        rel = key.split(f"{vid}/", 1)[-1]
+        local = dest_root / vid / rel
+        if local.exists() and local.stat().st_size == size:
+            return vid, True
+        local.parent.mkdir(parents=True, exist_ok=True)
+        s3, bk = _tls_client()
+        try:
+            s3.download_file(bk, key, str(local))
+            return vid, True
+        except Exception:
+            return vid, False
+
+    done = 0
+    with ThreadPoolExecutor(max_workers=dl_workers) as ex:
+        for vid, ok in ex.map(_dl, tasks):
+            done += 1
+            if ok:
+                with lock:
+                    results[vid] += 1
+            if done % 200 == 0:
+                print(f"  ... {done}/{len(tasks)} files", flush=True)
+    return results
+
+
 def download_corpus(video_ids: List[str], dest_root: Path, *,
                     include_depth: bool = False, workers: int = 8) -> Dict[str, int]:
     s3, bucket = client()
@@ -124,7 +192,7 @@ if __name__ == "__main__":
     if args.limit:
         vids = vids[: args.limit]
     print(f"downloading {len(vids)} videos -> {args.dest} (depth={args.include_depth})")
-    res = download_corpus(vids, Path(args.dest), include_depth=args.include_depth, workers=args.workers)
+    res = download_corpus_fast(vids, Path(args.dest), include_depth=args.include_depth)
     ok = sum(1 for v in res.values() if isinstance(v, int))
     errs = {k: v for k, v in res.items() if not isinstance(v, int)}
     print(f"[done] ok={ok}/{len(vids)} files_total={sum(v for v in res.values() if isinstance(v,int))}")

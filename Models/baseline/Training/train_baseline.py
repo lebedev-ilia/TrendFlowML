@@ -77,12 +77,28 @@ def select_numeric_features(df: "pd.DataFrame", *, exclude_cols: set[str]) -> Tu
     import pandas as pd  # type: ignore
 
     cols: List[str] = []
+    dropped_const = 0
+    dropped_allnan = 0
     for c in df.columns:
         if c in exclude_cols:
             continue
-        # keep numeric only
-        if pd.api.types.is_numeric_dtype(df[c]):
-            cols.append(c)
+        if not pd.api.types.is_numeric_dtype(df[c]):
+            continue
+        s = df[c]
+        nfin = s[s.notna()]
+        # Drop degenerate columns: all-NaN or constant (<=1 unique value). They carry
+        # no signal AND break HistGradientBoosting's binning on numpy>=2/py3.14
+        # ("window shape cannot be larger than input array shape" in _find_binning_thresholds).
+        if len(nfin) == 0:
+            dropped_allnan += 1
+            continue
+        if nfin.nunique() <= 1:
+            dropped_const += 1
+            continue
+        cols.append(c)
+    if dropped_const or dropped_allnan:
+        print(f"[features] dropped {dropped_const} constant + {dropped_allnan} all-NaN columns "
+              f"-> {len(cols)} usable numeric features")
     return df[cols], cols
 
 

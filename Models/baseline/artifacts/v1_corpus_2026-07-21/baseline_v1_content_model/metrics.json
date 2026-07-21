@@ -1,0 +1,248 @@
+{
+  "created_at": "2026-07-21T13:03:55.767844Z",
+  "splits": {
+    "train": 230,
+    "val": 29,
+    "test": 32
+  },
+  "per_model": {
+    "views_7d": {
+      "model_path": "Models/baseline/artifacts/v1_corpus_2026-07-21/baseline_v1_content_model/models/views/7d.pkl",
+      "target_col": "target_views_7d",
+      "mask_col": "mask_7d",
+      "val": {
+        "overall": {
+          "n": 19,
+          "spearman": 0.256140350877193,
+          "mae": 2.704395306056644
+        },
+        "by_age_bucket": {
+          "1-30d": {
+            "n": 19,
+            "spearman": 0.256140350877193,
+            "mae": 2.704395306056644
+          }
+        }
+      },
+      "test": {
+        "overall": {
+          "n": 19,
+          "spearman": 0.3526315789473684,
+          "mae": 2.946073635644902
+        },
+        "by_age_bucket": {
+          "1-30d": {
+            "n": 19,
+            "spearman": 0.3526315789473684,
+            "mae": 2.946073635644902
+          }
+        }
+      }
+    },
+    "views_14d": {
+      "model_path": "Models/baseline/artifacts/v1_corpus_2026-07-21/baseline_v1_content_model/models/views/14d.pkl",
+      "target_col": "target_views_14d",
+      "mask_col": "mask_14d",
+      "val": {
+        "overall": {
+          "n": 29,
+          "spearman": 0.5231527093596059,
+          "mae": 2.3160040538756457
+        },
+        "by_age_bucket": {
+          "1-30d": {
+            "n": 27,
+            "spearman": 0.5476190476190477,
+            "mae": 2.2694581514040415
+          },
+          "<24h": {
+            "n": 2,
+            "spearman": 1.0,
+            "mae": 2.9443737372423087
+          }
+        }
+      },
+      "test": {
+        "overall": {
+          "n": 30,
+          "spearman": 0.23159065628476083,
+          "mae": 2.8225264250594693
+        },
+        "by_age_bucket": {
+          "1-30d": {
+            "n": 23,
+            "spearman": 0.43478260869565216,
+            "mae": 2.8799151041529174
+          },
+          "<24h": {
+            "n": 7,
+            "spearman": -0.6428571428571429,
+            "mae": 2.6339636223238534
+          }
+        }
+      }
+    },
+    "views_21d": {
+      "model_path": "Models/baseline/artifacts/v1_corpus_2026-07-21/baseline_v1_content_model/models/views/21d.pkl",
+      "target_col": "target_views_21d",
+      "mask_col": "mask_21d",
+      "val": {
+        "overall": {
+          "n": 29,
+          "spearman": 0.5817733990147783,
+          "mae": 2.371274968780934
+        },
+        "by_age_bucket": {
+          "1-30d": {
+            "n": 27,
+            "spearman": 0.5824175824175825,
+            "mae": 2.3518125052211127
+          },
+          "<24h": {
+            "n": 2,
+            "spearman": 1.0,
+            "mae": 2.6340182268385197
+          }
+        }
+      },
+      "test": {
+        "overall": {
+          "n": 30,
+          "spearman": 0.26985539488320354,
+          "mae": 2.758192741653488
+        },
+        "by_age_bucket": {
+          "1-30d": {
+            "n": 23,
+            "spearman": 0.3883399209486166,
+            "mae": 2.8076274099541996
+          },
+          "<24h": {
+            "n": 7,
+            "spearman": -0.2857142857142857,
+            "mae": 2.5957645458082967
+          }
+        }
+      }
+    },
+    "likes_7d": {
+      "model_path": "Models/baseline/artifacts/v1_corpus_2026-07-21/baseline_v1_content_model/models/likes/7d.pkl",
+      "target_col": "target_likes_7d",
+      "mask_col": "mask_7d",
+      "val": {
+        "overall": {
+          "n": 19,
+          "spearman": 0.34385964912280703,
+          "mae": 2.1723211355942507
+        },
+        "by_age_bucket": {
+          "1-30d": {
+            "n": 19,
+            "spearman": 0.34385964912280703,
+            "mae": 2.1723211355942507
+          }
+        }
+      },
+      "test": {
+        "overall": {
+          "n": 19,
+          "spearman": 0.5149392838230693,
+          "mae": 2.3280400444772913
+        },
+        "by_age_bucket": {
+          "1-30d": {
+            "n": 19,
+            "spearman": 0.5149392838230693,
+            "mae": 2.3280400444772913
+          }
+        }
+      }
+    },
+    "likes_14d": {
+      "model_path": "Models/baseline/artifacts/v1_corpus_2026-07-21/baseline_v1_content_model/models/likes/14d.pkl",
+      "target_col": "target_likes_14d",
+      "mask_col": "mask_14d",
+      "val": {
+        "overall": {
+          "n": 29,
+          "spearman": 0.6088032350991084,
+          "mae": 2.0476009751665485
+        },
+        "by_age_bucket": {
+          "1-30d": {
+            "n": 27,
+            "spearman": 0.6067558850240267,
+            "mae": 1.9811166586696956
+          },
+          "<24h": {
+            "n": 2,
+            "spearman": 1.0,
+            "mae": 2.9451392478740592
+          }
+        }
+      },
+      "test": {
+        "overall": {
+          "n": 30,
+          "spearman": 0.08443809678194378,
+          "mae": 2.258686717341266
+        },
+        "by_age_bucket": {
+          "1-30d": {
+            "n": 23,
+            "spearman": 0.013359737628442288,
+            "mae": 2.5398430664550213
+          },
+          "<24h": {
+            "n": 7,
+            "spearman": 0.21428571428571427,
+            "mae": 1.334887284538926
+          }
+        }
+      }
+    },
+    "likes_21d": {
+      "model_path": "Models/baseline/artifacts/v1_corpus_2026-07-21/baseline_v1_content_model/models/likes/21d.pkl",
+      "target_col": "target_likes_21d",
+      "mask_col": "mask_21d",
+      "val": {
+        "overall": {
+          "n": 29,
+          "spearman": 0.5974352867906992,
+          "mae": 2.1083062715807745
+        },
+        "by_age_bucket": {
+          "1-30d": {
+            "n": 27,
+            "spearman": 0.5978603336321356,
+            "mae": 2.075242841955082
+          },
+          "<24h": {
+            "n": 2,
+            "spearman": 1.0,
+            "mae": 2.554662571527625
+          }
+        }
+      },
+      "test": {
+        "overall": {
+          "n": 30,
+          "spearman": 0.26602815701039423,
+          "mae": 2.036957472915876
+        },
+        "by_age_bucket": {
+          "1-30d": {
+            "n": 23,
+            "spearman": 0.1228639686125962,
+            "mae": 2.3065743138885493
+          },
+          "<24h": {
+            "n": 7,
+            "spearman": 0.7142857142857143,
+            "mae": 1.1510735668628074
+          }
+        }
+      }
+    }
+  }
+}
