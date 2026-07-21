@@ -1,0 +1,54 @@
+{
+  "created_at": "2026-07-21T14:12:10.651721Z",
+  "feature_schema_version": "v0-prefinal-meta",
+  "source": "Ilialebedev/pre_final_data/main_ready",
+  "shards": [
+    "storage/pre_final_data/data_00.json",
+    "storage/pre_final_data/data_01.json",
+    "storage/pre_final_data/data_02.json"
+  ],
+  "n_rows": 14861,
+  "n_videos": 14861,
+  "n_channels": 10894,
+  "n_feature_columns": 21,
+  "feature_columns": [
+    "views_0",
+    "likes_0",
+    "comments_0",
+    "channel_subscribers_0",
+    "channel_total_views_0",
+    "channel_total_videos_0",
+    "video_age_hours_at_snapshot1",
+    "duration_seconds",
+    "title_len",
+    "title_word_count",
+    "title_has_question",
+    "title_upper_ratio",
+    "description_len",
+    "tag_count",
+    "made_for_kids",
+    "has_chapters",
+    "chapter_count",
+    "n_thumbnails",
+    "n_subtitle_langs",
+    "likes_per_view_0",
+    "comments_per_view_0"
+  ],
+  "rows_with_real_targets": 14847,
+  "rows_full4_snapshots": 12131,
+  "synthetic_targets": false,
+  "horizons": [
+    "7d",
+    "14d",
+    "21d"
+  ],
+  "mask_coverage": {
+    "7d": 12234,
+    "14d": 14811,
+    "21d": 14722
+  },
+  "edge_cases": {
+    "nonnumeric_viewCount": 14,
+    "decreasing_views_between_snapshots": 822
+  }
+}

@@ -234,8 +234,10 @@ Per-video mean NaN fraction by duration bucket (content features):
    snapshot_0** — editing rhythm, motion dispersion, aesthetics. So the blocker is
    sample size, not relevance. **Highest-value next step is more corpus videos
    through Agent A's pipeline** (his phases 4/5/7); with thousands of rows a lean
-   content set should start to beat S0. Robust S0 baseline to beat: views ~0.81 /
-   likes ~0.65 (5-fold CV, §4b).
+   content set should start to beat S0. **Definitive S0 baseline-to-beat** (exp_0009,
+   14861 videos across 3 pre_final shards, 5-fold GroupKFold CV): **views
+   0.855/0.842/0.845, likes 0.735/0.732/0.736** (7/14/21d). Likes runs ~0.11 below
+   views → the harder target, and (per §4c) the one content should lift first.
 2. **Aggressively reduce content dimensionality (my v2).** 819 cross-component
    redundant pairs + 87 constants ⇒ collapse optical_flow/cut_detection/clip-motion
    to a few representative features; keep top content features by importance. Feed a
