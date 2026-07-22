@@ -41,8 +41,8 @@
     "frame_indices": { "required": true, "tier": "model_facing", "dtype": "int32", "shape": ["N"] },
     "times_s": { "required": true, "tier": "model_facing", "dtype": "float32", "shape": ["N"] },
 
-    "depth_maps": { "required": true, "tier": "debug", "dtype": "float32", "shape": ["N", "H", "W"] },
-    "depth_maps_norm": { "required": true, "tier": "model_facing", "dtype": "float32", "shape": ["N", "H", "W"] },
+    "depth_maps": { "required": false, "tier": "debug", "dtype": "float32", "shape": ["N", "H", "W"] },
+    "depth_maps_norm": { "required": false, "tier": "model_facing", "dtype": "float32", "shape": ["N", "H", "W"] },
 
     "depth_mean": { "required": true, "tier": "analytics", "dtype": "float32", "shape": ["N"] },
     "depth_std": { "required": true, "tier": "analytics", "dtype": "float32", "shape": ["N"] },
