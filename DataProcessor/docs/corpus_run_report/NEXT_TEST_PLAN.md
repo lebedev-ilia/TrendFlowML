@@ -11,8 +11,10 @@
   **Исключить:** core_object_detections, ocr_extractor, text_scoring (detector-баг), brand/car/franchise/
   place/face_identity (stub-БД). См. `VP_ROLLOUT_FORECAST.md`.
 - **AP (21):** после фиксов voice_quality (config-drift) + WavLM-кэш + pyannote config. `AP_TP_ROLLOUT_FORECAST.md`.
-- **TP (22):** **ТОЛЬКО после** выстраивания `AP→doc.asr→TP` (иначе 7 TP-компонентов пусты) + передачи реальных
-  title/description в TP-документ.
+- **TP (22):** мост `AP→doc.asr→TP` **уже подключён** в оркестраторе (`DataProcessor/main.py::
+  _autogen_text_input_from_asr` → `--run-text`; поправка 2026-07-22, см. `AP_TP_ROLLOUT_FORECAST.md`) — нужна
+  **валидация** связки на реальном видео (asr NPZ → autogen-JSON → TP-декод через `shared_tokenizer_v1`), а не
+  «выстраивание». Дополнительно передать реальные title/description в TP-документ.
 
 ## 2. Инфраструктура (из `INFRA_SCALING_PLAN.md`)
 - **GPU:** дешёвая (RTX 2000 Ada $0.24/ч или RTX A4000 дешевле) — пайплайн CPU-bound, дорогая карта не
@@ -45,7 +47,8 @@
 - [ ] **Setup свежего пода:** apt `ffmpeg time bc libarchive13 python3-numpy` (иначе Triton не стартует).
 - [ ] **Triton-бандл** на volume (есть) + модели (есть). При добавлении GPU-компонентов (SlowFast/EmoNet) —
       экспорт в Triton или доставка весов.
-- [ ] **AP→doc.asr→TP** проброс ASR (критично для TP).
+- [x] **AP→doc.asr→TP** проброс ASR — **код уже есть** (`_autogen_text_input_from_asr`, в first commit); осталось
+      **валидировать** end-to-end (прогон AP+TP+`--asr-enable-token-sequences` на 5-10 видео).
 - [ ] **voice_quality** config-drift фикс (смоук sr/f0).
 - [ ] **WavLM-кэш** (`prepare_hf_cache.sh`) + **pyannote config** на volume.
 - [ ] **OPT-3 depth** (не персистить карты) — для 500/1000 (диск).
@@ -82,3 +85,32 @@
 5. На каждом гейте — отчёт метрик (`gen_report.py`, уже есть) + гашение подов после.
 
 *Оценки §3 (throughput/стоимость полного набора) — прогноз; заменить измерениями после смоука §8.3.*
+
+## 9. Сборка `corpus1000.json` (для Gate 3)
+
+**Данные (проверено 2026-07-22):**
+- `automation/runner/state/corpus/video_index.json` = **103 926** видео → repo (11 репо `videos..videos11`,
+  ~10k каждый). Это карта скачивания (video_id → repo).
+- `candidates.jsonl` = **596** курированных кандидатов с метаданными (duration/views/lang/cell,
+  стратификация dur×views×lang). Из них **582 есть в индексе** (скачиваемы). `corpus500` берёт 500 →
+  **остаток курированных = 82** → чисто-курированный потолок = **582**.
+- Для 1000 не хватает **418** → нужны либо филлеры, либо расширение пула.
+
+**Опция A (предпочтительно) — расширить курированный пул (метаданные-only, БЕЗ скачивания видео):**
+```
+export $(grep -E '^HF_TOKEN=' automation/fetcher/.env)
+<venv-с-ijson+hf>/bin/python automation/runner/state/corpus/select_corpus_candidates.py \
+    --shards 2 3 4 5 --per-cell 8 --channel-cap 2     # резюмируемо, дописывает candidates.jsonl
+```
+Читает доп. HF-шарды `main_ready/data_NN.json` (`Ilialebedev/pre_final_data`), стратифицирует, дописывает
+кандидатов. Затем джойн с `video_index` → взять 1000 в-индексе. Даёт **представительный** corpus1000.
+Стоимость: докачка шардов (по ~сотни МБ каждый, удаляются после) + пара минут CPU. Не трогает под.
+
+**Опция B (быстро, для чистого scale/stability-теста) — курированные + scale-филлеры:**
+582 курированных (вкл. corpus500) + 418 добор из `video_index` (round-robin по репо, исключая использованные),
+`cell="filler/unstratified"`, `duration=null` (под пишет реальную в metrics). Годится для проверки
+throughput/утечек/tail-фейлов на 2× масштабе; менее представителен по контенту — филлеры пометить в отчёте.
+
+**Рекомендация:** для Gate 3 как *сравнения с 500* (стабильность/деградация) достаточно B; если 1000 будет
+и репрезентативным срезом — A. **Решение отложено до результатов Gate 2 (500)** — они могут изменить форму
+1000 (набор компонентов, throughput). Оба пути готовы к запуску одной командой/скриптом.
