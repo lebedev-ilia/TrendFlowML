@@ -92,6 +92,9 @@ automation/runner/_archive_pre_merge_*/
 automation/fetcher/state/
 automation/fetcher/ssh/
 
+# --- Site Agent (рантайм-состояние: сессии, чат-лог, скриншоты в очереди на отправку) ---
+automation/site_agent/state/
+
 # --- Celery рантайм-локи ---
 backend/celerybeat-schedule-shm
 backend/celerybeat-schedule-wal
