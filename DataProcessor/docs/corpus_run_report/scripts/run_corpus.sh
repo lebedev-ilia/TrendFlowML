@@ -49,7 +49,7 @@ stage core_clip python $DP/VisualProcessor/core/model_process/core_clip/main.py 
 stage core_depth_midas python $DP/VisualProcessor/core/model_process/core_depth_midas/main.py --frames-dir "$FD" --rs-path "$RS" --runtime triton --triton-model-spec midas_256_triton --triton-http-url $TRITON_HTTP_URL --batch-size 16 --triton-preprocess-preset midas_256
 stage core_optical_flow python $DP/VisualProcessor/core/model_process/core_optical_flow/main.py --frames-dir "$FD" --rs-path "$RS" --runtime triton --triton-model-spec raft_256_triton --triton-http-url $TRITON_HTTP_URL --batch-size 16 --triton-preprocess-preset raft_256
 stage cut_detection python $DP/VisualProcessor/modules/cut_detection/main.py --frames-dir "$FD" --rs-path "$RS" --no-use-clip
-stage scene_classification python $DP/VisualProcessor/modules/scene_classification/main.py --frames-dir "$FD" --rs-path "$RS" --runtime inprocess --model-arch resnet50 --device cpu --label-fusion places --enable-advanced-features
+stage scene_classification python $DP/VisualProcessor/modules/scene_classification/main.py --frames-dir "$FD" --rs-path "$RS" --runtime inprocess --model-arch resnet50 --device cuda --label-fusion places --enable-advanced-features
 stage video_pacing python $DP/VisualProcessor/modules/video_pacing/main.py --frames-dir "$FD" --rs-path "$RS" --enable-entropy-features --enable-histograms
 stage uniqueness python $DP/VisualProcessor/modules/uniqueness/main.py --frames-dir "$FD" --rs-path "$RS"
 # --- finalize metrics ---
