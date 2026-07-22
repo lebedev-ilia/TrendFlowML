@@ -153,6 +153,26 @@ if [ "$ROLE" = "main" ]; then
   ' > "$LOGDIR/discover_wrapper.log" 2>&1 < /dev/null &
   disown
   echo "discover ($WORKER_ID) pid=$!"
+
+  # --- snapshot-poll (только на main, один раз централизованно на весь корпус, не per-Colab-worker
+  # — это просто повторные YouTube API запросы по уже известным video_id, не привязано к тому, кто
+  # именно скачал видео). Добавлено 2026-07-22/23: snapshot_0 = момент discover, snapshot_schedule_days
+  # [0,7,14,21,28] в конфиге кампании уже задан, но процесс раньше никогда не запускался — первый
+  # дедлайн (video collected 2026-07-16 13:21 UTC + 7д) наступал 2026-07-23 13:21 UTC. Рестарт-цикл
+  # по тому же паттерну, что discover — снапшоты не должны молча остановиться.
+  nohup bash -c '
+    cd '"$FETCHER"'
+    while true; do
+      '"$PY"' -m fetcher.dataset_collector.cli snapshot-poll \
+        '"$OUTPUT_DIR"'/runtime_dataset_campaign_20k.json \
+        --poll-interval-seconds 300 \
+        >> '"$LOGDIR"'/snapshot_poll.log 2>&1
+      echo "[launch_role] snapshot-poll процесс завершился (rc=$?), пауза 60с и перезапуск" >> '"$LOGDIR"'/snapshot_poll.log
+      sleep 60
+    done
+  ' > "$LOGDIR/snapshot_poll_wrapper.log" 2>&1 < /dev/null &
+  disown
+  echo "snapshot-poll ($WORKER_ID) pid=$!"
 fi
 
 echo "Запущено. Логи: $LOGDIR/"
