@@ -16,8 +16,9 @@
     },
     {
       "id": "torch_gpu",
-      "status": "⬜",
-      "note": "torch cu121 (driver 550=CUDA12.4 compat) or Triton export -> scene + inprocess-torch on GPU. Owner: делай."
+      "status": "✅ (валидировано)",
+      "note": "torch cu121 (driver 550=CUDA12.4 compat) or Triton export -> scene + inprocess-torch on GPU. Owner: делай.",
+      "result": "torch cu121 -> CUDA True on pod driver (550/570). scene GPU 16.8s vs CPU ~101s = ~6x. Implementation = swap venv torch cu130->cu121 + run_corpus --device cuda + validate other components."
     },
     {
       "id": "ap_tp_asr",
