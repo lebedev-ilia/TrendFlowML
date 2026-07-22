@@ -51,9 +51,20 @@ def client():
     return cli, c["BUCKET"]
 
 
-def list_video_npz(s3, bucket: str, vid: str, include_depth: bool = False) -> List[dict]:
+def list_videos_under_prefix(s3, bucket: str, prefix: str = "corpus_out") -> List[str]:
+    """Enumerate video_ids (dir names) under <prefix>/ on the volume."""
+    pag = s3.get_paginator("list_objects_v2")
+    vids: List[str] = []
+    for page in pag.paginate(Bucket=bucket, Prefix=f"{prefix}/", Delimiter="/"):
+        for p in page.get("CommonPrefixes", []):
+            vids.append(p["Prefix"].split("/")[1])
+    return vids
+
+
+def list_video_npz(s3, bucket: str, vid: str, include_depth: bool = False,
+                   prefix: str = "corpus_out") -> List[dict]:
     """Return [{key,size}] of rs/*.npz for one video."""
-    r = s3.list_objects_v2(Bucket=bucket, Prefix=f"corpus_out/{vid}/rs/")
+    r = s3.list_objects_v2(Bucket=bucket, Prefix=f"{prefix}/{vid}/rs/")
     out = []
     for o in r.get("Contents", []):
         k = o["Key"]
@@ -94,7 +105,7 @@ def _tls_client():
 
 def download_corpus_fast(video_ids: List[str], dest_root: Path, *,
                          include_depth: bool = False, list_workers: int = 24,
-                         dl_workers: int = 32) -> Dict[str, int]:
+                         dl_workers: int = 32, prefix: str = "corpus_out") -> Dict[str, int]:
     """File-level parallel download with thread-local (reused) clients.
     1) list all videos in parallel -> flat file task list
     2) download all files in parallel, skipping already-complete ones."""
@@ -104,7 +115,7 @@ def download_corpus_fast(video_ids: List[str], dest_root: Path, *,
     def _list(vid: str):
         s3, bk = _tls_client()
         try:
-            return vid, list_video_npz(s3, bk, vid, include_depth=include_depth)
+            return vid, list_video_npz(s3, bk, vid, include_depth=include_depth, prefix=prefix)
         except Exception as e:  # noqa: BLE001
             return vid, f"ERR:{type(e).__name__}"
 
@@ -180,19 +191,25 @@ if __name__ == "__main__":
     import argparse
     import json
 
-    ap = argparse.ArgumentParser(description="Download corpus_out rs/*.npz from RunPod S3")
+    ap = argparse.ArgumentParser(description="Download <prefix>/<vid>/rs/*.npz from RunPod S3")
     ap.add_argument("--corpus-json", default=str(REPO_ROOT / "DataProcessor/docs/corpus_run_report/corpus300.json"))
+    ap.add_argument("--prefix", default="corpus_out", help="S3 volume prefix (e.g. corpus_out, corpus_smoke)")
+    ap.add_argument("--from-s3", action="store_true", help="enumerate video_ids from <prefix>/ on S3 instead of --corpus-json")
     ap.add_argument("--dest", default=str(REPO_ROOT / "storage/corpus_npz"))
     ap.add_argument("--include-depth", action="store_true")
     ap.add_argument("--workers", type=int, default=8)
     ap.add_argument("--limit", type=int, default=0)
     args = ap.parse_args()
 
-    vids = [c["video_id"] for c in json.loads(Path(args.corpus_json).read_text())]
+    if args.from_s3:
+        s3, bk = client()
+        vids = list_videos_under_prefix(s3, bk, prefix=args.prefix)
+    else:
+        vids = [c["video_id"] for c in json.loads(Path(args.corpus_json).read_text())]
     if args.limit:
         vids = vids[: args.limit]
-    print(f"downloading {len(vids)} videos -> {args.dest} (depth={args.include_depth})")
-    res = download_corpus_fast(vids, Path(args.dest), include_depth=args.include_depth)
+    print(f"downloading {len(vids)} videos from '{args.prefix}/' -> {args.dest} (depth={args.include_depth})")
+    res = download_corpus_fast(vids, Path(args.dest), include_depth=args.include_depth, prefix=args.prefix)
     ok = sum(1 for v in res.values() if isinstance(v, int))
     errs = {k: v for k, v in res.items() if not isinstance(v, int)}
     print(f"[done] ok={ok}/{len(vids)} files_total={sum(v for v in res.values() if isinstance(v,int))}")

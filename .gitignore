@@ -120,3 +120,4 @@ Models/baseline/artifacts/**/*.cbm
 Models/baseline/artifacts/**/*.txt
 corpus_npz/
 .s3creds
+corpus_npz_500/
