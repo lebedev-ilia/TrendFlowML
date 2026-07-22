@@ -12,7 +12,7 @@ RS="$OUT/rs"; mkdir -p "$RS"
 CFG=/workspace/TrendFlowML/configs/visual_triton_baseline_gpu_local.yaml
 MET="$OUT/metrics.jsonl"; : > "$MET"
 LOG="$OUT/run.log"; : > "$LOG"
-DL=$(mktemp -d /workspace/.dltmp/XXXX 2>/dev/null || mktemp -d)
+DL=$(mktemp -d /workspace/.dltmp/dlXXXXXX 2>/dev/null || mktemp -d)
 # --- GPU sampler (фон) ---
 GPUCSV="$OUT/gpu_samples.csv"; : > "$GPUCSV"
 ( while true; do nvidia-smi --query-gpu=timestamp,utilization.gpu,memory.used --format=csv,noheader,nounits >> "$GPUCSV" 2>/dev/null; sleep 1; done ) &
