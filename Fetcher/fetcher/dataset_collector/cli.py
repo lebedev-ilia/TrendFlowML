@@ -84,7 +84,17 @@ def _hf_progress_role_for_command(args: argparse.Namespace) -> str | None:
 def _pull_hf_progress(state: DatasetState, config, args: argparse.Namespace) -> None:
     if getattr(args, "skip_hf_progress_pull", False):
         return
-    restore_hf_progress_on_startup(state, config, role=_hf_progress_role_for_command(args))
+    # Баг найден 2026-07-22 (snapshot-poll): та же гонка Xet, что уже чинили в run_workers.py
+    # (несколько воркеров/Colab одновременно обновляют один и тот же progress-файл на HF ->
+    # "File size mismatch" — не повреждение данных, просто файл менялся во время скачивания).
+    # Здесь ЭТОТ вызов был не защищён вообще — детерминированно валил весь процесс при старте
+    # (2/2 попыток запуска snapshot-poll упали на этом). _push_hf_progress уже был обёрнут,
+    # pull — нет. Некритично работать с локальным состоянием, если pull не удался.
+    try:
+        restore_hf_progress_on_startup(state, config, role=_hf_progress_role_for_command(args))
+    except Exception as exc:
+        print(f"[hf-progress] pull упал при старте (не критично, продолжаю с локальным состоянием): "
+              f"{exc}", flush=True)
 
 
 def _push_hf_progress(state: DatasetState, config, args: argparse.Namespace) -> None:
