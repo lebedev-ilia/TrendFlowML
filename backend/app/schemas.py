@@ -126,6 +126,18 @@ class VideoCreate(BaseModel):
     checksum: Optional[str] = None
 
 
+class VideoUpdate(BaseModel):
+    """Частичное обновление видео: передаются только изменяемые поля."""
+
+    title: Optional[str] = Field(default=None, min_length=1, max_length=500)
+    description: Optional[str] = None
+    duration_seconds: Optional[int] = Field(default=None, ge=0)
+    video_type: Optional[VideoType] = None
+    source_url: Optional[str] = None
+    storage_path: Optional[str] = None
+    file_size_mb: Optional[float] = None
+
+
 class VideoOut(BaseModel):
     id: uuid.UUID
     channel_id: uuid.UUID

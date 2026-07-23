@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import uuid
+from datetime import datetime
 from typing import List
 
 from fastapi import APIRouter, Depends, HTTPException, status
@@ -9,9 +10,13 @@ from sqlalchemy.orm import Session
 from ..dbv2.models import Channel, Video, Workspace, WorkspaceMember
 from ..dbv2.models import User as CoreUser
 from ..deps import get_current_user, get_db
-from ..schemas import VideoCreate, VideoOut
+from ..schemas import VideoCreate, VideoOut, VideoUpdate
 
 router = APIRouter(prefix="/api/channels/{channel_id}/videos", tags=["videos"])
+
+# Операции над конкретным видео живут вне канала: клиент знает только video_id
+# (например, из AnalysisJobOut). Контракт описан в docs/API.md §4.
+video_router = APIRouter(prefix="/api/videos", tags=["videos"])
 
 
 def _require_channel_access(db: Session, channel_id: uuid.UUID, user_id: uuid.UUID) -> Channel:
@@ -71,5 +76,51 @@ def list_videos(
         .order_by(Video.created_at.desc())
         .all()
     )
+
+
+def _require_video_access(db: Session, video_id: uuid.UUID, user_id: uuid.UUID) -> Video:
+    """Видео доступно, если пользователь состоит в workspace его канала."""
+    video = db.query(Video).filter(Video.id == video_id).first()
+    if not video:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Video not found")
+    _require_channel_access(db, video.channel_id, user_id)
+    return video
+
+
+@video_router.get("/{video_id}", response_model=VideoOut)
+def get_video(
+    video_id: uuid.UUID,
+    db: Session = Depends(get_db),
+    user: CoreUser = Depends(get_current_user),
+):
+    return _require_video_access(db, video_id, user.id)
+
+
+@video_router.put("/{video_id}", response_model=VideoOut)
+def update_video(
+    video_id: uuid.UUID,
+    payload: VideoUpdate,
+    db: Session = Depends(get_db),
+    user: CoreUser = Depends(get_current_user),
+):
+    video = _require_video_access(db, video_id, user.id)
+    for field, value in payload.model_dump(exclude_unset=True).items():
+        setattr(video, field, value)
+    db.commit()
+    db.refresh(video)
+    return video
+
+
+@video_router.delete("/{video_id}")
+def delete_video(
+    video_id: uuid.UUID,
+    db: Session = Depends(get_db),
+    user: CoreUser = Depends(get_current_user),
+):
+    """Мягкое удаление: видео скрывается из списков, история анализов остаётся."""
+    video = _require_video_access(db, video_id, user.id)
+    video.archived_at = datetime.utcnow()
+    db.commit()
+    return {"status": "ok"}
 
 

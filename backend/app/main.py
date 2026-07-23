@@ -15,6 +15,7 @@ from .routers.channels import router as channels_router
 from .routers.health import router as health_router
 from .routers.runs import router as runs_router
 from .routers.videos import router as videos_router
+from .routers.videos import video_router
 from .routers.webhooks import router as webhooks_router
 from .routers.workspaces import router as workspaces_router
 from .services.profiles import seed_public_profiles
@@ -62,6 +63,7 @@ app.include_router(auth_router)
 app.include_router(workspaces_router)
 app.include_router(channels_router)
 app.include_router(videos_router)
+app.include_router(video_router)
 app.include_router(analysis_router)
 app.include_router(runs_router)
 app.include_router(webhooks_router, prefix="/api")
