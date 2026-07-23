@@ -1,32 +1,156 @@
 {
   "_doc": "Shared pipeline-stage queue for Models Bot (Agent B). Statuses: ⬜ todo, 🔄 in-progress, ✅ done, ⛔ blocked. TrendFlow Bot (Agent A) works the DataProcessor side; do not edit A's checklists here.",
-  "updated_at": "2026-07-23 (exp_0010: 500-run PAYOFF — content starts helping likes at N~495)",
+  "updated_at": "2026-07-23 (exp_0011: Gate-3 1000 done — content edge modest, S0 scales; next lever = AP/TP)",
   "feature_schema_version": "v0-real (NPZ content) + v0-prefinal-meta (snapshot_0+metadata) + v0-content+prefinal (join)",
   "stages": [
-    {"id": "feature_spec_v0", "status": "✅", "artifact": "DataProcessor/DatasetBuilder/feature_spec.yaml", "note": "v0-real schema: baseline list minus brand/car/place/face_identity stubs + object-detection text/logo semantics; structural/metadata columns pruned"},
-    {"id": "feature_audit_cleaning", "status": "✅", "artifact": "DataProcessor/DatasetBuilder/feature_spec.yaml", "updated_at": "2026-07-19", "note": "cross-checked all 15 v0 components vs their FINAL_REPORT.md + confirmed against real 6-video table. Added per-component column_exclude for audit-named dead/poison/const-by-design: story_structure.hook_to_avg_energy_ratio (+-1e6 POISON), core/optical bg_ratio (const 0.40), core_clip *text_embeddings (42 fixed-prompt const), loudness_lufs (100% NaN), cut_detection deep+jump_cut, video_pacing config-drift NaNs (config-recoverable -> re-add after Agent A variant-B rerun), core_face_landmarks *_raw debug. Result 971->882 feat cols (-89). Residual ~166 const-on-6-videos KEPT for importance-prune at scale per strategy §7 (small-N artifact, not design-dead)."},
-    {"id": "build_training_table", "status": "✅", "artifact": "DataProcessor/DatasetBuilder/build_training_table.py", "note": "walks result_store per-run via manifest, reuses npz_features.py; 26 rows / 6 videos / 882 feat cols after cleaning. Store now has 17 dirs but only 6 fully-processed YouTube videos yield features (dQw4w9WgXcQ dead run comps=0 correctly skipped; ar_* dirs lack manifest.json). 6 videos remains the real ceiling until Agent A processes more."},
-    {"id": "add_targets", "status": "✅", "artifact": "DataProcessor/DatasetBuilder/add_targets.py", "note": "reads HF snapshot shards, y=log1p(delta) @7/14/21d, masks; real-target math unit-validated"},
-    {"id": "enrichment_channel_id", "status": "✅", "artifact": "DataProcessor/DatasetBuilder/enrichment.py", "note": "deterministic channel_id for non-leaking split; currently all fall back to video_id (no channel metadata in local manifests)"},
-    {"id": "build_full_dataset", "status": "✅", "artifact": "DataProcessor/DatasetBuilder/build_full_dataset.py", "note": "one-command orchestrator C1->C2->C3->C4"},
-    {"id": "baseline_v0_train_smoke", "status": "✅", "artifact": "Models/baseline/artifacts/v0_real_2026-07-19b/baseline_v0_smoke_model", "note": "exp_0002: train_baseline.py run AS-IS on CLEANED v0 schema (no code changes needed); 6 heads, sklearn HistGB max_iter=500 (~2min/head); all val+test Spearman non-NaN (0.90-0.95, SYNTHETIC targets so NOT a quality claim). Older exp_0001 dir 2026-07-19 kept."},
-    {"id": "leakage_audit", "status": "✅", "artifact": "Models/baseline/artifacts/v0_real_2026-07-19b/baseline_v0_smoke_model/leakage_audit.json", "note": "passed on cleaned schema: 0 leaked target/mask, 0 forbidden-source, 0 unmapped of 862 features. hook_to_avg_energy_ratio poison feature now removed at spec level."},
-
-    {"id": "real_targets_join", "status": "✅", "updated_at": "2026-07-19", "artifact": "DataProcessor/DatasetBuilder/add_targets.py (--prefinal)", "note": "UNBLOCKED via Ilialebedev/pre_final_data/main_ready (owner-provided READY labelled dataset, distinct from the still-immature live Fetcher collection). add_targets.py rewritten to stream pre_final shards (ijson), parse string metrics, log edge-cases. Real y=log1p(delta) @7/14/21d. Joined onto 6 content-feature videos: 26/26 rows real targets."},
-    {"id": "snapshot0_inputs_join", "status": "✅", "updated_at": "2026-07-19", "note": "RESOLVED by pre_final_data: snapshot_0 numeric fields (views_0/likes_0/subscribers_0/channel_total_*) now populate from the same records. All 6 content-feature videos ARE present in pre_final (IDs sort to top). Perm-importance confirms views_0 is the dominant predictor as expected."},
-    {"id": "baseline_v0_real_train", "status": "✅", "updated_at": "2026-07-19", "artifact": "Models/baseline/artifacts/v0_real_prefinal_2026-07-19/baseline_v0_real_model", "note": "exp_0004: FIRST REAL BASELINE. build_real_from_prefinal.py -> 4958 videos/4216 channels/21 leakage-safe snapshot_0+metadata features + REAL targets. train_baseline.py run (1 real fix: 14d/21d respect their masks). test Spearman views 0.75/0.75/0.76, likes 0.78/0.76/0.78. synthetic_targets=false, rows_with_real_targets=4950. NO NPZ content features yet -> headroom for v1. 3 viz PNGs in outbox."},
-    {"id": "corpus_scale_all_shards", "status": "⬜", "note": "First real run used 1 of 22 pre_final shards (~5k videos). Scale to all 22 (~100k) by looping build_real_from_prefinal.py over data_00..21 — trivial, just more download+time. Do once content-feature enrichment path is decided (see next)."},
-    {"id": "content_features_plus_real_targets", "status": "✅", "updated_at": "2026-07-21", "artifact": "Models/baseline/artifacts/v1_corpus_2026-07-21 + Models/state/analysis/FEATURE_ANALYSIS_300CORPUS.md", "note": "DONE on Agent A's 300-corpus (7 VP comps). Read NPZ via RunPod S3 (s3_corpus.py, no pod), direct-rs adapter (build_from_rs, Agent A option b). exp_0005 content+real-targets vs exp_0006 snap0-only ablation (same 291 vids): CONTENT HURTS at N=291 (p>>n, 591 feat/230 rows; test Spearman content 0.23-0.35 < snap0-only 0.40-0.49 < exp_0004 0.75). Honest result: need corpus SCALE before content pays off. Full Phase-1 analysis (const/NaN/redundancy/Segmenter + 3 findings for Agent A) in FEATURE_ANALYSIS_300CORPUS.md."},
-    {"id": "phase1_feature_analysis_300", "status": "✅", "updated_at": "2026-07-21", "artifact": "Models/state/analysis/", "note": "Distributions/NaN/const audit (87 const across 291 vids, scene_classification 59/181=33% dead), feature-feature redundancy (1352 pairs, optical_flow<->cut_detection 358 = biggest), Segmenter analysis (cut_detection ~230 frames vs 400-1500 contract budget; video_pacing 0-frame on 36 vids = bug for Agent A; two-tier 120/230 budget), stratified NaN by duration (medium cleanest, vshort/long worst). CSVs+PNGs in analysis/."},
-    {"id": "content_v2_dim_reduction", "status": "✅", "updated_at": "2026-07-22", "artifact": "Models/state/analysis/v2_cv_experiment.py + v2_cv_results.csv", "note": "exp_0007: built lean recipe (drop const/all-NaN -> redundancy-prune 569->410 via |Spearman|>=0.98 union-find -> per-fold top-25 by |Spearman(feat,y)|, no selection leak) + 5-fold GroupKFold(channel) pooled CV. Result: S0=0.81 views/0.65 likes; S0+full HURTS all heads (p>>n robustly confirmed); S0+lean ~= S0 (small +0.018 on likes_21d, neutral views). CORRECTED exp_0005/0006: their 0.23-0.49 was tiny-test(n=30) artifact, not real. Lean harness ready; needs corpus scale to earn a win. Re-run at scale when Agent A adds videos."},
-    {"id": "large_n_baseline_to_beat", "status": "✅", "updated_at": "2026-07-22", "artifact": "Models/baseline/artifacts/v0_prefinal_3shard_2026-07-22 + exp_0009", "note": "DEFINITIVE reference: 14861 videos (3 pre_final shards), snapshot_0+meta, 5-fold GroupKFold CV -> views 0.855/0.842/0.845, likes 0.735/0.732/0.736. s0_cv_eval.py. Any content-augmented model must beat this. Likes ~0.11 < views = where content helps first."},
-    {"id": "content_incremental_signal", "status": "✅", "updated_at": "2026-07-22", "artifact": "exp_0008 residual_content_signal*.csv", "note": "Proved content IS informative beyond snapshot_0 (blocker is N not relevance). Shortlist to prioritise at scale: editing rhythm (cut_detection.cuts_per_minute, video_pacing.cuts_per_10s), motion dispersion (optical_flow.flow_dir_dispersion), aesthetics (core_clip.scene_aesthetic_scores, likes). FLAG for future: places365/scene topk are raw category-index encoded -> need one-hot/embed."},
-    {"id": "depth_pooled_features", "status": "⬜", "note": "DEFERRED (cost/value): core_depth_midas/depth.npz ~156MB/video, ~0.67MB/s S3 = ~4min/file, 45GB total, ~7 marginal features at N=291 where content already doesn't help. Agent A (2026-07-22) found core_depth_midas stores 2 FULL copies of depth maps = 95% of disk -> depth NPZ is bloated/redundant, another reason to defer. Add pooled depth stats (stream download->pool->delete) only post-scale if the lean set wants geometry."},
-    {"id": "corpus500_gate2_rebuild", "status": "✅", "updated_at": "2026-07-23", "artifact": "Models/baseline/artifacts/v1_corpus500_2026-07-23 + exp_0010", "note": "PAYOFF. Agent A Gate-2 500-run (corpus_smoke/ on S3 volume, same 7 VP + depth 9MB). 499 vids/495 targets. s3_corpus.py --prefix corpus_smoke --from-s3. 5-fold CV: content flips from hurting-all (N=291) to HELPING likes (lean likes_21d 0.652->0.691), ~neutral views. Residual: editing rhythm/pacing/aesthetics/motion; depth NOT a driver. Lean recipe (S0+top30 pruned) best. NEXT: re-run on Gate-3 1000 (expect likes lift to grow); isolate depth contribution (optional, residual says minimal)."},
-    {"id": "corpus1000_gate3_rebuild", "status": "🔄", "updated_at": "2026-07-23", "note": "Agent A LAUNCHED Gate-3 (corpus1000.json = 1000 videos balanced; 499 reuse corpus_smoke + ~501 new scale-fillers; N=12 on 48-core RTX2000Ada pod). Run in progress (~hours). PREP: local target coverage was 684/1000 (68%) on 3 shards -> downloading all 22 pre_final shards for full coverage (316 fillers are in data_03..21). When NPZ ready: s3_corpus --prefix <corpus_smoke-or-new> --from-s3 (SKIP depth, not a driver, save disk) -> build_corpus_content_dataset --feature-spec feature_spec_v0.5.yaml -> v2_cv_experiment + residual. Expect likes lift to grow, maybe views lift appears."},
-    {"id": "corpus_scale_rebuild", "status": "⛔", "updated_at": "2026-07-22", "blocked_on": "Agent A has FINISHED planning (phases 1/4/5/6/7 + disk all done as of 2026-07-22; only phase2 optimization 🔄). phase7 NEXT_TEST_PLAN = all-3-processors run, gate 50->500->1000, needs run EXECUTION (likely owner go-ahead: cheap-GPU RTX2000Ada, ~$5.9/1000, N=4). No new corpus videos yet.", "note": "SCALE-READY: feature_spec_v0.5.yaml adds the 4 new cheap VP comps; rebuild = s3_corpus.py -> build_corpus_content_dataset.py (use --feature-spec feature_spec_v0.5.yaml) -> v2_cv_experiment.py / s0_cv_eval.py. ACCESS-PATH CAVEAT: 300-run NPZ persisted on the S3 volume, but Agent A's scale plan uses HF streaming upload+DELETE from volume (disk can't hold 500-1000 full-set). => scale-run NPZ likely land on HF (Ilialebedev/*), NOT the S3 volume. When it runs, first check WHERE the NPZ are (volume vs HF) and adapt the reader (s3_corpus for volume; add an HF reader if offloaded). 50-video Gate-1 with OPT-3 depth (~40-60MB/vid) may still fit on volume."},
-    {"id": "corpus_scale_150_250", "status": "⬜", "depends_on": "TrendFlow Bot AUTOMATED_TEST_CORPUS_PROTOCOL.md corpus + full DP runs producing result_store artifacts"},
-    {"id": "catboost_lightgbm", "status": "⬜", "note": "Python 3.14 has no catboost/lightgbm wheels in Models/.venv yet; used sklearn HistGB for smoke. Add when wheels available or pin py3.11 venv"},
-    {"id": "baseline_v1_frozen", "status": "⬜", "note": "bump feature_schema_version to v1 once identity bases + object_detections re-labelled weights mature (portfolio §8)"}
+    {
+      "id": "feature_spec_v0",
+      "status": "✅",
+      "artifact": "DataProcessor/DatasetBuilder/feature_spec.yaml",
+      "note": "v0-real schema: baseline list minus brand/car/place/face_identity stubs + object-detection text/logo semantics; structural/metadata columns pruned"
+    },
+    {
+      "id": "feature_audit_cleaning",
+      "status": "✅",
+      "artifact": "DataProcessor/DatasetBuilder/feature_spec.yaml",
+      "updated_at": "2026-07-19",
+      "note": "cross-checked all 15 v0 components vs their FINAL_REPORT.md + confirmed against real 6-video table. Added per-component column_exclude for audit-named dead/poison/const-by-design: story_structure.hook_to_avg_energy_ratio (+-1e6 POISON), core/optical bg_ratio (const 0.40), core_clip *text_embeddings (42 fixed-prompt const), loudness_lufs (100% NaN), cut_detection deep+jump_cut, video_pacing config-drift NaNs (config-recoverable -> re-add after Agent A variant-B rerun), core_face_landmarks *_raw debug. Result 971->882 feat cols (-89). Residual ~166 const-on-6-videos KEPT for importance-prune at scale per strategy §7 (small-N artifact, not design-dead)."
+    },
+    {
+      "id": "build_training_table",
+      "status": "✅",
+      "artifact": "DataProcessor/DatasetBuilder/build_training_table.py",
+      "note": "walks result_store per-run via manifest, reuses npz_features.py; 26 rows / 6 videos / 882 feat cols after cleaning. Store now has 17 dirs but only 6 fully-processed YouTube videos yield features (dQw4w9WgXcQ dead run comps=0 correctly skipped; ar_* dirs lack manifest.json). 6 videos remains the real ceiling until Agent A processes more."
+    },
+    {
+      "id": "add_targets",
+      "status": "✅",
+      "artifact": "DataProcessor/DatasetBuilder/add_targets.py",
+      "note": "reads HF snapshot shards, y=log1p(delta) @7/14/21d, masks; real-target math unit-validated"
+    },
+    {
+      "id": "enrichment_channel_id",
+      "status": "✅",
+      "artifact": "DataProcessor/DatasetBuilder/enrichment.py",
+      "note": "deterministic channel_id for non-leaking split; currently all fall back to video_id (no channel metadata in local manifests)"
+    },
+    {
+      "id": "build_full_dataset",
+      "status": "✅",
+      "artifact": "DataProcessor/DatasetBuilder/build_full_dataset.py",
+      "note": "one-command orchestrator C1->C2->C3->C4"
+    },
+    {
+      "id": "baseline_v0_train_smoke",
+      "status": "✅",
+      "artifact": "Models/baseline/artifacts/v0_real_2026-07-19b/baseline_v0_smoke_model",
+      "note": "exp_0002: train_baseline.py run AS-IS on CLEANED v0 schema (no code changes needed); 6 heads, sklearn HistGB max_iter=500 (~2min/head); all val+test Spearman non-NaN (0.90-0.95, SYNTHETIC targets so NOT a quality claim). Older exp_0001 dir 2026-07-19 kept."
+    },
+    {
+      "id": "leakage_audit",
+      "status": "✅",
+      "artifact": "Models/baseline/artifacts/v0_real_2026-07-19b/baseline_v0_smoke_model/leakage_audit.json",
+      "note": "passed on cleaned schema: 0 leaked target/mask, 0 forbidden-source, 0 unmapped of 862 features. hook_to_avg_energy_ratio poison feature now removed at spec level."
+    },
+    {
+      "id": "real_targets_join",
+      "status": "✅",
+      "updated_at": "2026-07-19",
+      "artifact": "DataProcessor/DatasetBuilder/add_targets.py (--prefinal)",
+      "note": "UNBLOCKED via Ilialebedev/pre_final_data/main_ready (owner-provided READY labelled dataset, distinct from the still-immature live Fetcher collection). add_targets.py rewritten to stream pre_final shards (ijson), parse string metrics, log edge-cases. Real y=log1p(delta) @7/14/21d. Joined onto 6 content-feature videos: 26/26 rows real targets."
+    },
+    {
+      "id": "snapshot0_inputs_join",
+      "status": "✅",
+      "updated_at": "2026-07-19",
+      "note": "RESOLVED by pre_final_data: snapshot_0 numeric fields (views_0/likes_0/subscribers_0/channel_total_*) now populate from the same records. All 6 content-feature videos ARE present in pre_final (IDs sort to top). Perm-importance confirms views_0 is the dominant predictor as expected."
+    },
+    {
+      "id": "baseline_v0_real_train",
+      "status": "✅",
+      "updated_at": "2026-07-19",
+      "artifact": "Models/baseline/artifacts/v0_real_prefinal_2026-07-19/baseline_v0_real_model",
+      "note": "exp_0004: FIRST REAL BASELINE. build_real_from_prefinal.py -> 4958 videos/4216 channels/21 leakage-safe snapshot_0+metadata features + REAL targets. train_baseline.py run (1 real fix: 14d/21d respect their masks). test Spearman views 0.75/0.75/0.76, likes 0.78/0.76/0.78. synthetic_targets=false, rows_with_real_targets=4950. NO NPZ content features yet -> headroom for v1. 3 viz PNGs in outbox."
+    },
+    {
+      "id": "corpus_scale_all_shards",
+      "status": "⬜",
+      "note": "First real run used 1 of 22 pre_final shards (~5k videos). Scale to all 22 (~100k) by looping build_real_from_prefinal.py over data_00..21 — trivial, just more download+time. Do once content-feature enrichment path is decided (see next)."
+    },
+    {
+      "id": "content_features_plus_real_targets",
+      "status": "✅",
+      "updated_at": "2026-07-21",
+      "artifact": "Models/baseline/artifacts/v1_corpus_2026-07-21 + Models/state/analysis/FEATURE_ANALYSIS_300CORPUS.md",
+      "note": "DONE on Agent A's 300-corpus (7 VP comps). Read NPZ via RunPod S3 (s3_corpus.py, no pod), direct-rs adapter (build_from_rs, Agent A option b). exp_0005 content+real-targets vs exp_0006 snap0-only ablation (same 291 vids): CONTENT HURTS at N=291 (p>>n, 591 feat/230 rows; test Spearman content 0.23-0.35 < snap0-only 0.40-0.49 < exp_0004 0.75). Honest result: need corpus SCALE before content pays off. Full Phase-1 analysis (const/NaN/redundancy/Segmenter + 3 findings for Agent A) in FEATURE_ANALYSIS_300CORPUS.md."
+    },
+    {
+      "id": "phase1_feature_analysis_300",
+      "status": "✅",
+      "updated_at": "2026-07-21",
+      "artifact": "Models/state/analysis/",
+      "note": "Distributions/NaN/const audit (87 const across 291 vids, scene_classification 59/181=33% dead), feature-feature redundancy (1352 pairs, optical_flow<->cut_detection 358 = biggest), Segmenter analysis (cut_detection ~230 frames vs 400-1500 contract budget; video_pacing 0-frame on 36 vids = bug for Agent A; two-tier 120/230 budget), stratified NaN by duration (medium cleanest, vshort/long worst). CSVs+PNGs in analysis/."
+    },
+    {
+      "id": "content_v2_dim_reduction",
+      "status": "✅",
+      "updated_at": "2026-07-22",
+      "artifact": "Models/state/analysis/v2_cv_experiment.py + v2_cv_results.csv",
+      "note": "exp_0007: built lean recipe (drop const/all-NaN -> redundancy-prune 569->410 via |Spearman|>=0.98 union-find -> per-fold top-25 by |Spearman(feat,y)|, no selection leak) + 5-fold GroupKFold(channel) pooled CV. Result: S0=0.81 views/0.65 likes; S0+full HURTS all heads (p>>n robustly confirmed); S0+lean ~= S0 (small +0.018 on likes_21d, neutral views). CORRECTED exp_0005/0006: their 0.23-0.49 was tiny-test(n=30) artifact, not real. Lean harness ready; needs corpus scale to earn a win. Re-run at scale when Agent A adds videos."
+    },
+    {
+      "id": "large_n_baseline_to_beat",
+      "status": "✅",
+      "updated_at": "2026-07-22",
+      "artifact": "Models/baseline/artifacts/v0_prefinal_3shard_2026-07-22 + exp_0009",
+      "note": "DEFINITIVE reference: 14861 videos (3 pre_final shards), snapshot_0+meta, 5-fold GroupKFold CV -> views 0.855/0.842/0.845, likes 0.735/0.732/0.736. s0_cv_eval.py. Any content-augmented model must beat this. Likes ~0.11 < views = where content helps first."
+    },
+    {
+      "id": "content_incremental_signal",
+      "status": "✅",
+      "updated_at": "2026-07-22",
+      "artifact": "exp_0008 residual_content_signal*.csv",
+      "note": "Proved content IS informative beyond snapshot_0 (blocker is N not relevance). Shortlist to prioritise at scale: editing rhythm (cut_detection.cuts_per_minute, video_pacing.cuts_per_10s), motion dispersion (optical_flow.flow_dir_dispersion), aesthetics (core_clip.scene_aesthetic_scores, likes). FLAG for future: places365/scene topk are raw category-index encoded -> need one-hot/embed."
+    },
+    {
+      "id": "depth_pooled_features",
+      "status": "⬜",
+      "note": "DEFERRED (cost/value): core_depth_midas/depth.npz ~156MB/video, ~0.67MB/s S3 = ~4min/file, 45GB total, ~7 marginal features at N=291 where content already doesn't help. Agent A (2026-07-22) found core_depth_midas stores 2 FULL copies of depth maps = 95% of disk -> depth NPZ is bloated/redundant, another reason to defer. Add pooled depth stats (stream download->pool->delete) only post-scale if the lean set wants geometry."
+    },
+    {
+      "id": "corpus500_gate2_rebuild",
+      "status": "✅",
+      "updated_at": "2026-07-23",
+      "artifact": "Models/baseline/artifacts/v1_corpus500_2026-07-23 + exp_0010",
+      "note": "PAYOFF. Agent A Gate-2 500-run (corpus_smoke/ on S3 volume, same 7 VP + depth 9MB). 499 vids/495 targets. s3_corpus.py --prefix corpus_smoke --from-s3. 5-fold CV: content flips from hurting-all (N=291) to HELPING likes (lean likes_21d 0.652->0.691), ~neutral views. Residual: editing rhythm/pacing/aesthetics/motion; depth NOT a driver. Lean recipe (S0+top30 pruned) best. NEXT: re-run on Gate-3 1000 (expect likes lift to grow); isolate depth contribution (optional, residual says minimal)."
+    },
+    {
+      "id": "corpus1000_gate3_rebuild",
+      "status": "✅",
+      "updated_at": "2026-07-23",
+      "note": "DONE (exp_0011). corpus1000=991 vids/985 targets, 22-shard 100% coverage. Content edge MODEST (+0.02 likes_7d), S0 scales strongly (likes_21d 0.65->0.71). Lean recipe = production content block. Next lever: AP/TP modalities, not more visual."
+    },
+    {
+      "id": "corpus_scale_rebuild",
+      "status": "⛔",
+      "updated_at": "2026-07-22",
+      "blocked_on": "Agent A has FINISHED planning (phases 1/4/5/6/7 + disk all done as of 2026-07-22; only phase2 optimization 🔄). phase7 NEXT_TEST_PLAN = all-3-processors run, gate 50->500->1000, needs run EXECUTION (likely owner go-ahead: cheap-GPU RTX2000Ada, ~$5.9/1000, N=4). No new corpus videos yet.",
+      "note": "SCALE-READY: feature_spec_v0.5.yaml adds the 4 new cheap VP comps; rebuild = s3_corpus.py -> build_corpus_content_dataset.py (use --feature-spec feature_spec_v0.5.yaml) -> v2_cv_experiment.py / s0_cv_eval.py. ACCESS-PATH CAVEAT: 300-run NPZ persisted on the S3 volume, but Agent A's scale plan uses HF streaming upload+DELETE from volume (disk can't hold 500-1000 full-set). => scale-run NPZ likely land on HF (Ilialebedev/*), NOT the S3 volume. When it runs, first check WHERE the NPZ are (volume vs HF) and adapt the reader (s3_corpus for volume; add an HF reader if offloaded). 50-video Gate-1 with OPT-3 depth (~40-60MB/vid) may still fit on volume."
+    },
+    {
+      "id": "corpus_scale_150_250",
+      "status": "⬜",
+      "depends_on": "TrendFlow Bot AUTOMATED_TEST_CORPUS_PROTOCOL.md corpus + full DP runs producing result_store artifacts"
+    },
+    {
+      "id": "catboost_lightgbm",
+      "status": "⬜",
+      "note": "Python 3.14 has no catboost/lightgbm wheels in Models/.venv yet; used sklearn HistGB for smoke. Add when wheels available or pin py3.11 venv"
+    },
+    {
+      "id": "baseline_v1_frozen",
+      "status": "⬜",
+      "note": "bump feature_schema_version to v1 once identity bases + object_detections re-labelled weights mature (portfolio §8)"
+    }
   ]
 }
