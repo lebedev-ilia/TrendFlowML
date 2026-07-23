@@ -295,6 +295,13 @@ async def main() -> None:
         allowed_tools=["Read", "Write", "Edit", "Bash", "Glob", "Grep", "WebSearch", "WebFetch"],
         permission_mode="bypassPermissions",
         max_turns=500,
+        # Баг найден 2026-07-23: дефолтный лимит SDK на JSON-сообщение от CLI-подпроцесса — 1MB
+        # (claude_agent_sdk/_internal/transport/subprocess_cli.py: _DEFAULT_MAX_BUFFER_SIZE). Один
+        # большой результат инструмента (вывод Bash — npm install, playwright screenshot логи,
+        # большой Read/WebFetch) легко превышает это и роняет ВЕСЬ клиент с фатальной ошибкой
+        # ("Fatal error in message reader"). Подняли с запасом — не убирает риск совсем при
+        # экстремально больших выводах, но покрывает реалистичные случаи для этого бота.
+        max_buffer_size=20 * 1024 * 1024,  # 20MB
         resume=resume_id,
     )
     print(f"[site_agent] готов, слушаю VK (resume={resume_id!r}), cwd={config.SITE_DIR}", flush=True)

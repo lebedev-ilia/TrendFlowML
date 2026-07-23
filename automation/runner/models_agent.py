@@ -363,6 +363,10 @@ async def main(model_name: str | None) -> None:
         # assistant.py-флоу ("Второй агент" в комментариях hooks.py), который сейчас не запущен как
         # сервис -> вызов рисковал зависать так же, как раньше зависал deepdive_agent.py. Полный
         # автономный доступ ко всем командам без исключений.
+        # Баг найден 2026-07-23 (симметрично deepdive_agent.py): дефолтный лимит SDK на JSON-
+        # сообщение от CLI-подпроцесса — 1MB ("Fatal error in message reader" — роняет клиент).
+        # Подняли с запасом.
+        max_buffer_size=20 * 1024 * 1024,  # 20MB
         resume=resume_id,
     )
     while True:
