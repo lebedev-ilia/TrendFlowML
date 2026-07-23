@@ -1,0 +1,66 @@
+{
+  "created_at": "2026-07-23T07:58:40.290577Z",
+  "feature_schema_version": "v0-content+prefinal",
+  "rs_root": "storage/corpus_npz_1000",
+  "prefinal_shards": [
+    "storage/pre_final_data/data_00.json",
+    "storage/pre_final_data/data_01.json",
+    "storage/pre_final_data/data_02.json",
+    "storage/pre_final_data/data_03.json",
+    "storage/pre_final_data/data_04.json",
+    "storage/pre_final_data/data_05.json",
+    "storage/pre_final_data/data_06.json",
+    "storage/pre_final_data/data_07.json",
+    "storage/pre_final_data/data_08.json",
+    "storage/pre_final_data/data_09.json",
+    "storage/pre_final_data/data_10.json",
+    "storage/pre_final_data/data_11.json",
+    "storage/pre_final_data/data_12.json",
+    "storage/pre_final_data/data_13.json",
+    "storage/pre_final_data/data_14.json",
+    "storage/pre_final_data/data_15.json",
+    "storage/pre_final_data/data_16.json",
+    "storage/pre_final_data/data_17.json",
+    "storage/pre_final_data/data_18.json",
+    "storage/pre_final_data/data_19.json",
+    "storage/pre_final_data/data_20.json",
+    "storage/pre_final_data/data_21.json"
+  ],
+  "n_rows": 991,
+  "n_videos": 991,
+  "n_channels": 954,
+  "n_content_feature_columns": 656,
+  "rows_with_real_targets": 985,
+  "synthetic_targets": false,
+  "horizons": [
+    "7d",
+    "14d",
+    "21d"
+  ],
+  "mask_coverage": {
+    "7d": 799,
+    "14d": 985,
+    "21d": 983
+  },
+  "edge_cases": {
+    "nonnumeric_viewCount": 3,
+    "decreasing_views_between_snapshots": 107
+  },
+  "included_components": [
+    "cut_detection",
+    "optical_flow",
+    "scene_classification",
+    "shot_quality",
+    "story_structure",
+    "uniqueness",
+    "video_pacing",
+    "clap_extractor",
+    "loudness_extractor",
+    "tempo_extractor",
+    "core_clip",
+    "core_face_landmarks",
+    "core_optical_flow",
+    "core_depth_midas",
+    "core_object_detections"
+  ]
+}
