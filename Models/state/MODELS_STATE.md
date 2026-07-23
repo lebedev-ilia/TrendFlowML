@@ -96,8 +96,52 @@ for 14/21d; auto-drop constant/all-NaN columns (HistGB binning crash on numpy≥
    multi-modal boosting shows a clear, stable multi-head signal.
 5. Minor: one-hot/embed `places365`/scene category-index features (raw ordinal now).
 
+## Data & access context (how to resume from a cold session)
+
+**RunPod S3 volume** (Agent A's corpus NPZ, no pod needed):
+- volume/bucket `vuiq0iq3yf`, region `eu-ro-1`, endpoint `https://s3api-eu-ro-1.runpod.io`.
+- Credentials: **`storage/.s3creds`** (gitignored — AK/SK live there, NOT in git;
+  regenerate in RunPod console → Settings → S3 API Keys if lost).
+- Reader: `DataProcessor/DatasetBuilder/s3_corpus.py --prefix <p> --from-s3 [--include-depth]`.
+- Corpus prefixes on the volume: `corpus_out/` = 300-run (7 VP, depth 156MB);
+  `corpus_smoke/` = the SCALE prefix — grew 500→1000 (Gate-2 then Gate-3; 7 VP +
+  depth 9MB after OPT-3). Agent A extends `corpus_smoke/` per gate; watch its count.
+
+**Targets** — `Ilialebedev/pre_final_data/main_ready/data_00..21.json` (22 shards,
+~390MB each). **All 22 downloaded locally** at `storage/pre_final_data/` (7.8GB,
+gitignored). Real snapshots 0/7/14/21d; join via `add_targets.py --prefinal`.
+Coverage of corpus1000: 1000/1000 with all 22 shards.
+
+**Corpus video lists** (Agent A, in git): `DataProcessor/docs/corpus_run_report/`
+`corpus300.json`, `corpus1000.json` (1000 balanced; corpus500 = its first 500).
+
+**Local NPZ (gitignored, regenerable via s3_corpus.py):** `storage/corpus_npz/`
+(300), `storage/corpus_npz_500/` (500 +depth), `storage/corpus_npz_1000/` (991,
+no depth).
+
+**One-command rebuild** when a new corpus/gate lands:
+```
+PY=Models/.venv/bin/python
+$PY DataProcessor/DatasetBuilder/s3_corpus.py --prefix corpus_smoke --from-s3 --dest storage/corpus_npz_<N>
+$PY DataProcessor/DatasetBuilder/build_corpus_content_dataset.py \
+   --rs-root storage/corpus_npz_<N> --prefinal storage/pre_final_data/data_*.json \
+   --feature-spec DataProcessor/DatasetBuilder/feature_spec.yaml \
+   --out Models/baseline/artifacts/<tag>/dataset_corpus_content.parquet
+$PY Models/state/analysis/v2_cv_experiment.py --dataset <...>/dataset_corpus_content.parquet \
+   --redundant <...>/redundant_pairs.csv --k 5 --topk 30
+```
+(or `run_scale_rebuild.sh <tag>` for the whole chain; venv is `Models/.venv`, py3.14,
+has pandas/pyarrow/sklearn/scipy/ijson/boto3/matplotlib; NO catboost/lightgbm wheels
+→ uses sklearn HistGB.)
+
+**Agent A coordination:** his side = `DataProcessor/` (do not edit his component code
+or `DataProcessor/state/agent_a_tasks.json`). His gate reports land under
+`DataProcessor/docs/corpus_run_report/`. Watch his commits (`git log -- DataProcessor
+':(exclude)DataProcessor/DatasetBuilder'`) for gate completions.
+
 ## Pointers
-- Experiment log: `Models/state/experiments.csv` (exp_0001 … exp_0010)
+- This file (`Models/state/MODELS_STATE.md`) = canonical entry point.
+- Experiment log: `Models/state/experiments.csv` (exp_0001 … exp_0011)
 - Task board: `Models/state/training_tasks.json`
 - Full feature analysis + 500-run payoff: `Models/state/analysis/FEATURE_ANALYSIS_300CORPUS.md`
 - Dataset builder docs: `DataProcessor/DatasetBuilder/README.md`
