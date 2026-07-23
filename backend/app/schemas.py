@@ -113,6 +113,44 @@ class ChannelOut(BaseModel):
     updated_at: datetime
 
 
+# ---------------------------------------------------------------------------
+# Processing configs (конфигурации анализа)
+# ---------------------------------------------------------------------------
+
+
+class ProcessingConfigCreate(BaseModel):
+    """Состав конфигурации задаёт клиент; валидацией компонентов занимается
+    DataProcessor при запуске обработки."""
+
+    name: str = Field(min_length=1, max_length=200)
+    description: Optional[str] = None
+    payload: dict = Field(default_factory=dict)
+    estimated_cost_units: Optional[int] = Field(default=None, ge=0)
+    estimated_minutes: Optional[int] = Field(default=None, ge=0)
+
+
+class ProcessingConfigUpdate(BaseModel):
+    name: Optional[str] = Field(default=None, min_length=1, max_length=200)
+    description: Optional[str] = None
+    payload: Optional[dict] = None
+    estimated_cost_units: Optional[int] = Field(default=None, ge=0)
+    estimated_minutes: Optional[int] = Field(default=None, ge=0)
+
+
+class ProcessingConfigOut(BaseModel):
+    id: uuid.UUID
+    workspace_id: Optional[uuid.UUID]
+    created_by_user_id: Optional[uuid.UUID]
+    name: str
+    description: Optional[str]
+    is_system: bool
+    payload: dict
+    estimated_cost_units: Optional[int]
+    estimated_minutes: Optional[int]
+    created_at: datetime
+    updated_at: datetime
+
+
 class VideoCreate(BaseModel):
     external_video_id: Optional[str] = None
     title: str = Field(min_length=1, max_length=500)

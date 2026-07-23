@@ -15,7 +15,7 @@ from sqlalchemy import (
     Text,
     UniqueConstraint,
 )
-from sqlalchemy.dialects.postgresql import UUID
+from sqlalchemy.dialects.postgresql import JSONB, UUID
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 from sqlalchemy.types import Enum as SAEnum
 
@@ -206,6 +206,43 @@ class Channel(Base, TimestampMixin, UUIDPrimaryKeyMixin):
     videos: Mapped[List["Video"]] = relationship(
         back_populates="channel", cascade="all, delete-orphan"
     )
+
+
+class ProcessingConfig(Base, TimestampMixin, UUIDPrimaryKeyMixin):
+    """Конфигурация анализа: какие компоненты включены и с какими параметрами.
+
+    Состав хранится в JSON, потому что каталог компонентов принадлежит
+    DataProcessor (configs/global_config.yaml) и меняется независимо от схемы БД.
+    Валидация состава — на стороне DataProcessor при запуске обработки.
+
+    Системные пресеты (`is_system=True`) видны всем и не привязаны к workspace.
+    """
+
+    __tablename__ = "processing_configs"
+    __table_args__ = (
+        Index("ix_processing_config_workspace", "workspace_id"),
+        {"schema": "core"},
+    )
+
+    workspace_id: Mapped[Optional[uuid.UUID]] = mapped_column(
+        ForeignKey("core.workspaces.id", ondelete="CASCADE"), nullable=True
+    )
+    created_by_user_id: Mapped[Optional[uuid.UUID]] = mapped_column(
+        ForeignKey("core.users.id"), nullable=True
+    )
+
+    name: Mapped[str] = mapped_column(String, nullable=False)
+    description: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
+    is_system: Mapped[bool] = mapped_column(Boolean, nullable=False, default=False)
+
+    #: {"components": [...], "params": {...}, "disabled_outputs": [...]}
+    payload: Mapped[dict] = mapped_column(JSONB, nullable=False, default=dict)
+
+    #: Оценка, показанная пользователю при сохранении (для истории цен).
+    estimated_cost_units: Mapped[Optional[int]] = mapped_column(Integer, nullable=True)
+    estimated_minutes: Mapped[Optional[int]] = mapped_column(Integer, nullable=True)
+
+    archived_at: Mapped[Optional[datetime]] = mapped_column(DateTime, nullable=True)
 
 
 class Video(Base, TimestampMixin, UUIDPrimaryKeyMixin):
