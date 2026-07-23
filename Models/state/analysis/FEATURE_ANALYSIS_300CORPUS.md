@@ -207,6 +207,45 @@ pred_S0` (what snapshot_0 can't explain) → Spearman(each content feature, resi
    features to prioritise when it lands. Full ranking:
    `residual_content_signal_{views_21d,likes_21d}.csv`.
 
+## 4d. UPDATE — 500-run (Agent A Gate-2): content STARTS HELPING (exp_0010)
+
+Agent A's 500-video run (`corpus_smoke/` on the volume, same 7 VP components +
+depth now 9MB/video after OPT-3) gave the first scale point. 499 videos, 495 real
+targets, joined the same way. 5-fold GroupKFold CV, S0(20) vs S0+lean(top-30
+redundancy-pruned) vs S0+full(631):
+
+| head | S0 | S0+lean | S0+full |  | 291-run verdict |
+|---|---|---|---|---|---|
+| views_7d | 0.841 | 0.835 | 0.843 | ~neutral | hurt |
+| views_14d | 0.824 | 0.823 | 0.797 | full hurts a bit | hurt |
+| views_21d | 0.824 | **0.833** | 0.810 | lean helps | hurt |
+| likes_7d | 0.653 | 0.649 | **0.665** | full helps | hurt |
+| likes_14d | 0.658 | 0.660 | **0.669** | helps | hurt |
+| likes_21d | 0.652 | **0.691** | 0.672 | **lean +0.039** | hurt |
+
+**The p≫n curse lifted between N=291 and N=495.** Content flipped from *hurting all 6
+heads* to **helping likes** (lean `likes_21d` 0.652→0.691) and staying ~neutral on
+views (S0 already ~0.82; `views_0` dominates, little headroom). This is exactly the
+exp_0008 prediction: **likes is where content pays off first.**
+
+Residual analysis on the 500-run (S0 OOF views 0.824 / likes 0.647):
+- Top residual signals: **editing rhythm** (`cut_detection.cut_rhythm_uniformity`,
+  `cuts_per_minute`, `cut_interval_cv`), **pacing** (`video_pacing.cut_density_map`,
+  `motion_shot_corr`), **aesthetics** (`core_clip.scene_aesthetic_scores`,
+  `scene_luxury_scores` — likes only), **motion dispersion**
+  (`optical_flow.flow_dir_dispersion`).
+- Per-feature residual corr is now MODEST (~0.10, vs inflated ~0.20 at N=291 which
+  was small-N noise). The lift comes from the model **combining dozens of weak-but-
+  real signals** — feasible at N≈495, impossible at N=291 (overfit). Coherent story.
+- **Depth (`core_depth_midas`) is NOT in either top-15** → the likes lift is content
+  (editing/pacing/aesthetics), not the newly-added depth. Depth can be pruned or
+  kept cheaply; it is not the driver.
+
+**Recommendation:** the **lean recipe** (S0 + top-30 redundancy-pruned content, per-
+fold |Spearman| select) is the one to carry to Gate-3 (1000) — it gave the single
+best head (`likes_21d` 0.691) without the full-set overfit. Expect the likes lift to
+grow and possibly a views lift to appear as N→1000.
+
 ## 5. Stratified quality (owner's "where are features better/worse")
 
 Per-video mean NaN fraction by duration bucket (content features):

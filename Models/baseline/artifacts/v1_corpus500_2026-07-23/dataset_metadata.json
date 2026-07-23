@@ -1,0 +1,47 @@
+{
+  "created_at": "2026-07-22T23:50:39.455945Z",
+  "feature_schema_version": "v0-content+prefinal",
+  "rs_root": "storage/corpus_npz_500",
+  "prefinal_shards": [
+    "storage/pre_final_data/data_00.json",
+    "storage/pre_final_data/data_01.json",
+    "storage/pre_final_data/data_02.json"
+  ],
+  "n_rows": 499,
+  "n_videos": 499,
+  "n_channels": 489,
+  "n_content_feature_columns": 722,
+  "rows_with_real_targets": 495,
+  "synthetic_targets": false,
+  "horizons": [
+    "7d",
+    "14d",
+    "21d"
+  ],
+  "mask_coverage": {
+    "7d": 402,
+    "14d": 495,
+    "21d": 495
+  },
+  "edge_cases": {
+    "nonnumeric_viewCount": 2,
+    "decreasing_views_between_snapshots": 57
+  },
+  "included_components": [
+    "cut_detection",
+    "optical_flow",
+    "scene_classification",
+    "shot_quality",
+    "story_structure",
+    "uniqueness",
+    "video_pacing",
+    "clap_extractor",
+    "loudness_extractor",
+    "tempo_extractor",
+    "core_clip",
+    "core_face_landmarks",
+    "core_optical_flow",
+    "core_depth_midas",
+    "core_object_detections"
+  ]
+}
