@@ -108,6 +108,33 @@
 
 ---
 
+## L12 — cut_detection: np.histogram падает на вырожденном/битом диапазоне интервалов (исправлено 2026-07-23)
+
+**Симптом:** в 500-видео прогоне (Gate 2) ровно 1 видео (`1xFgqSpn1p0`) уронило `cut_detection` с
+`ValueError: Too many bins for data range. Cannot create 3 finite-sized bins`, а зависимые `scene_classification`
+и `video_pacing` каскадно не запустились («Обязательная зависимость 'cut_detection' не найдена»). Итог по
+компонентам: 499/1 у трёх компонентов — но корневая причина ОДНА.
+
+**Причина:** `_compute_interval_features` / `compute_shot_length_stats` считали `np.histogram(intervals, bins=N)`
+(N=`min(20,max(2,size))` и `bins=8`) без защиты диапазона. numpy 2.x бросает эту ошибку, когда `max-min`
+не разбивается на N финитных краёв — при: (а) inf/NaN в данных (range non-finite), (б) нулевом span, (в)
+**финитных, но огромных значениях** с крошечным относительным span (напр. битые timestamp `[1.7e12, 1.7e12+1]`
+или `[1e20, 1e20+2]`), где float-шаг превышает span. Видео дало вырожденные shot-интервалы (вероятно битый
+timestamp от сегментации/декода).
+
+**Исправление:** `cut_detection.py::_safe_histogram(data, bins, range=None)` — (1) фильтрует не-финитные
+значения `arr[np.isfinite(arr)]`; (2) при вырожденном/малом-относительно-магнитуды span подставляет явный
+`range` с относительным min-span (`|v|·eps·N·8`); (3) try/except-фолбэк на 1 финитный бин. Заменены все
+4 уязвимых вызова (`intervals`×2, `durations_s`×2). Семантика сохранена: константный сигнал → один
+заполненный бин → низкая энтропия (как и задумано).
+
+**Validated (2026-07-23):** на numpy пода 2.4.6 все краш-кейсы проходят: `exact_1e20`, `inf`, `nan`, `const`,
+`empty`, `normal`, `ts_ms` → `ALL PASS`. Полная ре-валидация на самом видео — при следующем прогоне (Gate 3).
+**Follow-up (не баг cut_detection):** откуда у `1xFgqSpn1p0` вырожденные/огромные интервалы — вопрос к
+upstream (segmenter/декод timestamp); cut_detection теперь к такому входу робастен независимо от причины.
+
+---
+
 ## L11 — EmoNet vendor + OpenFace docker (E2E infra gap)
 
 **Симптом:** `emotion_face` error: `EmoNet source file not found: .../dp_models/emonet/emonet/models/emonet.py` (веса `emonet_8.pth` есть). `micro_emotion` error: docker pull `openface/openface:latest` denied. Каскад: `high_level_semantic` missing emotion_face NPZ.

@@ -84,6 +84,41 @@ from utils.logger import get_logger
 
 NAME = "CutDetectionPipeline"
 VERSION = "2.0"
+
+
+def _safe_histogram(data, bins, range=None):
+    """np.histogram, robust to degenerate (near-constant) data ranges.
+
+    numpy raises ``ValueError: Too many bins for data range. Cannot create N
+    finite-sized bins.`` when ``bins`` is an int > 1 but ``max - min`` collapses
+    (all shot intervals ~equal, e.g. a static video with a handful of identical
+    shots). We supply an explicit non-degenerate ``range`` in that case so binning
+    stays finite; downstream entropy/normalization semantics are unchanged (a
+    constant signal correctly yields a single populated bin → low entropy).
+    """
+    arr = np.asarray(data, dtype=np.float64)
+    arr = arr[np.isfinite(arr)]          # drop inf/nan (range would be non-finite)
+    n = int(bins) if isinstance(bins, (int, np.integer)) else 1
+    if arr.size == 0:
+        return np.zeros(max(n, 1), dtype=np.int64), np.linspace(0.0, 1.0, max(n, 1) + 1)
+    if range is None:
+        lo = float(np.min(arr)); hi = float(np.max(arr))
+        span = hi - lo
+        # numpy raises "Too many bins for data range. Cannot create N finite-sized
+        # bins." when the span is too small to split into N distinct edges — this
+        # happens both at zero span AND at large magnitude (e.g. corrupt huge
+        # timestamps like [1e20, 1e20+1]) where float spacing exceeds the span.
+        min_span = max(abs(lo), abs(hi), 1.0) * np.finfo(np.float64).eps * max(n, 1) * 8.0
+        if not np.isfinite(span) or span <= max(min_span, 1e-9):
+            pad = max(min_span, abs(lo) * 1e-6, 0.5)
+            range = (lo - pad, hi + pad)
+    try:
+        return np.histogram(arr, bins=bins, range=range)
+    except ValueError:
+        # last-resort: single finite bin over the data magnitude
+        lo = float(np.min(arr)); hi = float(np.max(arr))
+        pad = max(abs(lo), abs(hi), 1.0)
+        return np.histogram(arr, bins=1, range=(lo - pad, hi + pad))
 SCHEMA_VERSION = "cut_detection_npz_v1"
 
 logger = get_logger(NAME)
@@ -189,7 +224,7 @@ def _cut_timing_statistics_from_times(cut_times_s: List[float], video_length_s: 
     mean_int = float(np.mean(intervals))
     cv = float(std / (mean_int + 1e-9))
     n_bins = int(min(20, max(2, intervals.size)))
-    hist, _ = np.histogram(intervals, bins=n_bins)
+    hist, _ = _safe_histogram(intervals, bins=n_bins)
     hist = hist.astype(np.float64) + 1e-9
     ent = float(scipy.stats.entropy(hist))
     max_entropy = float(np.log(n_bins)) if n_bins > 1 else 1.0
@@ -1752,7 +1787,7 @@ def cut_timing_statistics(cut_frame_indices, fps, video_length_s):
     mean_int = float(np.mean(intervals))
     cv = std / (mean_int + 1e-9)
     n_bins = min(20, len(intervals))
-    hist, _ = np.histogram(intervals, bins=n_bins)
+    hist, _ = _safe_histogram(intervals, bins=n_bins)
     hist = hist + 1e-9
     ent = float(scipy.stats.entropy(hist))
     max_entropy = np.log(n_bins) if n_bins > 1 else 1.0
@@ -1784,7 +1819,7 @@ def shot_length_stats(shot_frame_lengths, fps):
     very_long = int((durations_s > 10.0).sum())
     extremely_short = int((durations_s < 0.25).sum())
     percentiles = np.percentile(durations_s, [10, 25, 75, 90])
-    hist, bin_edges = np.histogram(durations_s, bins=8)
+    hist, bin_edges = _safe_histogram(durations_s, bins=8)
     hist_normalized = hist / (hist.sum() + 1e-9)  # Normalize to probabilities
     
     return {
@@ -1831,7 +1866,7 @@ def _shot_length_stats_from_durations(shot_durations_s: List[float]) -> Dict[str
     very_long = int(np.sum(durations_s > 10.0))
     extremely_short = int(np.sum(durations_s < 0.25))
     percentiles = np.percentile(durations_s, [10, 25, 75, 90])
-    hist, _ = np.histogram(durations_s, bins=8)
+    hist, _ = _safe_histogram(durations_s, bins=8)
     hist_normalized = (hist.astype(np.float32) / (float(np.sum(hist)) + 1e-9)).tolist()
     return {
         "avg_shot_length": avg,
