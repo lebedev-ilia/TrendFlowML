@@ -226,6 +226,31 @@ class Places365SceneClassifier(BaseModule):
         self.min_scene_length_frames = max(1, int(min_scene_length))
         self.min_scene_seconds = float(min_scene_seconds) if min_scene_seconds is not None else None
         self.device = device or ("cuda" if torch.cuda.is_available() else "cpu")
+        # cuDNN portability guard: on some GPU/driver combos (observed RTX 2000 Ada + torch
+        # 2.4.1+cu121) cuDNN fails to initialize (CUDNN_STATUS_NOT_INITIALIZED) even in a single
+        # isolated process, killing scene entirely (L13). Probe cuDNN once; on failure keep the GPU
+        # but disable cuDNN (native convs still work); if GPU is unusable at all, fall back to CPU.
+        if str(self.device).startswith("cuda"):
+            def _probe_conv():
+                _p = torch.nn.Conv2d(3, 8, 3).to(self.device)
+                with torch.no_grad():
+                    _p(torch.zeros(1, 3, 8, 8, device=self.device))
+                torch.cuda.synchronize()
+                del _p
+            try:
+                _probe_conv()
+            except Exception as _cudnn_e:
+                try:
+                    torch.backends.cudnn.enabled = False
+                    _probe_conv()
+                    logger.warning(
+                        "scene_classification | cuDNN init failed (%s) → disabled cuDNN, using GPU "
+                        "native convs", str(_cudnn_e)[:80])
+                except Exception as _gpu_e:
+                    self.device = "cpu"
+                    logger.warning(
+                        "scene_classification | GPU unusable (%s) → falling back to CPU",
+                        str(_gpu_e)[:80])
         self.batch_size = max(1, batch_size)
         self.input_size = input_size
         self.use_tta = use_tta

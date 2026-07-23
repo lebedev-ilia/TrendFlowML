@@ -108,6 +108,33 @@
 
 ---
 
+## L13 — scene_classification: cuDNN NOT_INITIALIZED (torch cu121 не портируем между GPU) — фикс валидирован 2026-07-23
+
+**Симптом:** в 1000-видео прогоне (Gate 3, под RTX 2000 Ada) `scene_classification` упал на **497 из ~996**
+видео с `RuntimeError: cuDNN error: CUDNN_STATUS_NOT_INITIALIZED` (rc=4, стадия `_infer_batch_compact`,
+resnet50 GPU-инференс). 499 «OK» — только видео из Gate 2 (делались на поде RTX A4500, resumable не трогал).
+
+**ЧЕСТНАЯ причина (первый вывод «N=8 concurrency» был ОШИБКОЙ, отозван):** resnet50 GPU-forward падает с
+той же ошибкой **даже при N=1 в полностью изолированном процессе** на этом поде → это **несовместимость
+cuDNN, поставляемого с `torch==2.4.1+cu121`, с этим GPU/драйвером (RTX 2000 Ada, Ada Lovelace sm_89)**, а
+НЕ конкуренция за GPU. Следствие: **«OPT-2 scene-GPU» (перевод scene на CUDA) НЕ портируем** — на одних
+подах cuDNN инициализируется (A4500 в Gate 2), на других нет (RTX 2000 Ada в Gate 3).
+
+**Проверено на поде:** `torch.backends.cudnn.enabled=False` → resnet50 на GPU работает (native convs);
+CPU тоже работает (1.9с/16 кадров). `cuda.is_available()=True`, падает именно cuDNN-conv.
+
+**Исправление** (`modules/scene_classification/utils/scene_classification.py`, сразу после `self.device=…`):
+cuDNN-guard — проба `Conv2d` на устройстве при инициализации; при исключении → `torch.backends.cudnn.enabled
+=False` + повторная проба (GPU без cuDNN); если GPU вовсе нежизнеспособен → `self.device="cpu"`. Логируется
+`logger.warning`. Портируемо на любой под без внешней настройки.
+
+**Validated (2026-07-23):** пере-прогон полного пайплайна `1xFgqSpn1p0` с фиксом на том же поде →
+`scene_classification` NPZ появился (+ все компоненты). Осталось до-прогнать ~497 видео Gate 3 со scene.
+**Урок для инфры:** GPU-inprocess torch-компоненты (scene и будущие shot_quality/action_recognition/…)
+должны иметь cuDNN/CPU-fallback; нельзя полагаться, что cu121-cuDNN заведётся на произвольном RunPod GPU.
+
+---
+
 ## L12 — cut_detection: np.histogram падает на вырожденном/битом диапазоне интервалов (исправлено 2026-07-23)
 
 **Симптом:** в 500-видео прогоне (Gate 2) ровно 1 видео (`1xFgqSpn1p0`) уронило `cut_detection` с
