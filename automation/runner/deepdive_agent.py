@@ -42,6 +42,7 @@ AUTOMATED_TEST_CORPUS_PROTOCOL.md. Правило из системного пр
 from __future__ import annotations
 import argparse
 import asyncio
+import time
 from pathlib import Path
 
 from claude_agent_sdk import (
@@ -220,6 +221,28 @@ async def _safe_interrupt(client: ClaudeSDKClient) -> None:
 
 _TOOL_INPUT_KEYS = ("command", "file_path", "pattern", "path", "prompt", "url", "description")
 
+# Баг найден 2026-07-23 (владелец): после того, как эхо на КАЖДЫЙ ToolUseBlock включили (баг №4,
+# 2026-07-21), при интенсивной автономной работе (десятки Bash/Read/Write в ход, иногда несколько
+# в секунду) бот шлёт в VK сообщение почти на каждый вызов — реальный статус тонет в потоке
+# tool-эха, плюс вероятен троттлинг/задержка самим VK на слишком частую отправку одному адресату.
+# Владелец сравнил с новым Site Agent (та же схема, но пока мало вызывает инструментов) — там
+# проблемы нет, что прямо указывает на объём сообщений, а не на застревание самого бота. Фикс —
+# не троттлим TextBlock (это реальный контент, его владелец должен видеть весь), троттлим ТОЛЬКО
+# tool-эхо: не чаще одного сообщения в TOOL_ECHO_MIN_INTERVAL_SEC, остальные вызовы в этот момент
+# просто не долетают до VK (в консоль/лог процесса пишутся всегда, ничего не теряется технически —
+# это был чисто heartbeat "не зависла", не журнал действий).
+TOOL_ECHO_MIN_INTERVAL_SEC = 2.5
+_last_tool_echo_at = 0.0
+
+
+def _should_send_tool_echo() -> bool:
+    global _last_tool_echo_at
+    now = time.monotonic()
+    if now - _last_tool_echo_at < TOOL_ECHO_MIN_INTERVAL_SEC:
+        return False
+    _last_tool_echo_at = now
+    return True
+
 
 def _summarize_tool_use(block: "ToolUseBlock") -> str:
     """Короткая строка-эхо на каждый вызов инструмента — см. _handle_turn докстринг, баг №4."""
@@ -287,10 +310,12 @@ async def _handle_turn(client: ClaudeSDKClient, text: str) -> None:
                         except Exception as e:
                             print(f"[deepdive] сообщение не отправилось (сеть?): {e}", flush=True)
                     elif isinstance(block, ToolUseBlock):
-                        try:
-                            messenger.send(_summarize_tool_use(block))
-                        except Exception as e:
-                            print(f"[deepdive] tool-echo не отправился: {e}", flush=True)
+                        print(f"[deepdive] tool: {_summarize_tool_use(block)}", flush=True)
+                        if _should_send_tool_echo():
+                            try:
+                                messenger.send(_summarize_tool_use(block))
+                            except Exception as e:
+                                print(f"[deepdive] tool-echo не отправился: {e}", flush=True)
             elif isinstance(msg, ResultMessage):
                 cost = float(getattr(msg, "total_cost_usd", 0.0) or 0.0)
                 print(f"[deepdive] ход завершён, cost=${cost:.4f}", flush=True)

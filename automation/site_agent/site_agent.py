@@ -30,6 +30,7 @@ asyncio-задаче + очередь + client.interrupt() для приорит
 from __future__ import annotations
 import argparse
 import asyncio
+import time
 from pathlib import Path
 
 from claude_agent_sdk import (
@@ -187,10 +188,12 @@ async def _handle_turn(client: ClaudeSDKClient, text: str) -> None:
                         except Exception as e:
                             print(f"[site_agent] сообщение не отправилось (сеть?): {e}", flush=True)
                     elif isinstance(block, ToolUseBlock):
-                        try:
-                            messenger.send(_summarize_tool_use(block))
-                        except Exception as e:
-                            print(f"[site_agent] tool-echo не отправился: {e}", flush=True)
+                        print(f"[site_agent] tool: {_summarize_tool_use(block)}", flush=True)
+                        if _should_send_tool_echo():
+                            try:
+                                messenger.send(_summarize_tool_use(block))
+                            except Exception as e:
+                                print(f"[site_agent] tool-echo не отправился: {e}", flush=True)
             elif isinstance(msg, ResultMessage):
                 cost = float(getattr(msg, "total_cost_usd", 0.0) or 0.0)
                 print(f"[site_agent] ход завершён, cost=${cost:.4f}", flush=True)
@@ -214,6 +217,23 @@ def _send_long(text: str) -> None:
             cut = VK_MAX_LEN
         messenger.send(text[:cut])
         text = text[cut:].strip()
+
+
+# Превентивно (2026-07-23): на TrendFlow Bot/Models Bot нашли, что эхо на КАЖДЫЙ ToolUseBlock при
+# интенсивной работе топит реальный статус в потоке сообщений + вероятный троттлинг VK. У Site
+# Agent пока мало вызовов (стоп-гейт ограничивает объём хода), но фикс ставим сразу, чтобы не
+# наступить на те же грабли, когда работы станет больше. Троттлим только tool-эхо, не TextBlock.
+TOOL_ECHO_MIN_INTERVAL_SEC = 2.5
+_last_tool_echo_at = 0.0
+
+
+def _should_send_tool_echo() -> bool:
+    global _last_tool_echo_at
+    now = time.monotonic()
+    if now - _last_tool_echo_at < TOOL_ECHO_MIN_INTERVAL_SEC:
+        return False
+    _last_tool_echo_at = now
+    return True
 
 
 _TOOL_INPUT_KEYS = ("command", "file_path", "pattern", "path", "prompt", "url", "description")

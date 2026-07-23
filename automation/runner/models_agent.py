@@ -21,6 +21,7 @@ from __future__ import annotations
 import argparse
 import asyncio
 import datetime as dt
+import time
 import mimetypes
 import random
 from pathlib import Path
@@ -244,6 +245,22 @@ async def _safe_interrupt(client: ClaudeSDKClient) -> None:
 
 _TOOL_INPUT_KEYS = ("command", "file_path", "pattern", "path", "prompt", "url", "description")
 
+# Баг найден 2026-07-23 (владелец, симметрично deepdive_agent.py): эхо на КАЖДЫЙ ToolUseBlock при
+# интенсивной автономной работе (десятки вызовов в ход) топит реальный статус в потоке сообщений
+# + вероятный троттлинг VK на слишком частую отправку. Троттлим только tool-эхо (не TextBlock —
+# это реальный контент).
+TOOL_ECHO_MIN_INTERVAL_SEC = 2.5
+_last_tool_echo_at = 0.0
+
+
+def _should_send_tool_echo() -> bool:
+    global _last_tool_echo_at
+    now = time.monotonic()
+    if now - _last_tool_echo_at < TOOL_ECHO_MIN_INTERVAL_SEC:
+        return False
+    _last_tool_echo_at = now
+    return True
+
 
 def _summarize_tool_use(block: "ToolUseBlock") -> str:
     """Короткая строка-эхо на каждый вызов инструмента — см. _handle_turn докстринг, баг №4."""
@@ -299,10 +316,12 @@ async def _handle_turn(client: ClaudeSDKClient, text: str) -> None:
                         except Exception as e:
                             print(f"[models_agent] сообщение не отправилось (сеть?): {e}", flush=True)
                     elif isinstance(block, ToolUseBlock):
-                        try:
-                            send(_summarize_tool_use(block))
-                        except Exception as e:
-                            print(f"[models_agent] tool-echo не отправился: {e}", flush=True)
+                        print(f"[models_agent] tool: {_summarize_tool_use(block)}", flush=True)
+                        if _should_send_tool_echo():
+                            try:
+                                send(_summarize_tool_use(block))
+                            except Exception as e:
+                                print(f"[models_agent] tool-echo не отправился: {e}", flush=True)
             elif isinstance(msg, ResultMessage):
                 cost = float(getattr(msg, "total_cost_usd", 0.0) or 0.0)
                 print(f"[models_agent] ход завершён, cost=${cost:.4f}", flush=True)
