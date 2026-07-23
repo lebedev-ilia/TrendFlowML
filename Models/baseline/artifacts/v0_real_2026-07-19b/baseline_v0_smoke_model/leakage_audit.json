@@ -1,0 +1,10 @@
+{
+  "passed": true,
+  "n_features_audited": 862,
+  "n_leaked_target_or_mask": 0,
+  "n_forbidden_source_hits": 0,
+  "n_unmapped_features": 0,
+  "unmapped_features_sample": [],
+  "leaked_examples": [],
+  "forbidden_examples": []
+}

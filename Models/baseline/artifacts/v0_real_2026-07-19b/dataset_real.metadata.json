@@ -1,0 +1,32 @@
+{
+  "created_at": "2026-07-19T03:31:13.522218Z",
+  "feature_schema_version": "v0-real",
+  "feature_spec_hash": "32c5e9a0b33fbfa2",
+  "result_store": "/home/ilya/Рабочий стол/TrendFlowML/storage/result_store",
+  "platform": "youtube",
+  "all_runs": true,
+  "n_rows": 26,
+  "n_videos": 6,
+  "n_feature_columns": 882,
+  "included_components": [
+    "cut_detection",
+    "optical_flow",
+    "scene_classification",
+    "shot_quality",
+    "story_structure",
+    "uniqueness",
+    "video_pacing",
+    "clap_extractor",
+    "loudness_extractor",
+    "tempo_extractor",
+    "core_clip",
+    "core_face_landmarks",
+    "core_optical_flow",
+    "core_depth_midas",
+    "core_object_detections"
+  ],
+  "skipped": {
+    "low_richness": 4
+  },
+  "dataset_fingerprint": "ff3e9f4280c39b18"
+}
