@@ -151,6 +151,41 @@ class ProcessingConfigOut(BaseModel):
     updated_at: datetime
 
 
+# ---------------------------------------------------------------------------
+# Billing (внутренние единицы)
+# ---------------------------------------------------------------------------
+
+
+class BalanceOut(BaseModel):
+    workspace_id: uuid.UUID
+    balance_units: int
+
+
+class CreditTransactionOut(BaseModel):
+    id: uuid.UUID
+    workspace_id: uuid.UUID
+    kind: str
+    amount_units: int
+    balance_after: int
+    analysis_job_id: Optional[uuid.UUID]
+    description: Optional[str]
+    amount_rub: Optional[float]
+    created_at: datetime
+
+
+class TopUpRequest(BaseModel):
+    """Пополнение баланса.
+
+    TODO(платежи): сейчас единицы начисляются напрямую. При подключении
+    платёжной системы этот эндпоинт должен вызываться только по подтверждению
+    провайдера, а не по запросу клиента.
+    """
+
+    amount_units: int = Field(gt=0, le=1_000_000)
+    amount_rub: Optional[float] = Field(default=None, ge=0)
+    idempotency_key: Optional[str] = Field(default=None, max_length=200)
+
+
 class VideoCreate(BaseModel):
     external_video_id: Optional[str] = None
     title: str = Field(min_length=1, max_length=500)

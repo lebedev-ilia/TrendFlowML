@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import asyncio
+import logging
 from datetime import datetime
 from typing import Any, Dict
 from uuid import UUID
@@ -14,11 +15,32 @@ from ..dbv2 import models as v2_models
 from ..services.dataprocessor import run_dataprocessor_async, wait_for_run_completion_hybrid
 from ..services.dataprocessor_adapter import prepare_dataprocessor_payload, resolve_run_paths_v2
 from ..services.quality import discover_quality_scripts, run_quality_reports
+from ..services import billing
 from ..worker import celery_app
 from .events import _emit_component, _emit_stage, _emit_status, _publish, _utcnow
 from .manifest import _register_artifact, _scan_and_register_artifacts, _sync_from_manifest_v2
 
+logger = logging.getLogger(__name__)
 settings = Settings()
+
+
+def _refund_failed_analysis(db, analysis_job) -> None:
+    """Возврат единиц за прерванный анализ.
+
+    Обещание пользователю: за невыполненные этапы средства не списываются.
+    Ключ идемпотентности внутри refund_for_analysis не даст вернуть дважды
+    при повторной обработке задачи.
+    """
+    try:
+        billing.refund_for_analysis(
+            db,
+            workspace_id=analysis_job.workspace_id,
+            analysis_job_id=analysis_job.id,
+        )
+    except Exception:
+        # Возврат не должен маскировать исходную причину сбоя анализа.
+        logger.exception("refund failed for analysis_job_id=%s", analysis_job.id)
+
 
 
 @celery_app.task(name="process_analysis_job")
@@ -53,6 +75,7 @@ def process_analysis_job(analysis_job_id: str) -> None:
             payload = prepare_dataprocessor_payload(db, analysis_job)
         except ValueError as e:
             analysis_job.status = enums.AnalysisStatus.failed
+            _refund_failed_analysis(db, analysis_job)
             analysis_job.error_message = str(e)
             analysis_job.completed_at = _utcnow()
             db.flush()
@@ -173,6 +196,7 @@ def process_analysis_job(analysis_job_id: str) -> None:
                 error_message = final_status.get("error", "Unknown error")
                 error_code = final_status.get("error_code", "dataprocessor_error")
                 analysis_job.status = enums.AnalysisStatus.failed
+                _refund_failed_analysis(db, analysis_job)
                 analysis_job.error_message = error_message
                 analysis_job.completed_at = _utcnow()
                 db.flush()
@@ -188,6 +212,7 @@ def process_analysis_job(analysis_job_id: str) -> None:
             else:
                 # Неожиданный статус
                 analysis_job.status = enums.AnalysisStatus.failed
+                _refund_failed_analysis(db, analysis_job)
                 analysis_job.error_message = f"Unexpected final status: {status}"
                 analysis_job.completed_at = _utcnow()
                 db.flush()
@@ -202,6 +227,7 @@ def process_analysis_job(analysis_job_id: str) -> None:
         except TimeoutError as e:
             # Timeout при polling
             analysis_job.status = enums.AnalysisStatus.failed
+            _refund_failed_analysis(db, analysis_job)
             analysis_job.error_message = f"Processing timeout: {str(e)}"
             analysis_job.completed_at = _utcnow()
             db.flush()
@@ -210,6 +236,7 @@ def process_analysis_job(analysis_job_id: str) -> None:
         except ValueError as e:
             # Run не найден или другая ошибка валидации
             analysis_job.status = enums.AnalysisStatus.failed
+            _refund_failed_analysis(db, analysis_job)
             analysis_job.error_message = f"Validation error: {str(e)}"
             analysis_job.completed_at = _utcnow()
             db.flush()
@@ -218,6 +245,7 @@ def process_analysis_job(analysis_job_id: str) -> None:
         except Exception as e:
             # Другие ошибки (HTTP, соединение, и т.д.)
             analysis_job.status = enums.AnalysisStatus.failed
+            _refund_failed_analysis(db, analysis_job)
             analysis_job.error_message = f"DataProcessor API error: {str(e)}"
             analysis_job.completed_at = _utcnow()
             db.flush()

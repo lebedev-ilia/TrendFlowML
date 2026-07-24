@@ -12,6 +12,7 @@ from ..dbv2.enums import AnalysisStatus
 from ..dbv2.models import (
     AnalysisJob,
     Prediction,
+    ProcessingConfig,
     Video,
     Workspace,
     WorkspaceMember,
@@ -24,6 +25,7 @@ from ..schemas import (
     PredictionCreate,
     PredictionOut,
 )
+from ..services import billing
 from ..services.dataprocessor import request_dataprocessor_cancel
 from ..tasks import process_analysis_job
 
@@ -71,6 +73,38 @@ def create_analysis_job(
         retry_count=0,
     )
     db.add(job)
+    db.flush()
+
+    # Списание за запуск. Стоимость берётся из конфигурации; если она не
+    # заполнена, анализ проводится без списания — выдумывать цену нельзя.
+    config = (
+        db.query(ProcessingConfig)
+        .filter(ProcessingConfig.id == payload.processing_config_id)
+        .first()
+    )
+    cost_units = (config.estimated_cost_units or 0) if config else 0
+
+    if cost_units > 0:
+        try:
+            billing.charge_for_analysis(
+                db,
+                workspace_id=workspace_id,
+                user_id=user.id,
+                analysis_job_id=job.id,
+                cost_units=cost_units,
+                description=f"Анализ «{v.title}»",
+            )
+        except billing.InsufficientFunds as e:
+            # Задача не создаётся: транзакция откатывается целиком.
+            db.rollback()
+            raise HTTPException(
+                status_code=status.HTTP_402_PAYMENT_REQUIRED,
+                detail=(
+                    f"Недостаточно единиц: на балансе {e.balance}, "
+                    f"требуется {e.required}"
+                ),
+            ) from e
+
     db.commit()
     db.refresh(job)
 

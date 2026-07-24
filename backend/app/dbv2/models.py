@@ -245,6 +245,56 @@ class ProcessingConfig(Base, TimestampMixin, UUIDPrimaryKeyMixin):
     archived_at: Mapped[Optional[datetime]] = mapped_column(DateTime, nullable=True)
 
 
+class CreditTransaction(Base, UUIDPrimaryKeyMixin):
+    """Движение внутренних единиц — неизменяемая запись журнала.
+
+    Баланс не хранится отдельным полем: он равен сумме `amount_units` по
+    рабочему пространству. Такой журнал нельзя рассинхронизировать с историей,
+    а расхождения видны сразу.
+
+    `amount_units` положительный при начислении и отрицательный при списании.
+    `balance_after` дублирует итог на момент записи — нужен для аудита и для
+    быстрого чтения текущего баланса без пересчёта всей истории.
+
+    `idempotency_key` защищает от повторного списания при ретраях: уникальность
+    на уровне БД гарантирует, что одна и та же операция не пройдёт дважды.
+    """
+
+    __tablename__ = "credit_transactions"
+    __table_args__ = (
+        UniqueConstraint("workspace_id", "idempotency_key", name="uq_credit_tx_idempotency"),
+        Index("ix_credit_tx_workspace_created", "workspace_id", "created_at"),
+        {"schema": "core"},
+    )
+
+    workspace_id: Mapped[uuid.UUID] = mapped_column(
+        ForeignKey("core.workspaces.id", ondelete="CASCADE"), nullable=False
+    )
+    user_id: Mapped[Optional[uuid.UUID]] = mapped_column(
+        ForeignKey("core.users.id"), nullable=True
+    )
+
+    #: topup | charge | refund | adjustment
+    kind: Mapped[str] = mapped_column(String, nullable=False)
+    amount_units: Mapped[int] = mapped_column(Integer, nullable=False)
+    balance_after: Mapped[int] = mapped_column(Integer, nullable=False)
+
+    #: За какой анализ списано или возвращено.
+    analysis_job_id: Mapped[Optional[uuid.UUID]] = mapped_column(
+        ForeignKey("core.analysis_jobs.id", ondelete="SET NULL"), nullable=True
+    )
+
+    description: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
+    idempotency_key: Mapped[Optional[str]] = mapped_column(String, nullable=True)
+
+    #: Сумма в рублях для пополнений; для списаний не заполняется.
+    amount_rub: Mapped[Optional[float]] = mapped_column(Float, nullable=True)
+
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime, nullable=False, default=datetime.utcnow
+    )
+
+
 class Video(Base, TimestampMixin, UUIDPrimaryKeyMixin):
     __tablename__ = "videos"
     __table_args__ = (UniqueConstraint("channel_id", "external_video_id"), {"schema": "core"})
