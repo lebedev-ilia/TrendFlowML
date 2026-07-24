@@ -1,5 +1,7 @@
 fastapi
 uvicorn
+# Нужен uvicorn для WebSocket /api/runs/{run_id}/events
+websockets>=12
 sqlalchemy>=2.0
 psycopg[binary]
 alembic>=1.13

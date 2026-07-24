@@ -30,7 +30,7 @@ from sqlalchemy.orm import Session
 
 from ..auth import decode_token
 from ..config import Settings
-from ..dbv2.models import IngestionRun, Workspace, WorkspaceMember
+from ..dbv2.models import AnalysisJob, IngestionRun, Workspace, WorkspaceMember
 from ..dbv2.models import User as CoreUser
 from ..deps import get_current_user, get_db
 from ..schemas import CreateRunRequest, IngestionRunOut
@@ -322,14 +322,29 @@ async def ws_run_events(
     if not user:
         await websocket.close(code=1008)
         return
+    # Канал событий общий для двух сущностей: ingestion run (загрузка по ссылке)
+    # и analysis job — задача анализа публикует события с run_id = analysis_job.id
+    # (см. app/tasks/analysis.py). Поэтому доступ проверяем по обеим таблицам.
     run = (
         db.query(IngestionRun)
         .filter(IngestionRun.run_id == run_id, IngestionRun.user_id == user.id)
         .first()
     )
     if not run:
-        await websocket.close(code=1008)
-        return
+        job = db.query(AnalysisJob).filter(AnalysisJob.id == run_id).first()
+        member = (
+            db.query(WorkspaceMember)
+            .filter(
+                WorkspaceMember.workspace_id == job.workspace_id,
+                WorkspaceMember.user_id == user.id,
+            )
+            .first()
+            if job
+            else None
+        )
+        if not member:
+            await websocket.close(code=1008)
+            return
 
     await websocket.accept()
     try:
