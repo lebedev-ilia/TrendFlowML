@@ -317,6 +317,7 @@ def run_snapshot_poll_loop(
 
     schedule_size = len(state.load_schedule())
     hf_enabled = getattr(config, "hf_upload_enabled", False)
+    retry_streak = 0
     if verbose:
         print("[снапшоты] старт", flush=True)
         log_snapshot_poll_report(snapshot_poll_report(state, config, now=runner._now()))
@@ -329,22 +330,34 @@ def run_snapshot_poll_loop(
             if not due:
                 continue
 
-            # Баг найден 2026-07-24: любая ошибка тут (в т.ч. "YouTube quota exceeded" — вся
-            # ротация ключей исчерпана, что реально случилось на fetcher-main: 48 ключей делят
-            # квоту с discover, который жрёт её непрерывно) улетала наверх и убивала ВЕСЬ процесс
-            # snapshot-poll насмерть. Внешняя bash-обёртка (launch_role.sh) рестартит через 60с,
-            # но квота за 60с не восстанавливается -> тесный crash-loop до сброса квоты (обычно
-            # 00:00 Pacific = ~07:00-08:00 UTC), лог засоряется, полезной работы 0. Теперь ошибка —
-            # не фатальная: логируем, ждём подольше (30 мин) и пробуем снова, не убивая процесс.
+            # Баг найден 2026-07-24: любая ошибка тут (в т.ч. "YouTube quota exceeded"/"suspended" —
+            # один из 48 ключей делит квоту с discover, который жрёт её непрерывно) улетала наверх
+            # и убивала ВЕСЬ процесс snapshot-poll насмерть. Внешняя bash-обёртка (launch_role.sh)
+            # рестартит через 60с, но квота за 60с не восстанавливается -> тесный crash-loop, лог
+            # засоряется, полезной работы 0. Теперь ошибка не фатальная: логируем, ждём и пробуем
+            # снова, не убивая процесс.
+            #
+            # Уточнение бэкоффа (2026-07-24, тот же день): YouTubeKeyPool.get_client() САМ ротирует
+            # ключ на КАЖДЫЙ вызов collect_snapshot() (см. discovery/youtube.py) и на ошибку дизейблит
+            # ТОЛЬКО тот один ключ (15 мин на 403/429, до полуночи Pacific на реальный quotaExceeded) —
+            # остальные ~47 ключей остаются доступны сразу. _collect_due_with_shards, впрочем, падает
+            # на ПЕРВОМ же неудачном видео в проходе, не пробуя следующие — значит короткий ретрай
+            # (не обязательно ждать 15-30 мин) почти всегда попадёт на другой, живой ключ. Держим
+            # длинный бэкофф только как fallback на случай, если КОРОТКИЕ ретраи подряд не помогают
+            # (см. retry_count ниже) — вдруг весь пул реально лёг.
             try:
                 result_snapshots, shard_paths = runner._collect_due_with_shards(snapshot_index=index)
+                retry_streak = 0
             except Exception as exc:
                 msg = str(exc)
                 is_quota = "quota" in msg.lower() or "403" in msg
-                backoff = 1800 if is_quota else 300
+                retry_streak += 1
+                # Первые несколько раз подряд — короткий ретрай (ротация ключа почти наверняка
+                # решит), после долгой серии подряд — переходим на длинный бэкофф (весь пул плох).
+                backoff = 90 if retry_streak <= 5 else (1800 if is_quota else 300)
                 print(
-                    f"[снапшоты] ошибка сбора индекс #{index} "
-                    f"({'квота YouTube API исчерпана' if is_quota else 'неизвестная ошибка'}): "
+                    f"[снапшоты] ошибка сбора индекс #{index} (попытка подряд "
+                    f"{retry_streak}, {'квота/бан ключа YouTube API' if is_quota else 'неизвестная ошибка'}): "
                     f"{msg[:300]} — жду {backoff}с и пробую снова (не критично, продолжаю)",
                     flush=True,
                 )
