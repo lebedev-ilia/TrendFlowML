@@ -2,15 +2,22 @@ from __future__ import annotations
 
 import uuid
 from datetime import datetime
+from pathlib import Path
 from typing import List
 
-from fastapi import APIRouter, Depends, HTTPException, status
+from fastapi import APIRouter, Depends, HTTPException, UploadFile, status
 from sqlalchemy.orm import Session
 
+from ..config import Settings
 from ..dbv2.models import Channel, Video, Workspace, WorkspaceMember
 from ..dbv2.models import User as CoreUser
 from ..deps import get_current_user, get_db
 from ..schemas import VideoCreate, VideoOut, VideoUpdate
+
+# Ограничения загрузки (SITE_SPECIFICATION.md §5.6). Максимальный размер файла
+# определяется экспериментально; 2 ГБ — безопасный потолок для видео до 20 минут.
+_MAX_UPLOAD_BYTES = 2 * 1024 * 1024 * 1024
+_ALLOWED_SUFFIXES = {".mp4", ".mov", ".avi", ".mkv", ".webm", ".m4v"}
 
 router = APIRouter(prefix="/api/channels/{channel_id}/videos", tags=["videos"])
 
@@ -106,6 +113,62 @@ def update_video(
     video = _require_video_access(db, video_id, user.id)
     for field, value in payload.model_dump(exclude_unset=True).items():
         setattr(video, field, value)
+    db.commit()
+    db.refresh(video)
+    return video
+
+
+@video_router.post("/{video_id}/upload", response_model=VideoOut)
+def upload_video_file(
+    video_id: uuid.UUID,
+    file: UploadFile,
+    db: Session = Depends(get_db),
+    user: CoreUser = Depends(get_current_user),
+):
+    """Загрузка видеофайла для уже зарегистрированного видео.
+
+    Файл сохраняется в raw_uploads_dir, путь пишется в Video.storage_path —
+    оттуда его берёт DataProcessor при обработке.
+
+    Загрузка идёт потоково на диск: файл не буферизуется в память целиком,
+    иначе большое видео исчерпало бы память процесса.
+
+    TODO(прод): для гигабайтных файлов индустриальный путь — presigned URL
+    напрямую в объектное хранилище (S3/MinIO), а не приём через API. Здесь
+    прямой upload на диск, потому что объектного хранилища в локальной среде нет.
+    """
+    video = _require_video_access(db, video_id, user.id)
+
+    suffix = Path(file.filename or "").suffix.lower()
+    if suffix not in _ALLOWED_SUFFIXES:
+        raise HTTPException(
+            status_code=status.HTTP_415_UNSUPPORTED_MEDIA_TYPE,
+            detail=f"Unsupported video format: {suffix or 'unknown'}",
+        )
+
+    paths = Settings().resolve_paths()
+    target_dir = paths.raw_uploads_dir
+    target_dir.mkdir(parents=True, exist_ok=True)
+    target_path = target_dir / f"{video.id}{suffix}"
+
+    size = 0
+    try:
+        with target_path.open("wb") as out:
+            while chunk := file.file.read(1024 * 1024):
+                size += len(chunk)
+                if size > _MAX_UPLOAD_BYTES:
+                    out.close()
+                    target_path.unlink(missing_ok=True)
+                    raise HTTPException(
+                        status_code=status.HTTP_413_REQUEST_ENTITY_TOO_LARGE,
+                        detail="Video file is too large",
+                    )
+                out.write(chunk)
+    finally:
+        file.file.close()
+
+    video.storage_path = str(target_path)
+    video.file_size_mb = round(size / (1024 * 1024), 2)
     db.commit()
     db.refresh(video)
     return video
