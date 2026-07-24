@@ -93,6 +93,32 @@ def _category_breakdown(summary: dict | None) -> str:
     return "\n".join(lines)
 
 
+def _fmt_snapshot_status(status: dict | None) -> str:
+    """Добавлено 2026-07-24 (владелец): отчёт должен показывать прогресс повторных снапшотов
+    (views/likes через 7/14/21/28д от discover), не только download/enrich/upload lifecycle."""
+    if not status:
+        return "  снапшоты: нет данных (процесс не запущен или SSH недоступен)"
+    schedule_size = status.get("schedule_size", 0)
+    per_index = status.get("per_index") or {}
+    if not schedule_size:
+        return "  снапшоты: расписание пустое (видео ещё не набралось)"
+    lines = [f"  снапшоты (расписание {schedule_size} видео):"]
+    labels = {"1": "+7д", "2": "+14д", "3": "+21д", "4": "+28д"}
+    for idx in sorted(per_index.keys(), key=lambda x: int(x)):
+        e = per_index[idx]
+        label = labels.get(idx, f"#{idx}")
+        due_now = e.get("due_now", 0)
+        done = e.get("done", 0)
+        pending = e.get("pending", 0)
+        flag = " ⏳ ЖДЁТ СБОРА" if due_now else ""
+        lines.append(f"    {label}: готово {done}/{schedule_size}, ждут своего срока {pending - done}, "
+                     f"пора собирать сейчас {due_now}{flag}")
+    next_due = status.get("next_due_at")
+    if next_due:
+        lines.append(f"    следующий дедлайн: {next_due[:16].replace('T', ' ')} UTC")
+    return "\n".join(lines)
+
+
 def build_report() -> str:
     lines = [f"📊 Fetcher — часовой отчёт ({dt.datetime.now().strftime('%Y-%m-%d %H:%M')} локальное)"]
     total_accepted = 0
@@ -129,6 +155,13 @@ def build_report() -> str:
         pass
     lines.append("")
     lines.append(f"Всего discovered (по последнему видимому счётчику): ~{total_accepted}")
+    # Снапшоты (views/likes через 7/14/21/28д) — читается с fetcher-main, где крутится snapshot-poll.
+    try:
+        snap_status = deploy.read_snapshot_status("fetcher-main")
+    except Exception:
+        snap_status = None
+    lines.append("")
+    lines.append(_fmt_snapshot_status(snap_status))
     return "\n".join(lines)
 
 

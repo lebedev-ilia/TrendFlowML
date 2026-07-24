@@ -167,3 +167,18 @@ def read_inventory_summary(pod_name: str) -> dict | None:
         return json.loads(r.stdout)
     except Exception:
         return None
+
+
+def read_snapshot_status(pod_name: str) -> dict | None:
+    """Разовый, побочно-безопасный (не запускает сбор, только читает state) статус снапшотов —
+    см. Fetcher/scripts/snapshot_status.py. Добавлено 2026-07-24 (владелец: hourly_report.py
+    должен показывать прогресс по снапшотам)."""
+    cmd = (
+        "cd /workspace/TrendFlowML/Fetcher && /workspace/venv/bin/python3 scripts/snapshot_status.py "
+        "/workspace/dataset_runs/100k-monthly/runtime_dataset_campaign_20k.json 2>/dev/null"
+    )
+    r = ssh_run(pod_name, cmd, timeout=30)
+    try:
+        return json.loads(r.stdout)
+    except Exception:
+        return None
