@@ -68,7 +68,22 @@ def _prune_redundant(content_cols, redundant_csv, thr=0.98):
     return kept
 
 
-def _fit_eval(X_tr, y_tr, X_te, seed=1337, max_iter=200):
+def _fit_eval(X_tr, y_tr, X_te, seed=1337, max_iter=200, model="histgb"):
+    if model == "lightgbm":
+        import lightgbm as lgb  # native NaN handling -> no imputation
+        m = lgb.LGBMRegressor(random_state=seed, n_estimators=max_iter,
+                              learning_rate=0.05, num_leaves=31, subsample=0.9,
+                              colsample_bytree=0.9, min_child_samples=20, verbose=-1)
+        m.fit(X_tr, y_tr)
+        return m.predict(X_te)
+    if model == "catboost":
+        from catboost import CatBoostRegressor
+        m = CatBoostRegressor(random_seed=seed, iterations=max_iter, depth=6,
+                              learning_rate=0.05, loss_function="RMSE",
+                              verbose=False, allow_writing_files=False)
+        m.fit(np.nan_to_num(X_tr, nan=0.0), y_tr)  # catboost dislikes all-NaN cols
+        return m.predict(np.nan_to_num(X_te, nan=0.0))
+    # default: sklearn HistGB (median impute)
     med = np.nanmedian(X_tr, axis=0)
     med = np.where(np.isfinite(med), med, 0.0)
     Xtr = np.where(np.isfinite(X_tr), X_tr, med)
@@ -98,6 +113,7 @@ def main():
     ap.add_argument("--k", type=int, default=5)
     ap.add_argument("--topk", type=int, default=25)
     ap.add_argument("--max-iter", type=int, default=200)
+    ap.add_argument("--model", default="histgb", choices=["histgb","lightgbm","catboost"])
     args = ap.parse_args()
 
     df = pd.read_parquet(args.dataset).reset_index(drop=True)
@@ -132,10 +148,10 @@ def main():
 
         for tr, te in gkf.split(sub, y, groups):
             # S0
-            pools["S0"][te] = _fit_eval(Xs0[tr], y[tr], Xs0[te], max_iter=args.max_iter)
+            pools["S0"][te] = _fit_eval(Xs0[tr], y[tr], Xs0[te], max_iter=args.max_iter, model=args.model)
             # S0+full
             Xf_tr = np.hstack([Xs0[tr], Xc_all[tr]]); Xf_te = np.hstack([Xs0[te], Xc_all[te]])
-            pools["S0+full"][te] = _fit_eval(Xf_tr, y[tr], Xf_te, max_iter=args.max_iter)
+            pools["S0+full"][te] = _fit_eval(Xf_tr, y[tr], Xf_te, max_iter=args.max_iter, model=args.model)
             # S0+lean: select top-K pruned content by |Spearman(feat,y)| on TRAIN only
             scores = []
             ytr = y[tr]
@@ -149,7 +165,7 @@ def main():
             top = np.argsort(scores)[::-1][:args.topk]
             Xl_tr = np.hstack([Xs0[tr], Xc_pr[tr][:, top]])
             Xl_te = np.hstack([Xs0[te], Xc_pr[te][:, top]])
-            pools["S0+lean"][te] = _fit_eval(Xl_tr, y[tr], Xl_te, max_iter=args.max_iter)
+            pools["S0+lean"][te] = _fit_eval(Xl_tr, y[tr], Xl_te, max_iter=args.max_iter, model=args.model)
 
         rec = {"head": name, "n": len(sub), "n_groups": n_groups}
         for s in pools:

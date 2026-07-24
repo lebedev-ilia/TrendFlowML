@@ -131,8 +131,10 @@ $PY Models/state/analysis/v2_cv_experiment.py --dataset <...>/dataset_corpus_con
    --redundant <...>/redundant_pairs.csv --k 5 --topk 30
 ```
 (or `run_scale_rebuild.sh <tag>` for the whole chain; venv is `Models/.venv`, py3.14,
-has pandas/pyarrow/sklearn/scipy/ijson/boto3/matplotlib; NO catboost/lightgbm wheels
-→ uses sklearn HistGB.)
+has pandas/pyarrow/sklearn/scipy/ijson/boto3/matplotlib + **lightgbm 4.7.0 & catboost
+1.2.10** (py3.14 wheels now available). `v2_cv_experiment.py --model histgb|lightgbm|
+catboost`. exp_0012: LightGBM ≈ HistGB on the 1000-set → model family is NOT a lever;
+default sklearn HistGB is fine.)
 
 **Agent A coordination:** his side = `DataProcessor/` (do not edit his component code
 or `DataProcessor/state/agent_a_tasks.json`). His gate reports land under
@@ -141,7 +143,7 @@ or `DataProcessor/state/agent_a_tasks.json`). His gate reports land under
 
 ## Pointers
 - This file (`Models/state/MODELS_STATE.md`) = canonical entry point.
-- Experiment log: `Models/state/experiments.csv` (exp_0001 … exp_0011)
+- Experiment log: `Models/state/experiments.csv` (exp_0001 … exp_0012)
 - Task board: `Models/state/training_tasks.json`
 - Full feature analysis + 500-run payoff: `Models/state/analysis/FEATURE_ANALYSIS_300CORPUS.md`
 - Dataset builder docs: `DataProcessor/DatasetBuilder/README.md`
