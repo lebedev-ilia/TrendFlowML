@@ -111,12 +111,11 @@ def process_analysis_job(analysis_job_id: str) -> None:
         # Используем один event loop для всех async операций
         loop = None
         try:
-            # Создать или получить event loop
-            try:
-                loop = asyncio.get_event_loop()
-            except RuntimeError:
-                loop = asyncio.new_event_loop()
-                asyncio.set_event_loop(loop)
+            # В Celery-воркере своего event loop нет, а в Python 3.12+
+            # asyncio.get_event_loop() без активного loop бросает RuntimeError.
+            # Поэтому создаём свой loop и всегда закрываем его в finally.
+            loop = asyncio.new_event_loop()
+            asyncio.set_event_loop(loop)
 
             # Отправить запрос на обработку
             loop.run_until_complete(
@@ -252,9 +251,10 @@ def process_analysis_job(analysis_job_id: str) -> None:
             _emit_status(run_id, "failed", error_code="api_error", error_message=str(e))
             return
         finally:
-            # Закрыть event loop если был создан
-            if loop and loop != asyncio.get_event_loop():
+            # Свой loop всегда закрываем и снимаем как текущий.
+            if loop is not None:
                 try:
+                    asyncio.set_event_loop(None)
                     loop.close()
                 except Exception:
                     pass

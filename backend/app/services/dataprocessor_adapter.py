@@ -11,6 +11,10 @@ payload с video_url (signed URL); Backend передаёт его в DataProces
 
 from __future__ import annotations
 
+import hashlib
+import json
+import logging
+
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, Dict, Optional
@@ -20,8 +24,38 @@ from sqlalchemy.orm import Session
 
 from ..config import ResolvedPaths, Settings
 from ..dbv2 import models as v2_models
+from ..dbv2.models import ProcessingConfig
 from ..models import AnalysisProfile
 from .fetcher_client import get_run_artifacts, get_run_manifest
+
+logger = logging.getLogger(__name__)
+
+# Классификация компонентов по модальности — нужна, чтобы включить нужные
+# процессоры в профиле DataProcessor. Списки соответствуют каталогу
+# DataProcessor/configs/global_config.yaml (аудио- и текст-экстракторы);
+# всё, что не audio и не text, относится к visual.
+_AUDIO_COMPONENTS = {
+    "clap_extractor",
+    "loudness_extractor",
+    "tempo_extractor",
+    "asr_extractor",
+    "diarization",
+    "speaker_diarization",
+    "music_detection",
+    "emotion_diarization",
+}
+_TEXT_COMPONENTS = {
+    "title_embedder",
+    "description_embedder",
+    "tags_extractor",
+    "asr_text",
+    "semantic_clusters",
+    "semantic_cluster_extractor",
+    "embedding_shifts",
+    "embedding_shift_indicator_extractor",
+    "comments_extractor",
+    "comments_embedder",
+}
 
 
 def resolve_dataprocessor_global_config_path(
@@ -150,6 +184,85 @@ def _resolve_video_path(db: Session, video: v2_models.Video) -> Path:
     raise ValueError(f"Video file not found for video {video.id}")
 
 
+def _load_baseline_profile(paths: ResolvedPaths) -> Dict[str, Any]:
+    """Эталонный baseline-профиль как основа (resolved_model_mapping, visual.cfg_path).
+
+    Берём готовый профиль из configs/, чтобы не собирать triton-маппинг вручную.
+    Если файла нет — возвращаем минимальный скелет, достаточный для запуска.
+    """
+    import yaml  # локальный импорт: yaml нужен только здесь
+
+    repo_root = paths.storage_root.parent
+    candidate = repo_root / "configs" / "profile_triton_baseline_gpu_local.yaml"
+    if candidate.is_file():
+        try:
+            with open(candidate, "r", encoding="utf-8") as f:
+                loaded = yaml.safe_load(f) or {}
+            if isinstance(loaded, dict):
+                return loaded
+        except Exception:
+            logger.warning("Не удалось прочитать baseline-профиль %s", candidate)
+
+    return {
+        "version": "processing_config_v1",
+        "processors": {
+            "audio": {"enabled": False, "required": False},
+            "text": {"enabled": False, "required": False},
+        },
+        "visual": {"cfg_path": str(paths.visual_cfg_default)},
+    }
+
+
+def _build_profile_from_processing_config(
+    pc: ProcessingConfig,
+) -> tuple[str, Dict[str, Any]]:
+    """Строит profile_config и config_hash из core.processing_configs.
+
+    Состав компонентов хранится в pc.payload["components"]. Модальности
+    включаются по наличию соответствующих компонентов, а тяжёлый triton-маппинг
+    и visual.cfg_path берутся из эталонного baseline-профиля.
+
+    config_hash — sha256 от payload с сортировкой ключей (правило проекта:
+    profil_hash = sha256 от JSON с сортировкой).
+    """
+    settings = Settings()
+    paths = settings.resolve_paths()
+
+    payload = dict(pc.payload or {})
+    components = set(payload.get("components", []))
+
+    profile_config = _load_baseline_profile(paths)
+
+    has_audio = bool(components & _AUDIO_COMPONENTS)
+    has_text = bool(components & _TEXT_COMPONENTS)
+    profile_config.setdefault("processors", {})
+    profile_config["processors"]["audio"] = {"enabled": has_audio, "required": False}
+    profile_config["processors"]["text"] = {"enabled": has_text, "required": False}
+
+    # visual.cfg_path обязателен для VisualProcessor.
+    visual = profile_config.get("visual")
+    if not isinstance(visual, dict):
+        visual = {}
+        profile_config["visual"] = visual
+    if not visual.get("cfg_path"):
+        visual["cfg_path"] = str(paths.visual_cfg_default)
+
+    # Включённые visual-компоненты добавляем в requirements поверх baseline.
+    visual_components = components - _AUDIO_COMPONENTS - _TEXT_COMPONENTS
+    if visual_components:
+        requirements = dict(visual.get("requirements") or {})
+        for name in visual_components:
+            requirements[name] = True
+        visual["requirements"] = requirements
+
+    config_hash = hashlib.sha256(
+        json.dumps(payload, sort_keys=True, ensure_ascii=False).encode("utf-8")
+    ).hexdigest()
+    profile_config["config_hash"] = config_hash
+
+    return config_hash, profile_config
+
+
 def _resolve_processing_config(
     db: Session,
     processing_config_id: UUID,
@@ -170,7 +283,16 @@ def _resolve_processing_config(
     Raises:
         ValueError: если профиль не найден
     """
-    # Временное решение: processing_config_id маппится на AnalysisProfile.id
+    # Основной путь: конфигурация из core.processing_configs (создаётся сайтом).
+    pc = (
+        db.query(ProcessingConfig)
+        .filter(ProcessingConfig.id == processing_config_id)
+        .first()
+    )
+    if pc is not None:
+        return _build_profile_from_processing_config(pc)
+
+    # Совместимость: старые анализы ссылались на legacy AnalysisProfile.
     profile = db.query(AnalysisProfile).filter(AnalysisProfile.id == str(processing_config_id)).first()
     if not profile:
         raise ValueError(f"Processing config not found: {processing_config_id}")
