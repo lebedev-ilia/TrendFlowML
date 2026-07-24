@@ -44,8 +44,11 @@ VK = "https://api.vk.com/method"
 
 SYSTEM = (
     "Ты — Третий агент проекта TrendFlow: наблюдатель ЗА FETCHER DATASET COLLECTOR (сбор датасета "
-    "YouTube на 3 постоянных CPU-подах RunPod: fetcher-main — discover+свой шард workers, "
-    "fetcher-worker-b/-c — только workers). Это ОТДЕЛЬНАЯ система от ML-валидации компонентов "
+    "YouTube). Активный под на RunPod — ТОЛЬКО fetcher-main (discover + workers шард 0/5). "
+    "fetcher-worker-b и fetcher-worker-c намеренно удалены с RunPod (2026-07) — их download-workers "
+    "переехали на 4 Colab-аккаунта (шарды 1..4). НЕ пытайся подключаться к b/c по SSH — они вернут "
+    "404. Реестр активных подов: config.PODS (итерируй его, не provision_result.json). "
+    "Это ОТДЕЛЬНАЯ система от ML-валидации компонентов "
     "(automation/runner/) — НИКОГДА не трогай ML-поды/файлы automation/runner/, это не твоя зона. "
     "У тебя есть: Bash/Read/Write/Edit в этом репозитории (automation/fetcher/ — твой код: "
     "deploy.py содержит готовые функции ssh_run/tail_logs/read_inventory_summary/kill_processes/"
@@ -56,12 +59,12 @@ SYSTEM = (
     "2026-07-16, не повторяй его в собственных SSH-командах: если сам пишешь pkill/grep по SSH, "
     "тоже используй bracket-trick на искомом слове). Секреты — automation/fetcher/.env. "
     "SSH-ключ — automation/fetcher/ssh/id_ed25519 (тот же паблик-ключ уже прописан RunPod автоматически "
-    "во все поды аккаунта). Пароли/ID подов — automation/fetcher/state/provision_result.json. "
-    "ПРОТОКОЛ ПРОВЕРКИ (раз в час): для каждого из 3 подов — deploy.tail_logs(pod) на ошибки "
+    "во все поды аккаунта). ID пода fetcher-main — automation/fetcher/state/provision_result.json. "
+    "ПРОТОКОЛ ПРОВЕРКИ (раз в час): только fetcher-main — deploy.tail_logs('fetcher-main') на ошибки "
     "(QuotaExceededError — это НОРМА, код сам ждёт сброса, не считай багом; HF 429 Too Many Requests — "
     "тоже норма, ретраится сам; bot_detection — штатная пауза; реальные проблемы — traceback без "
     "восстановления, растущий queue_dead_letter, процесс не пишет в лог часами, ModuleNotFoundError/"
-    "FileNotFoundError, резкий скачок 'yt-dlp enrich failed') и deploy.read_inventory_summary(pod) на "
+    "FileNotFoundError, резкий скачок 'yt-dlp enrich failed') и deploy.read_inventory_summary('fetcher-main') на "
     "lag_* метрики (растущий lag без движения — подозрительно). Всё штатно — НИЧЕГО не делай, "
     "заверши коротким итогом (1 строка). Есть проблема: (1) разберись в причине по логам/коду; "
     "(2) если можешь починить — правь код В ЭТОМ РЕПО (Fetcher/fetcher/dataset_collector/...), "
@@ -146,9 +149,9 @@ class LP:
 
 CHECK_PROMPT = (
     "Проведи часовую проверку Fetcher dataset collector по протоколу из системного промпта — "
-    "все 3 пода (fetcher-main, fetcher-worker-b, fetcher-worker-c). Начни с "
+    "активный под fetcher-main (fetcher-worker-b/c намеренно удалены, работают на Colab). Начни с "
     "`cd automation/fetcher && python3 -c \"import deploy; print(deploy.tail_logs('fetcher-main'))\"` "
-    "и аналогично для остальных подов + summary.json."
+    "и затем deploy.read_inventory_summary('fetcher-main')."
 )
 
 
@@ -221,8 +224,9 @@ async def _handle_owner_message(text: str, model: str, client_holder: dict | Non
         "Это НЕ команда из фиксированного списка — обработай как реальную задачу/вопрос по "
         "Fetcher dataset collector (3 пода: fetcher-main, fetcher-worker-b, fetcher-worker-c). "
         "Если нужно — посмотри логи/summary.json по протоколу из системного промпта, разберись "
-        "в причине, при возможности почини код и перезапусти процесс на поде. Ответь по существу "
-        "и кратко — это уйдёт напрямую владельцу в VK."
+        "в причине, при возможности почини код и перезапусти процесс на поде. "
+        "Активный RunPod-под — только fetcher-main; b/c переехали на Colab (не пытайся к ним подключаться). "
+        "Ответь по существу и кратко — это уйдёт напрямую владельцу в VK."
     )
     return await _run_llm(prompt, model, max_turns=60, progress=True, client_holder=client_holder)
 
