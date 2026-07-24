@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import logging
+import secrets
 import uuid
 from datetime import datetime
 from typing import Any, Dict, List
@@ -24,6 +25,8 @@ from ..schemas import (
     AnalysisJobOut,
     PredictionCreate,
     PredictionOut,
+    PublicReportOut,
+    ShareLinkOut,
 )
 from ..services import billing
 from ..services.dataprocessor import request_dataprocessor_cancel
@@ -245,3 +248,72 @@ def list_predictions(
     )
 
 
+@router.post("/analysis/{analysis_job_id}/share", response_model=ShareLinkOut)
+def share_analysis(
+    analysis_job_id: uuid.UUID,
+    db: Session = Depends(get_db),
+    user: CoreUser = Depends(get_current_user),
+):
+    """Создаёт (или возвращает существующую) публичную ссылку на отчёт.
+
+    Делиться можно только завершённым анализом — у незавершённого нет прогноза.
+    Токен генерируется один раз и переиспользуется при повторном запросе.
+    """
+    job = db.query(AnalysisJob).filter(AnalysisJob.id == analysis_job_id).first()
+    if not job:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Analysis job not found")
+    _require_workspace_member(db, job.workspace_id, user.id)
+
+    if job.status != AnalysisStatus.completed:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="Поделиться можно только завершённым анализом",
+        )
+
+    if not job.share_token:
+        job.share_token = secrets.token_urlsafe(16)
+        db.commit()
+        db.refresh(job)
+    return ShareLinkOut(analysis_job_id=job.id, share_token=job.share_token)
+
+
+@router.delete("/analysis/{analysis_job_id}/share")
+def revoke_share(
+    analysis_job_id: uuid.UUID,
+    db: Session = Depends(get_db),
+    user: CoreUser = Depends(get_current_user),
+):
+    """Отзывает публичную ссылку — старый URL перестаёт работать."""
+    job = db.query(AnalysisJob).filter(AnalysisJob.id == analysis_job_id).first()
+    if not job:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Analysis job not found")
+    _require_workspace_member(db, job.workspace_id, user.id)
+
+    job.share_token = None
+    db.commit()
+    return {"status": "ok"}
+
+
+# Публичный отчёт — БЕЗ авторизации, доступен по токену. Отдаём только top-line
+# данные (прогноз): состояние канала и внутренние идентификаторы не раскрываем.
+public_router = APIRouter(prefix="/api/public", tags=["public"])
+
+
+@public_router.get("/reports/{share_token}", response_model=PublicReportOut)
+def public_report(share_token: str, db: Session = Depends(get_db)):
+    job = db.query(AnalysisJob).filter(AnalysisJob.share_token == share_token).first()
+    if not job or job.status != AnalysisStatus.completed:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Report not found")
+
+    video = db.query(Video).filter(Video.id == job.video_id).first()
+    predictions = (
+        db.query(Prediction)
+        .filter(Prediction.analysis_job_id == job.id)
+        .order_by(Prediction.horizon_days.asc())
+        .all()
+    )
+    return PublicReportOut(
+        video_title=video.title if video else "Видео",
+        source="youtube" if (video and video.source_url) else "upload",
+        predictions=predictions,
+    )

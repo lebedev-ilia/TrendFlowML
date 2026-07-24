@@ -4,7 +4,7 @@ import uuid
 from datetime import datetime
 from typing import Optional
 
-from pydantic import BaseModel, EmailStr, Field
+from pydantic import BaseModel, ConfigDict, EmailStr, Field
 
 from .dbv2.enums import AnalysisStatus, SourceType, SubscriptionStatus, VideoType, WorkspaceRole
 
@@ -35,6 +35,19 @@ class UserOut(BaseModel):
 class ChangePasswordRequest(BaseModel):
     current_password: str = Field(min_length=1)
     new_password: str = Field(min_length=8, max_length=128)
+
+
+class ShareLinkOut(BaseModel):
+    analysis_job_id: uuid.UUID
+    share_token: str
+
+
+class PublicReportOut(BaseModel):
+    """Публичный отчёт: только top-line данные, без чувствительного контекста."""
+
+    video_title: str
+    source: str
+    predictions: list[PredictionOut]
 
 
 class WorkspaceCreate(BaseModel):
@@ -266,6 +279,8 @@ class PredictionCreate(BaseModel):
 
 
 class PredictionOut(BaseModel):
+    model_config = ConfigDict(from_attributes=True)
+
     id: uuid.UUID
     analysis_job_id: uuid.UUID
     horizon_days: int

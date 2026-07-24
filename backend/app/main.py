@@ -9,6 +9,7 @@ from sqlalchemy import text
 from .config import Settings, validate_security_at_startup
 from .db import engine, session_scope
 from .dbv2 import Base as BaseV2
+from .routers.analysis import public_router as analysis_public_router
 from .routers.analysis import router as analysis_router
 from .routers.auth import router as auth_router
 from .routers.channels import router as channels_router
@@ -72,6 +73,7 @@ app.include_router(config_router)
 app.include_router(billing_router)
 app.include_router(subscriptions_router)
 app.include_router(analysis_router)
+app.include_router(analysis_public_router)
 app.include_router(runs_router)
 app.include_router(webhooks_router, prefix="/api")
 

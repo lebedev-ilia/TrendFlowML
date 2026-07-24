@@ -361,6 +361,12 @@ class AnalysisJob(Base, TimestampMixin, UUIDPrimaryKeyMixin):
     started_at: Mapped[Optional[datetime]] = mapped_column(DateTime, nullable=True)
     completed_at: Mapped[Optional[datetime]] = mapped_column(DateTime, nullable=True)
 
+    # Токен публичной ссылки на отчёт. Пока null — отчёт приватный; при шаринге
+    # генерируется, при отзыве — обнуляется.
+    share_token: Mapped[Optional[str]] = mapped_column(
+        String, nullable=True, unique=True, index=True
+    )
+
     video: Mapped["Video"] = relationship(back_populates="analysis_jobs")
     predictions: Mapped[List["Prediction"]] = relationship(
         back_populates="analysis_job", cascade="all, delete-orphan"
