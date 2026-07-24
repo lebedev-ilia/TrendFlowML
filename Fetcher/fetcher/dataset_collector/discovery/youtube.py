@@ -109,7 +109,18 @@ class YouTubeKeyPool:
         self._reset_if_new_day(state)
         state.last_error = str(error)[:500]
         err_str = str(error)
-        if isinstance(error, QuotaExceededError) or "quota" in err_str.lower():
+        # Баг найден 2026-07-24 (владелец: "проверь ещё раз fetcher main" — 27 попыток подряд,
+        # 0 успехов за 10+ часов): "Consumer '...' has been suspended" — это ПОСТОЯННЫЙ бан ключа
+        # Google (не дневная квота, не временный rate-limit), но раньше попадал в тот же 15-минутный
+        # бэкофф, что 429/обычный 403. used_units у забаненного ключа почти всегда ~0 (он падает
+        # раньше, чем успевает потратить квоту) -> _select_key() (сортировка по used_units) выбирает
+        # ИМЕННО его первым, как только 15 минут проходят — а внешний retry snapshot-poll (90с/30мин)
+        # почти всегда ждёт ДОЛЬШЕ 15 минут, то есть ключ гарантированно успевает разблокироваться и
+        # выбраться СНОВА. Живое наблюдение: 20+ из 27 попыток подряд били в один и тот же
+        # заблокированный ключ, здоровые ~47 из 49 ни разу не пробовались. Теперь suspended — тот же
+        # длинный бэкофф, что и реальная квота (до полуночи Pacific) — гораздо безопаснее, чем 15 мин.
+        is_suspended = "suspended" in err_str.lower()
+        if isinstance(error, QuotaExceededError) or "quota" in err_str.lower() or is_suspended:
             # Disable until next Pacific midnight (= actual Google quota reset time).
             # Old code used 23:59:59 UTC which is wrong: it's 7-8h after Google resets,
             # so the key stays locked for up to 31h instead of being freed at reset time.
