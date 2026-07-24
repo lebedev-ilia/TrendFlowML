@@ -132,10 +132,12 @@ disown
 echo "workers ($WORKER_ID) pid=$!"
 
 if [ "$ROLE" = "main" ]; then
-  # --- discover (только на main) — CLI сам восстанавливается после исчерпания квоты API-ключей
-  # (патч 2026-07-16, cli.py::command_discover), процесс НЕ нужно перезапускать снаружи по крашу
-  # квоты. Внешний цикл — только на случай, если процесс всё же завершится штатно (весь список
-  # категорий добит для сегодняшнего дня) или упадёт по РЕАЛЬНОЙ ошибке (не квота).
+  # --- discover (только на main) — ОТКЛЮЧЕНО 2026-07-24 по прямой просьбе владельца: discover и
+  # snapshot-poll делят один и тот же пул из 48 YouTube-ключей, квоты на оба не хватает — снапшоты
+  # (повторные измерения views/likes через 7/14/21/28д, нужны для таргетов моделей) сейчас важнее
+  # непрерывного расширения корпуса. Переключатель: DISCOVER_ENABLED=1 в окружении launch_role.sh,
+  # чтобы включить обратно без правки этого файла.
+  if [ "${DISCOVER_ENABLED:-0}" = "1" ]; then
   nohup bash -c '
     cd '"$FETCHER"'
     while true; do
@@ -153,6 +155,9 @@ if [ "$ROLE" = "main" ]; then
   ' > "$LOGDIR/discover_wrapper.log" 2>&1 < /dev/null &
   disown
   echo "discover ($WORKER_ID) pid=$!"
+  else
+    echo "discover: ОТКЛЮЧЕН (DISCOVER_ENABLED!=1) — вся YouTube-квота отдана snapshot-poll"
+  fi
 
   # --- snapshot-poll (только на main, один раз централизованно на весь корпус, не per-Colab-worker
   # — это просто повторные YouTube API запросы по уже известным video_id, не привязано к тому, кто
