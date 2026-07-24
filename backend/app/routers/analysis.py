@@ -136,6 +136,20 @@ def cancel_analysis_job(
     )
 
 
+@router.get("/analysis/{analysis_job_id}", response_model=AnalysisJobOut)
+def get_analysis_job(
+    analysis_job_id: uuid.UUID,
+    db: Session = Depends(get_db),
+    user: CoreUser = Depends(get_current_user),
+):
+    """Одна задача анализа по идентификатору (docs/API.md §6)."""
+    job = db.query(AnalysisJob).filter(AnalysisJob.id == analysis_job_id).first()
+    if not job:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Analysis job not found")
+    _require_workspace_member(db, job.workspace_id, user.id)
+    return job
+
+
 @router.get("/workspaces/{workspace_id}/analysis", response_model=List[AnalysisJobOut])
 def list_analysis_jobs(
     workspace_id: uuid.UUID,
