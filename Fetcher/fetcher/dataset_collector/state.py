@@ -119,6 +119,7 @@ class DatasetState:
         self.seen_path = self.state_dir / "seen_ids.jsonl"
         self.schedule_path = self.state_dir / "video_schedule.jsonl"
         self.snapshot_completion_path = self.state_dir / "snapshot_completion.jsonl"
+        self.snapshot_due_overrides_path = self.state_dir / "snapshot_due_overrides.jsonl"
         self.api_keys_path = self.state_dir / "api_keys.json"
         self.checkpoint_path = self.state_dir / "discovery_checkpoint.json"
         self.keyword_progress_path = self.state_dir / "keyword_progress.jsonl"
@@ -440,7 +441,58 @@ class DatasetState:
         append_jsonl(self.schedule_path, jsonable(entry.dict()))
 
     def load_schedule(self) -> List[ScheduleEntry]:
-        return [ScheduleEntry.parse_obj(row) for row in iter_jsonl(self.schedule_path)]
+        """Баг найден 2026-07-24 (владелец): due_at для снапшотов 2/3/4 считался ОДИН РАЗ при
+        создании расписания как snapshot_0.collected_at + N*7д (см. build_schedule_entry) —
+        полностью игнорируя, что снапшот N-1 мог реально собраться позже (задержка из-за квоты
+        YouTube API). Владелец явно попросил: "третий снапшот отчитывать от второго, а не от
+        первого" — т.е. интервал между СОСЕДНИМИ снапшотами должен считаться от ФАКТИЧЕСКОГО
+        времени сбора предыдущего, а не от изначального due_at. Реализовано как overlay:
+        record_due_override() пишет пересчитанный due_at сразу после фактического сбора
+        предыдущего снапшота (см. snapshots.py::run_snapshot_poll_loop), здесь при каждой
+        загрузке расписания overlay применяется поверх исходных (снапшот_0-заякоренных) значений
+        — overlay всегда точнее, исходные due_at остаются как безопасный fallback, если по
+        какой-то причине overlay не был записан."""
+        entries = [ScheduleEntry.parse_obj(row) for row in iter_jsonl(self.schedule_path)]
+        overrides = self._load_due_overrides()
+        if overrides:
+            for entry in entries:
+                for index_str in list(entry.due_at.keys()):
+                    override = overrides.get((entry.dedup_key, int(index_str)))
+                    if override is not None:
+                        entry.due_at[index_str] = override
+                # overrides могут задавать due_at для индекса, которого ещё не было в исходном
+                # due_at (снапшот_0-заякоренная схема иногда не покрывает все индексы) — добавляем.
+                for (key, index), due_at in overrides.items():
+                    if key == entry.dedup_key and str(index) not in entry.due_at:
+                        entry.due_at[str(index)] = due_at
+        return entries
+
+    def _load_due_overrides(self) -> dict[tuple[str, int], "datetime"]:
+        """Последний override на (key, snapshot_index) побеждает (append-only лог)."""
+        overrides: dict[tuple[str, int], "datetime"] = {}
+        for row in iter_jsonl(self.snapshot_due_overrides_path):
+            key = row.get("key")
+            index = row.get("snapshot_index")
+            due_at = row.get("due_at")
+            if not key or index is None or not due_at:
+                continue
+            try:
+                overrides[(str(key), int(index))] = datetime.fromisoformat(str(due_at))
+            except ValueError:
+                continue
+        return overrides
+
+    def record_due_override(self, key: str, snapshot_index: int, due_at: "datetime") -> None:
+        """Пересчитанный due_at следующего снапшота = фактическое время сбора предыдущего +
+        интервал (см. load_schedule докстринг + snapshots.py::_next_due_after_completion)."""
+        append_jsonl(
+            self.snapshot_due_overrides_path,
+            {
+                "key": key,
+                "snapshot_index": snapshot_index,
+                "due_at": due_at.isoformat(),
+            },
+        )
 
     def mark_snapshot_completed(self, key: str, snapshot_index: int) -> None:
         append_jsonl(

@@ -312,7 +312,7 @@ def command_snapshot(args: argparse.Namespace) -> None:
         build_adapters(state, args, key_pool=key_pool),
         comments_limit=config.comments_per_snapshot,
     )
-    result = runner.collect_due(snapshot_index=args.snapshot_index, limit=args.limit)
+    result = runner.collect_due(snapshot_index=args.snapshot_index, limit=args.limit, config=config)
     _push_hf_progress(state, config, args)
     print(json.dumps({"snapshots": len(result)}, ensure_ascii=False))
 

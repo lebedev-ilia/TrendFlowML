@@ -134,6 +134,35 @@ def build_schedule_entry(
     )
 
 
+def _next_due_after_completion(config, index: int, actual_collected_at: datetime) -> datetime | None:
+    """Due_at следующего снапшота (index+1) = ФАКТИЧЕСКОЕ время сбора ЭТОГО снапшота + интервал
+    между ними по расписанию кампании — не snapshot_0.collected_at + фиксированный офсет (баг
+    найден 2026-07-24, владелец: "третий снапшот отчитывать от второго, а не от первого"; общий
+    принцип — каждый снапшот считается от факта предыдущего, а не от исходной точки). Интервал
+    берём как разницу соседних офсетов в расписании (обычно равномерный, напр. 7д, но считаем
+    честно на случай неравномерного расписания)."""
+    next_index = index + 1
+    if getattr(config, "snapshot_sleep_seconds", None) and getattr(config, "snapshot_follow_up_count", None):
+        if next_index > int(config.snapshot_follow_up_count):
+            return None
+        return actual_collected_at + timedelta(seconds=config.snapshot_sleep_seconds)
+    unit, offsets = _schedule_offsets(
+        schedule_days=getattr(config, "snapshot_schedule_days", None),
+        schedule_hours=getattr(config, "snapshot_schedule_hours", None),
+        schedule_minutes=getattr(config, "snapshot_schedule_minutes", None),
+    )
+    if next_index >= len(offsets):
+        return None
+    interval = offsets[next_index] - offsets[index]
+    if interval <= 0:
+        return None
+    if unit == "minutes":
+        return actual_collected_at + timedelta(minutes=interval)
+    if unit == "hours":
+        return actual_collected_at + timedelta(hours=interval)
+    return actual_collected_at + timedelta(days=interval)
+
+
 def snapshot_follow_up_indices(config) -> List[int]:
     """Indices 1..N for scheduled follow-up snapshots (index 0 is snapshot_0 at discover)."""
     count = getattr(config, "snapshot_follow_up_count", None)
@@ -376,8 +405,13 @@ def run_snapshot_poll_loop(
                             "данные на диске, помечаем как done чтобы не блокировать прогресс",
                             flush=True,
                         )
-                for dedup_key in result_snapshots:
+                for dedup_key, snapshot in result_snapshots.items():
                     state.mark_snapshot_completed(dedup_key, index)
+                    # Цепочка due_at: следующий снапшот считаем от ФАКТА сбора этого, не от
+                    # snapshot_0 (см. _next_due_after_completion докстринг).
+                    next_due = _next_due_after_completion(config, index, snapshot.collected_at)
+                    if next_due is not None:
+                        state.record_due_override(dedup_key, index + 1, next_due)
 
             if verbose and n:
                 report = snapshot_poll_report(state, config, now=runner._now())
@@ -495,11 +529,20 @@ class SnapshotRunner:
         _flush_batch()
         return all_snapshots, shard_paths
 
-    def collect_due(self, *, snapshot_index: int, limit: int | None = None) -> dict[str, Snapshot]:
-        """Backwards-compatible: collect, write shards, mark complete (no HF wait)."""
+    def collect_due(
+        self, *, snapshot_index: int, limit: int | None = None, config=None,
+    ) -> dict[str, Snapshot]:
+        """Backwards-compatible: collect, write shards, mark complete (no HF wait).
+
+        config опционален (обратная совместимость) — если передан, следующий due_at тоже
+        считается от факта сбора (см. run_snapshot_poll_loop / _next_due_after_completion)."""
         snapshots, _shard_paths = self._collect_due_with_shards(
             snapshot_index=snapshot_index, limit=limit
         )
-        for dedup_key in snapshots:
+        for dedup_key, snapshot in snapshots.items():
             self.state.mark_snapshot_completed(dedup_key, snapshot_index)
+            if config is not None:
+                next_due = _next_due_after_completion(config, snapshot_index, snapshot.collected_at)
+                if next_due is not None:
+                    self.state.record_due_override(dedup_key, snapshot_index + 1, next_due)
         return snapshots
