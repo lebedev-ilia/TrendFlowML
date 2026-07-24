@@ -329,7 +329,27 @@ def run_snapshot_poll_loop(
             if not due:
                 continue
 
-            result_snapshots, shard_paths = runner._collect_due_with_shards(snapshot_index=index)
+            # Баг найден 2026-07-24: любая ошибка тут (в т.ч. "YouTube quota exceeded" — вся
+            # ротация ключей исчерпана, что реально случилось на fetcher-main: 48 ключей делят
+            # квоту с discover, который жрёт её непрерывно) улетала наверх и убивала ВЕСЬ процесс
+            # snapshot-poll насмерть. Внешняя bash-обёртка (launch_role.sh) рестартит через 60с,
+            # но квота за 60с не восстанавливается -> тесный crash-loop до сброса квоты (обычно
+            # 00:00 Pacific = ~07:00-08:00 UTC), лог засоряется, полезной работы 0. Теперь ошибка —
+            # не фатальная: логируем, ждём подольше (30 мин) и пробуем снова, не убивая процесс.
+            try:
+                result_snapshots, shard_paths = runner._collect_due_with_shards(snapshot_index=index)
+            except Exception as exc:
+                msg = str(exc)
+                is_quota = "quota" in msg.lower() or "403" in msg
+                backoff = 1800 if is_quota else 300
+                print(
+                    f"[снапшоты] ошибка сбора индекс #{index} "
+                    f"({'квота YouTube API исчерпана' if is_quota else 'неизвестная ошибка'}): "
+                    f"{msg[:300]} — жду {backoff}с и пробую снова (не критично, продолжаю)",
+                    flush=True,
+                )
+                time.sleep(backoff)
+                continue
             n = len(result_snapshots)
             collected_this_pass += n
             totals["snapshots"] += n
