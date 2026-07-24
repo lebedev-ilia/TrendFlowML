@@ -32,6 +32,11 @@ class UserOut(BaseModel):
     updated_at: datetime
 
 
+class ChangePasswordRequest(BaseModel):
+    current_password: str = Field(min_length=1)
+    new_password: str = Field(min_length=8, max_length=128)
+
+
 class WorkspaceCreate(BaseModel):
     name: str = Field(min_length=1, max_length=200)
     slug: Optional[str] = Field(default=None, min_length=1, max_length=200)

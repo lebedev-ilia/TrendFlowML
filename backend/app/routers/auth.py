@@ -6,7 +6,7 @@ from sqlalchemy.orm import Session
 from ..auth import create_access_token, hash_password, verify_password
 from ..dbv2.models import User as CoreUser
 from ..deps import get_current_user, get_db, require_admin_user
-from ..schemas import TokenOut, UserCreate, UserLogin, UserOut
+from ..schemas import ChangePasswordRequest, TokenOut, UserCreate, UserLogin, UserOut
 
 router = APIRouter(prefix="/api/auth", tags=["auth"])
 
@@ -34,6 +34,33 @@ def login(payload: UserLogin, db: Session = Depends(get_db)):
 
 @router.get("/me", response_model=UserOut)
 def me(user: CoreUser = Depends(get_current_user)):
+    return user
+
+
+@router.post("/change-password", response_model=UserOut)
+def change_password(
+    payload: ChangePasswordRequest,
+    db: Session = Depends(get_db),
+    user: CoreUser = Depends(get_current_user),
+):
+    """Смена пароля: проверяем текущий, затем ставим новый.
+
+    Пользователи через OAuth могут не иметь пароля (`password_hash is None`) —
+    тогда текущий пароль проверять нечем, отдаём 400.
+    """
+    if not user.password_hash:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="Пароль не задан — вход выполняется через внешний провайдер",
+        )
+    if not verify_password(payload.current_password, user.password_hash):
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="Текущий пароль указан неверно",
+        )
+    user.password_hash = hash_password(payload.new_password)
+    db.commit()
+    db.refresh(user)
     return user
 
 
