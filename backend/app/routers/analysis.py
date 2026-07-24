@@ -12,6 +12,7 @@ from sqlalchemy.orm import Session
 from ..dbv2.enums import AnalysisStatus
 from ..dbv2.models import (
     AnalysisJob,
+    AnalysisSnapshot,
     Prediction,
     ProcessingConfig,
     Video,
@@ -27,6 +28,8 @@ from ..schemas import (
     PredictionOut,
     PublicReportOut,
     ShareLinkOut,
+    SnapshotOut,
+    SnapshotUpsert,
 )
 from ..services import billing
 from ..services.dataprocessor import request_dataprocessor_cancel
@@ -292,6 +295,60 @@ def revoke_share(
     job.share_token = None
     db.commit()
     return {"status": "ok"}
+
+
+@router.get("/analysis/{analysis_job_id}/snapshot", response_model=SnapshotOut)
+def get_snapshot(
+    analysis_job_id: uuid.UUID,
+    db: Session = Depends(get_db),
+    user: CoreUser = Depends(get_current_user),
+):
+    """snapshot_0 анализа — состояние видео и канала на момент сбора."""
+    job = db.query(AnalysisJob).filter(AnalysisJob.id == analysis_job_id).first()
+    if not job:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Analysis job not found")
+    _require_workspace_member(db, job.workspace_id, user.id)
+
+    snap = (
+        db.query(AnalysisSnapshot)
+        .filter(AnalysisSnapshot.analysis_job_id == analysis_job_id)
+        .first()
+    )
+    if not snap:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Snapshot not found")
+    return snap
+
+
+@router.put("/analysis/{analysis_job_id}/snapshot", response_model=SnapshotOut)
+def upsert_snapshot(
+    analysis_job_id: uuid.UUID,
+    payload: SnapshotUpsert,
+    db: Session = Depends(get_db),
+    user: CoreUser = Depends(get_current_user),
+):
+    """Запись/обновление snapshot_0.
+
+    Контракт для Fetcher/DataProcessor: состояние собирается на момент анализа
+    и передаётся сюда. Одна запись на анализ (upsert по analysis_job_id).
+    """
+    job = db.query(AnalysisJob).filter(AnalysisJob.id == analysis_job_id).first()
+    if not job:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Analysis job not found")
+    _require_workspace_member(db, job.workspace_id, user.id)
+
+    snap = (
+        db.query(AnalysisSnapshot)
+        .filter(AnalysisSnapshot.analysis_job_id == analysis_job_id)
+        .first()
+    )
+    if snap is None:
+        snap = AnalysisSnapshot(analysis_job_id=analysis_job_id)
+        db.add(snap)
+    for field, value in payload.model_dump().items():
+        setattr(snap, field, value)
+    db.commit()
+    db.refresh(snap)
+    return snap
 
 
 # Публичный отчёт — БЕЗ авторизации, доступен по токену. Отдаём только top-line

@@ -50,6 +50,30 @@ class PublicReportOut(BaseModel):
     predictions: list[PredictionOut]
 
 
+class SnapshotUpsert(BaseModel):
+    """Запись snapshot_0 (от Fetcher/DataProcessor)."""
+
+    views_0: int = Field(ge=0)
+    likes_0: int = Field(ge=0)
+    comments_0: int = Field(ge=0)
+    channel_subscribers_0: int = Field(ge=0)
+    channel_total_views_0: int = Field(ge=0)
+    channel_total_videos_0: int = Field(ge=0)
+
+
+class SnapshotOut(BaseModel):
+    model_config = ConfigDict(from_attributes=True)
+
+    analysis_job_id: uuid.UUID
+    views_0: int
+    likes_0: int
+    comments_0: int
+    channel_subscribers_0: int
+    channel_total_views_0: int
+    channel_total_videos_0: int
+    captured_at: datetime
+
+
 class WorkspaceCreate(BaseModel):
     name: str = Field(min_length=1, max_length=200)
     slug: Optional[str] = Field(default=None, min_length=1, max_length=200)

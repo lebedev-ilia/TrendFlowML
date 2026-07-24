@@ -5,6 +5,7 @@ from datetime import datetime
 from typing import List, Optional
 
 from sqlalchemy import (
+    BigInteger,
     Boolean,
     DateTime,
     Float,
@@ -414,6 +415,41 @@ class IngestionRun(Base, TimestampMixin):
     fetcher_error_message: Mapped[Optional[str]] = mapped_column(
         Text, nullable=True
     )  # сообщение об ошибке от Fetcher
+
+
+class AnalysisSnapshot(Base, UUIDPrimaryKeyMixin):
+    """snapshot_0 — состояние видео и канала на момент анализа.
+
+    Поля соответствуют контракту Models
+    (Models/docs/contracts/TARGETS_SPLITS_METRICS.md, snapshot_0 v1.0): именно
+    эти значения подаются в модель как вход. Сырые тексты комментариев не
+    хранятся (только counts), см. PRIVACY_AND_RETENTION.md.
+
+    Одна запись на анализ; заполняется Fetcher/DataProcessor на момент сбора.
+    """
+
+    __tablename__ = "analysis_snapshots"
+    __table_args__ = (
+        UniqueConstraint("analysis_job_id", name="uq_analysis_snapshot_job"),
+        {"schema": "core"},
+    )
+
+    analysis_job_id: Mapped[uuid.UUID] = mapped_column(
+        ForeignKey("core.analysis_jobs.id", ondelete="CASCADE"), nullable=False
+    )
+
+    views_0: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
+    likes_0: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
+    comments_0: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
+
+    channel_subscribers_0: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
+    channel_total_views_0: Mapped[int] = mapped_column(
+        BigInteger, nullable=False, default=0
+    )
+    channel_total_videos_0: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
+
+    #: Момент фиксации состояния (когда Fetcher собрал метрики).
+    captured_at: Mapped[datetime] = mapped_column(DateTime, nullable=False, default=datetime.utcnow)
 
 
 class Prediction(Base, TimestampMixin, UUIDPrimaryKeyMixin):
