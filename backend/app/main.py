@@ -15,6 +15,7 @@ from .routers.channels import router as channels_router
 from .routers.health import router as health_router
 from .routers.runs import router as runs_router
 from .routers.billing import router as billing_router
+from .routers.subscriptions import router as subscriptions_router
 from .routers.processing_configs import config_router, router as processing_configs_router
 from .routers.videos import router as videos_router
 from .routers.videos import video_router
@@ -69,6 +70,7 @@ app.include_router(video_router)
 app.include_router(processing_configs_router)
 app.include_router(config_router)
 app.include_router(billing_router)
+app.include_router(subscriptions_router)
 app.include_router(analysis_router)
 app.include_router(runs_router)
 app.include_router(webhooks_router, prefix="/api")
