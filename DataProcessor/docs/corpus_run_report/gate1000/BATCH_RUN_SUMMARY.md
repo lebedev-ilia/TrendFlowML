@@ -1,5 +1,22 @@
 # Gate 3 — 1000 видео — ФИНАЛЬНАЯ СВОДКА
 
+> ## 🔄 ФИНАЛИЗАЦИЯ (2026-07-24): пере-прогон scene с фиксом L13 + venv-SSD замер
+> После первого Gate 3 (scene 503/1000 из-за cuDNN L13) — фикс L13 применён, 497 видео пере-прогнаны.
+> **Итог: scene 982/1000 NPZ (~98%), полный отчёт `report1000_final/`.**
+> - **L13 (scene cuDNN-guard) валидирован на масштабе:** из 497 бывших cuDNN-фейлов починено ~479; остались
+>   ~18 — это НЕ cuDNN, а **каскад от cut_detection** (таймауты/недобег под FS-контенцией на конкретных видео;
+>   не восстановились и при N=4 → genuine edge-case long-tail).
+> - **Per-component (report1000_final):** download 1000, segmenter 992, core_clip 977, depth 971, flow 962,
+>   cut 967, **scene 973 OK/13 fail (982 NPZ)**, pacing 982, uniqueness 989. Wall p50=303с. 10 partial видео.
+> - **venv-на-SSD ИЗМЕРЕНО in-pipeline:** импорт 33.6с→1.8с (18x) НО throughput НЕ вырос (~80 vs 92/ч) —
+>   узкое место при N=8 = **запись кадров/NPZ на mfs** (segmenter 12→160с под контенцией, load 3/48 = I/O-block).
+>   Реальный рычаг = кадры на локальный SSD, не venv. Детали: `OPTIMIZATION_LOG.md`, `NEXT_TEST_PLAN.md §6.2`.
+> - **Харнесс:** watchdog2 пропатчен на pgrep-проверку (без дублей-воскрешений). Логи всех 1000 видео:
+>   `gate1000_logs.tar.gz` (11030 файлов).
+> - **Данные:** `corpus_smoke` (1000×~9 компонентов) на Network Volume; scene 982/1000.
+
+
+
 **Дата:** 2026-07-23 · **Под:** RunPod **RTX 2000 Ada** (`8vox1accfqm2o6`), **48 vCPU**, 16GB VRAM ·
 **Набор:** 9 стадий (download+segmenter+core_clip+core_depth_midas+core_optical_flow+cut_detection+
 scene_classification+video_pacing+uniqueness) · **Параллелизм:** **N=8** воркеров (shard `index%8`) +
