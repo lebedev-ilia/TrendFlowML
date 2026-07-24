@@ -74,6 +74,40 @@ class SnapshotOut(BaseModel):
     captured_at: datetime
 
 
+class ComponentMetric(BaseModel):
+    label: str
+    value: str
+
+
+class ComponentGroup(BaseModel):
+    id: str
+    title: str
+    summary: str
+    metrics: list[ComponentMetric] = Field(default_factory=list)
+
+
+class ModalityReport(BaseModel):
+    id: str  # visual | audio | text
+    label: str
+    components_used: int = 0
+    components_total: int = 0
+    groups: list[ComponentGroup] = Field(default_factory=list)
+
+
+class ComponentReportUpsert(BaseModel):
+    """Разбор по компонентам (от DataProcessor из manifest)."""
+
+    modalities: list[ModalityReport] = Field(default_factory=list)
+
+
+class ComponentReportOut(BaseModel):
+    model_config = ConfigDict(from_attributes=True)
+
+    analysis_job_id: uuid.UUID
+    modalities: list[ModalityReport]
+    created_at: datetime
+
+
 class WorkspaceCreate(BaseModel):
     name: str = Field(min_length=1, max_length=200)
     slug: Optional[str] = Field(default=None, min_length=1, max_length=200)

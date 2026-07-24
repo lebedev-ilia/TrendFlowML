@@ -11,6 +11,7 @@ from sqlalchemy.orm import Session
 
 from ..dbv2.enums import AnalysisStatus
 from ..dbv2.models import (
+    AnalysisComponentReport,
     AnalysisJob,
     AnalysisSnapshot,
     Prediction,
@@ -30,6 +31,8 @@ from ..schemas import (
     ShareLinkOut,
     SnapshotOut,
     SnapshotUpsert,
+    ComponentReportOut,
+    ComponentReportUpsert,
 )
 from ..services import billing
 from ..services.dataprocessor import request_dataprocessor_cancel
@@ -349,6 +352,62 @@ def upsert_snapshot(
     db.commit()
     db.refresh(snap)
     return snap
+
+
+@router.get("/analysis/{analysis_job_id}/components", response_model=ComponentReportOut)
+def get_component_report(
+    analysis_job_id: uuid.UUID,
+    db: Session = Depends(get_db),
+    user: CoreUser = Depends(get_current_user),
+):
+    """Разбор анализа по компонентам (распарсенный manifest)."""
+    job = db.query(AnalysisJob).filter(AnalysisJob.id == analysis_job_id).first()
+    if not job:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Analysis job not found")
+    _require_workspace_member(db, job.workspace_id, user.id)
+
+    report = (
+        db.query(AnalysisComponentReport)
+        .filter(AnalysisComponentReport.analysis_job_id == analysis_job_id)
+        .first()
+    )
+    if not report:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Component report not found")
+    return report
+
+
+@router.put("/analysis/{analysis_job_id}/components", response_model=ComponentReportOut)
+def upsert_component_report(
+    analysis_job_id: uuid.UUID,
+    payload: ComponentReportUpsert,
+    db: Session = Depends(get_db),
+    user: CoreUser = Depends(get_current_user),
+):
+    """Запись разбора по компонентам.
+
+    Контракт для DataProcessor: после обработки manifest преобразуется в
+    модальности/группы/метрики (см. AnalysisComponentReport) и пишется сюда.
+    Одна запись на анализ (upsert).
+    """
+    job = db.query(AnalysisJob).filter(AnalysisJob.id == analysis_job_id).first()
+    if not job:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Analysis job not found")
+    _require_workspace_member(db, job.workspace_id, user.id)
+
+    report = (
+        db.query(AnalysisComponentReport)
+        .filter(AnalysisComponentReport.analysis_job_id == analysis_job_id)
+        .first()
+    )
+    modalities = [m.model_dump() for m in payload.modalities]
+    if report is None:
+        report = AnalysisComponentReport(analysis_job_id=analysis_job_id, modalities=modalities)
+        db.add(report)
+    else:
+        report.modalities = modalities
+    db.commit()
+    db.refresh(report)
+    return report
 
 
 # Публичный отчёт — БЕЗ авторизации, доступен по токену. Отдаём только top-line

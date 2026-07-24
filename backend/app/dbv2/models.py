@@ -452,6 +452,51 @@ class AnalysisSnapshot(Base, UUIDPrimaryKeyMixin):
     captured_at: Mapped[datetime] = mapped_column(DateTime, nullable=False, default=datetime.utcnow)
 
 
+class AnalysisComponentReport(Base, UUIDPrimaryKeyMixin):
+    """Разбор анализа по компонентам — распарсенный manifest DataProcessor для UI.
+
+    Хранится в JSONB, потому что состав модальностей/групп/метрик задаёт
+    DataProcessor и он меняется независимо от схемы БД. Контракт формата
+    (для DataProcessor):
+
+        [
+          {
+            "id": "visual",              # visual | audio | text
+            "label": "Визуальный анализ",
+            "components_used": 9,
+            "components_total": 29,
+            "groups": [
+              {
+                "id": "editing",
+                "title": "Монтаж и ритм",
+                "summary": "короткий человекочитаемый вывод",
+                "metrics": [{"label": "Склеек в минуту", "value": "3,2"}]
+              }
+            ]
+          }
+        ]
+
+    Одна запись на анализ.
+    """
+
+    __tablename__ = "analysis_component_reports"
+    __table_args__ = (
+        UniqueConstraint("analysis_job_id", name="uq_analysis_component_report_job"),
+        {"schema": "core"},
+    )
+
+    analysis_job_id: Mapped[uuid.UUID] = mapped_column(
+        ForeignKey("core.analysis_jobs.id", ondelete="CASCADE"), nullable=False
+    )
+
+    #: Массив модальностей (см. контракт в докстринге).
+    modalities: Mapped[list] = mapped_column(JSONB, nullable=False, default=list)
+
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime, nullable=False, default=datetime.utcnow
+    )
+
+
 class Prediction(Base, TimestampMixin, UUIDPrimaryKeyMixin):
     __tablename__ = "predictions"
     __table_args__ = {"schema": "core"}
